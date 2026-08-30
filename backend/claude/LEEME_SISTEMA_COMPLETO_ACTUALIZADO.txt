@@ -1,0 +1,900 @@
+================================================================================
+  PLANTAS SAGRADAS GT -- SISTEMA COMPLETO DE PRODUCCION DE VIDEO
+  Documentacion Master v5  |  Actualizado: Junio 2026
+================================================================================
+
+Este archivo explica como funciona el sistema local de videos faceless de
+"Plantas Sagradas GT".
+
+Debe servir para tres cosas:
+
+1. Que Beto pueda producir videos sin depender de Codex en cada video.
+2. Que Codex pueda corregir errores puntuales sin leer todo el proyecto.
+3. Que el sistema se mantenga ordenado, barato y facil de probar.
+
+REGLA MADRE DEL SISTEMA:
+
+  El guion decide que se dice.
+  Whisper decide cuando se dice.
+  OpenAI decide que debe verse y que overlay debe existir.
+  El codigo local busca stock, filtra, une y renderiza.
+
+================================================================================
+INDICE
+================================================================================
+
+1.  RESUMEN RAPIDO
+2.  QUE HACE CADA HERRAMIENTA / IA
+3.  ESTRUCTURA LIMPIA DE LA CARPETA RAIZ
+4.  FLUJO DIARIO PARA CREAR UN VIDEO NUEVO
+5.  PIPELINE COMPLETO PASO A PASO
+6.  ARCHIVOS IMPORTANTES
+7.  ARCHIVOS TEMPORALES QUE SE PUEDEN ARCHIVAR
+8.  STOCK: REGLAS, FILTROS Y REVISION VISUAL
+9.  OVERLAYS: REGLAS Y ERRORES A EVITAR
+10. TTS / VOZ: ELEVENLABS, GEMINI Y AUDIO MANUAL
+11. OPENAI API: PARA QUE SE USA Y COMO CONTROLAR GASTO
+12. CLAUDE: YA NO ES REQUERIDO
+13. CODEX: CUANDO USARLO Y CUANDO NO
+14. LIMPIEZA DE CARPETA
+15. COMANDOS UTILES
+16. MAPA DE ERRORES
+17. PROMPT QUIRURGICO PARA CODEX
+18. CHECKLIST ANTES DE SUBIR A YOUTUBE
+
+================================================================================
+1. RESUMEN RAPIDO
+================================================================================
+
+Este sistema produce videos faceless para YouTube a partir de un guion.
+
+ENTRADA PRINCIPAL:
+
+  guion.txt
+  titulo.txt
+  audio.mp3  (opcional; si no existe, el sistema intenta generarlo)
+
+SALIDA PRINCIPAL:
+
+  video_final_CAPCUT.mp4
+
+La meta realista del sistema no es 100% automatico sin revisar.
+La meta correcta es:
+
+  80% a 90% automatizado
+  + revision visual rapida del stock
+  + correccion puntual si aparece un clip malo
+
+IMPORTANTE:
+
+  No usar Codex para cada video.
+  Codex solo debe usarse si el sistema se rompe.
+
+================================================================================
+2. QUE HACE CADA HERRAMIENTA / IA
+================================================================================
+
+CHATGPT:
+
+  - Ayuda a crear guiones.
+  - Ayuda a revisar errores.
+  - Da prompts exactos para Codex.
+  - Ayuda a ordenar documentacion.
+  - No ejecuta tu sistema local directamente.
+
+OPENAI API:
+
+  - Es el director visual del video.
+  - Lee el guion/timeline.
+  - Decide que buscar en stock.
+  - Decide que overlays deben aparecer.
+  - Genera el JSON principal del video.
+
+  Ejemplos de salida:
+
+    stock_keywords:
+      - compost soil close up
+      - adult hands planting seedling
+      - wood ash garden soil
+
+    overlay_tipo:
+      big_number
+
+    overlay_texto:
+      10,000
+
+ELEVENLABS:
+
+  - Es el proveedor principal de voz TTS.
+  - Si no existe audio.mp3, el sistema debe intentar ElevenLabs primero.
+
+GEMINI TTS:
+
+  - Solo fallback si ElevenLabs falla y Gemini esta bien configurado.
+  - No debe ser el proveedor principal.
+
+WHISPER / FASTER-WHISPER LOCAL:
+
+  - Transcribe audio.mp3.
+  - Genera tiempos reales por palabra.
+  - Permite que los overlays salgan cuando se dice la frase correcta.
+
+PEXELS / PIXABAY:
+
+  - Proveen clips de stock.
+  - No son perfectos.
+  - A veces la metadata no dice que hay ninos, escuelas o personas.
+  - Por eso siempre hay que revisar stock_preview_sin_overlays.mp4.
+
+REMOTION:
+
+  - Renderiza overlays animados.
+  - Usa React/JSX.
+  - No debe tocarse salvo que haya error visual o de render.
+
+FFMPEG:
+
+  - Une clips.
+  - Mezcla audio.
+  - Superpone overlays.
+  - Genera el video final.
+
+CLAUDE:
+
+  - Ya no debe ser necesario para producir videos.
+  - Antes se usaba como fallback de keywords.
+  - Ahora debe quedar desactivado por defecto.
+
+CODEX:
+
+  - Solo debe usarse para corregir errores de codigo.
+  - No debe usarse para producir cada video.
+  - No debe revisar todo el proyecto si solo hay un error puntual.
+
+================================================================================
+3. ESTRUCTURA LIMPIA DE LA CARPETA RAIZ
+================================================================================
+
+Carpeta principal:
+
+  D:\PlantasSagradas - chatgpt\
+
+La raiz debe mantenerse limpia.
+
+ARCHIVOS QUE PUEDEN QUEDAR EN RAIZ:
+
+  AGENTS.md
+  LEEME_SISTEMA_COMPLETO.txt
+  REPORTE_CODEX_CAMBIOS.md
+  PRUEBA_DESDE_CERO.md
+  claves.txt
+  guion.txt
+  titulo.txt
+  audio.mp3                      (solo durante un video activo)
+
+BAT PRINCIPALES:
+
+  PROCESAR_TODO.bat
+  GENERAR_SOLO_VOZ.bat
+  TRANSCRIBIR.bat
+  EJECUTAR.bat
+  UNIR.bat
+  OVERLAY.bat
+  CREAR_VIDEO_CAPCUT.bat
+  LIMPIAR_RAIZ_SEGURO.bat
+
+SCRIPTS IMPORTANTES:
+
+  generar_json_openai.py
+  generar_timeline_base.py
+  resolver_overlay_anchors.py
+  guion_a_clips.py
+  generar_overlays_local.py
+  unir_clips.py
+  validar_audio_guion.py
+
+CONFIGURACION IMPORTANTE:
+
+  bad_stock_ids.json
+  stock_overrides.json
+
+CARPETAS IMPORTANTES:
+
+  remotion/
+  fonts/
+  lotties/
+  clips/
+  VIDEOS FINALES/
+  _ARCHIVO/
+
+NO TOCAR NORMALMENTE:
+
+  claves.txt
+  remotion/node_modules/
+  fonts/
+  lotties/
+  VIDEOS FINALES/
+  _ARCHIVO/
+
+================================================================================
+4. FLUJO DIARIO PARA CREAR UN VIDEO NUEVO
+================================================================================
+
+PASO 1: Preparar entrada
+
+  - Pegar guion nuevo en guion.txt
+  - Poner titulo nuevo en titulo.txt
+  - Si ya tienes voz de ElevenLabs, ponerla como audio.mp3
+  - Si no tienes audio, el sistema intentara generarlo
+
+PASO 2: Correr pipeline
+
+  Doble clic en:
+
+    PROCESAR_TODO.bat
+
+PASO 3: Revisar stock antes del render final
+
+  Revisar:
+
+    stock_preview_sin_overlays.mp4
+    stock_visual_validation_report.csv
+    lista_clips.txt
+
+PASO 4: Si el stock esta bien
+
+  Continuar con render final si el pipeline no lo hizo automaticamente.
+
+PASO 5: Si hay un clip malo
+
+  - No usar Codex todavia.
+  - Revisar lista_clips.txt.
+  - Agregar ID/URL/slug malo a bad_stock_ids.json.
+  - Rehacer stock si es necesario.
+
+================================================================================
+5. PIPELINE COMPLETO PASO A PASO
+================================================================================
+
+FLUJO IDEAL:
+
+  guion.txt
+  titulo.txt
+  audio.mp3 o TTS
+  palabras.json
+  segmentos.json
+  timeline_base.json
+  guion_stock_overlay_final.json
+  guion_stock_overlay_resuelto.json
+  clips/
+  lista_clips.txt
+  stock_preview_sin_overlays.mp4
+  video_final_audio.mp4
+  overlays.json / props.json
+  overlay.mov u overlay.webm
+  video_final_CAPCUT.mp4
+
+PASO A PASO:
+
+[0%] PREPARACION
+
+  - Limpia temporales del run anterior.
+  - Prepara carpeta de trabajo.
+
+[5%] VOZ / TTS
+
+  Orden correcto:
+
+    1. Si existe audio.mp3, usarlo.
+    2. Si no existe, generar voz con ElevenLabs.
+    3. Si ElevenLabs falla, usar Gemini solo si tiene configuracion valida.
+    4. No imprimir claves en consola.
+
+  Mensajes esperados:
+
+    [TTS] Proveedor principal: ElevenLabs
+    [AUDIO] Voz TTS lista en audio.mp3.
+
+[10%] WHISPER
+
+  - Transcribe audio.mp3.
+  - Genera palabras.json y segmentos.json.
+
+[14%-15%] TIMELINE BASE
+
+  - generar_timeline_base.py combina guion + transcripcion.
+  - Genera timeline_base.json.
+
+[18%] OPENAI
+
+  - generar_json_openai.py consulta OpenAI.
+  - OpenAI decide stock_keywords y overlays.
+  - Genera guion_stock_overlay_final.json.
+  - Genera stock_keyword_validation_report.csv.
+
+[22%] RESOLVER ANCHORS
+
+  - resolver_overlay_anchors.py encuentra los tiempos exactos.
+  - Genera guion_stock_overlay_resuelto.json.
+
+[30%] STOCK
+
+  - guion_a_clips.py lee guion_stock_overlay_resuelto.json.
+  - Usa stock_keywords del JSON.
+  - Descarga clips.
+  - Filtra clips malos por metadata.
+  - Usa bad_stock_ids.json y stock_overrides.json.
+  - Genera lista_clips.txt.
+  - Genera stock_visual_validation_report.csv.
+  - Genera stock_preview_sin_overlays.mp4.
+
+[40%] UNION DE CLIPS + AUDIO
+
+  - unir_clips.py y FFmpeg crean video_final_audio.mp4.
+
+[50%-70%] OVERLAYS
+
+  - generar_overlays_local.py crea overlays.json / props.json.
+  - Remotion renderiza overlay.mov u overlay.webm.
+
+[80%-100%] VIDEO FINAL
+
+  - FFmpeg superpone overlays sobre video_final_audio.mp4.
+  - Genera video_final_CAPCUT.mp4.
+  - Copia resultados a VIDEOS FINALES.
+
+================================================================================
+6. ARCHIVOS IMPORTANTES
+================================================================================
+
+guion.txt
+
+  Guion narrado del video.
+
+titulo.txt
+
+  Titulo del video.
+
+audio.mp3
+
+  Audio de trabajo. Si existe, el sistema lo usa y no genera TTS.
+
+claves.txt
+
+  Contiene claves API. No subir, no compartir, no imprimir.
+
+AGENTS.md
+
+  Instrucciones para Codex.
+
+LEEME_SISTEMA_COMPLETO.txt
+
+  Esta documentacion.
+
+generar_json_openai.py
+
+  Crea el JSON de stock y overlays con OpenAI.
+
+guion_stock_overlay_final.json
+
+  JSON generado por OpenAI antes de resolver tiempos exactos.
+
+guion_stock_overlay_resuelto.json
+
+  JSON final con timestamps reales.
+
+guion_a_clips.py
+
+  Busca, filtra y descarga stock.
+
+bad_stock_ids.json
+
+  Lista negra permanente de clips malos.
+
+stock_overrides.json
+
+  Clips permitidos, preferidos o curados.
+
+generar_overlays_local.py
+
+  Convierte el JSON resuelto en overlays para Remotion.
+
+overlays.json
+
+  Lista final de overlays a renderizar.
+
+props.json
+
+  Props para Remotion.
+
+stock_visual_validation_report.csv
+
+  Reporte de decisiones de stock.
+
+lista_clips.txt
+
+  Lista exacta de clips usados en orden.
+
+stock_preview_sin_overlays.mp4
+
+  Preview obligatoria antes del render final.
+
+================================================================================
+7. ARCHIVOS TEMPORALES QUE SE PUEDEN ARCHIVAR
+================================================================================
+
+Estos archivos se crean durante cada video y se pueden mover a _ARCHIVO:
+
+  audio.mp3
+  palabras.json
+  segmentos.json
+  timeline_base.json
+  guion_stock_overlay_final.json
+  guion_stock_overlay_resuelto.json
+  overlays.json
+  overlays_sync.json
+  props.json
+  lista_clips.txt
+  proceso_log.txt
+  stock_visual_validation_report.csv
+  stock_keyword_validation_report.csv
+  overlay_validation_report.csv
+  video_final.mp4
+  video_final_audio.mp4
+  video_final_CAPCUT.mp4
+  overlay.mov
+  overlay.webm
+  stock_preview_sin_overlays.mp4
+  clips/
+
+Usar preferiblemente:
+
+  LIMPIAR_RAIZ_SEGURO.bat
+
+Este limpiador debe mover a _ARCHIVO, no borrar.
+
+================================================================================
+8. STOCK: REGLAS, FILTROS Y REVISION VISUAL
+================================================================================
+
+REGLA PRINCIPAL:
+
+  Para Plantas Sagradas, por defecto no usar humanos completos.
+  Se permiten manos adultas trabajando con plantas si ayudan visualmente.
+
+BLOQUEAR SIEMPRE:
+
+  ninos
+  bebes
+  estudiantes
+  escuela
+  classroom
+  teacher
+  preschool
+  kindergarten
+  nursery
+  daycare
+  playroom
+  toys
+  oficinas
+  teclados
+  computadoras
+  mujeres escribiendo en laptop
+  motoristas
+  motos
+  volcanes
+  monumentos
+  Statue of Liberty
+  ciudades turisticas
+  turismo
+  gusanos/lombrices si el guion no los menciona
+
+PREFERIR:
+
+  plantas
+  tierra
+  compost
+  huerto
+  macetas
+  raices
+  hojas
+  manos adultas plantando
+  agua/riego
+  cobre en planta
+  ceniza limpia
+  macro de suelo
+  jardin natural
+
+ARCHIVOS DE CONTROL:
+
+  bad_stock_ids.json
+
+    Agregar aqui clips malos por:
+      - ID
+      - URL
+      - slug
+      - creator
+      - titulo si aplica
+
+  stock_overrides.json
+
+    Agregar aqui clips curados o seguros.
+
+REVISION OBLIGATORIA:
+
+  Siempre mirar stock_preview_sin_overlays.mp4 antes del render final.
+
+MOTIVO:
+
+  Pexels/Pixabay a veces no reportan en metadata que el clip tiene ninos,
+  escuelas o personas. El filtro ayuda, pero la revision visual es necesaria.
+
+================================================================================
+9. OVERLAYS: REGLAS Y ERRORES A EVITAR
+================================================================================
+
+Los overlays deben salir del JSON. No deben inventar textos.
+
+TIPOS COMUNES:
+
+  title_card
+  rank_reveal
+  big_number
+  lower_third
+  badge
+  data_viz_single
+  cta
+  ninguno
+
+PROHIBIDO EN MODO JSON ESTRICTO:
+
+  - Inventar subtitulos.
+  - Usar frases medicas genericas.
+  - Mostrar textos heredados de otros videos.
+
+TEXTOS QUE NO DEBEN APARECER SI NO VIENEN DEL GUION/JSON:
+
+  apoya musculos y nervios
+  planta biblica ancestral
+  compuestos activos
+  apoyo natural
+  dato clave del video
+
+BIG NUMBER:
+
+  Debe contar desde 0 hasta el numero final.
+  La animacion debe sentirse rapida, aprox. 1.35 segundos.
+
+CTA:
+
+  Debe respetar la palabra exacta del guion.
+  Ejemplo:
+
+    COMENTA AMISH
+    COMENTA COBRE
+
+================================================================================
+10. TTS / VOZ: ELEVENLABS, GEMINI Y AUDIO MANUAL
+================================================================================
+
+ORDEN CORRECTO:
+
+  1. audio.mp3 existente
+  2. ElevenLabs
+  3. Gemini fallback si esta configurado
+
+Si quieres controlar la voz manualmente:
+
+  - Genera audio en ElevenLabs.
+  - Descargalo.
+  - Renombralo como audio.mp3.
+  - Ponlo en la raiz.
+  - Corre PROCESAR_TODO.bat.
+
+Si no hay audio.mp3:
+
+  - El sistema debe intentar ElevenLabs primero.
+
+Mensaje bueno:
+
+  [TTS] Proveedor principal: ElevenLabs
+  [AUDIO] Voz TTS lista en audio.mp3.
+
+Mensaje malo:
+
+  [INFO] Generando voz con Gemini TTS...
+
+Si aparece Gemini como principal, revisar PROCESAR_TODO.bat y GENERAR_SOLO_VOZ.bat.
+
+================================================================================
+11. OPENAI API: PARA QUE SE USA Y COMO CONTROLAR GASTO
+================================================================================
+
+El plan ChatGPT Plus/Go no paga la API local.
+La API se cobra aparte en:
+
+  platform.openai.com
+
+OpenAI API en este sistema se usa para:
+
+  - analizar el guion
+  - crear keywords de stock
+  - decidir overlays
+  - crear guion_stock_overlay_final.json
+
+Normalmente OpenAI no debe ser lo mas caro si se usa modelo mini.
+
+Para controlar gasto:
+
+  - revisar Usage en platform.openai.com
+  - bajar limite mensual a 5 o 10 USD
+  - desactivar Auto Recharge si no se quiere recarga automatica
+
+No eliminar OpenAI todavia si se quiere buena calidad visual.
+OpenAI es el director visual.
+
+================================================================================
+12. CLAUDE: YA NO ES REQUERIDO
+================================================================================
+
+Claude/Haiku no debe ser necesario para producir videos.
+
+Regla correcta:
+
+  Si guion_stock_overlay_resuelto.json trae stock_keywords,
+  guion_a_clips.py debe usar esas keywords y omitir Claude.
+
+Claude solo podria existir como fallback manual con variable explicita:
+
+  ENABLE_CLAUDE_FALLBACK=1
+
+Si no hay clave de Claude, el sistema no debe fallar.
+
+Mensajes esperados:
+
+  Claude omitido
+  Claude desactivado
+  usando stock_keywords del JSON
+
+Mensaje que se debe evitar en flujo normal:
+
+  Generando keywords con Claude Haiku
+
+================================================================================
+13. CODEX: CUANDO USARLO Y CUANDO NO
+================================================================================
+
+CODEX SI:
+
+  - el .bat se cierra con error
+  - no genera audio
+  - no transcribe
+  - no genera JSON
+  - no descarga clips
+  - no genera overlays
+  - falla Remotion
+  - falla FFmpeg
+  - se rompe un script
+
+CODEX NO:
+
+  - para producir cada video
+  - para cambiar un clip malo aislado
+  - para revisar toda la carpeta
+  - para leer node_modules
+  - para leer VIDEOS FINALES
+  - para leer clips completos
+  - para hacer auditorias largas sin error concreto
+
+REGLA DE AHORRO:
+
+  Primero mandar el error a ChatGPT.
+  ChatGPT da prompt quirurgico.
+  Codex revisa solo archivos necesarios.
+
+================================================================================
+14. LIMPIEZA DE CARPETA
+================================================================================
+
+Usar:
+
+  LIMPIAR_RAIZ_SEGURO.bat
+
+Este archivo debe decir:
+
+  NO BORRA, SOLO MUEVE
+
+Debe mover archivos a:
+
+  _ARCHIVO\fecha_hora\
+
+No usar limpiadores que borren con:
+
+  del
+  rmdir /s /q
+  shutil.rmtree
+  os.remove
+
+salvo que sepas exactamente lo que hacen.
+
+Si hay varios limpiadores duplicados, dejar solo:
+
+  LIMPIAR_RAIZ_SEGURO.bat
+
+Mover otros a:
+
+  _NO_USAR_LIMPIADORES
+
+================================================================================
+15. COMANDOS UTILES
+================================================================================
+
+PRODUCCION NORMAL:
+
+  PROCESAR_TODO.bat
+
+GENERAR SOLO VOZ:
+
+  GENERAR_SOLO_VOZ.bat
+
+GENERAR STOCK DESDE JSON RESUELTO:
+
+  python guion_a_clips.py --from-json guion_stock_overlay_resuelto.json --preview-stock
+
+REGENERAR STOCK FORZANDO DESCARGA:
+
+  python guion_a_clips.py --from-json guion_stock_overlay_resuelto.json --preview-stock --force-redownload
+
+GENERAR OVERLAYS EN MODO ESTRICTO:
+
+  python generar_overlays_local.py --strict
+
+RENDER OVERLAY:
+
+  OVERLAY.bat
+
+CREAR VIDEO FINAL PARA CAPCUT/YOUTUBE:
+
+  CREAR_VIDEO_CAPCUT.bat
+
+================================================================================
+16. MAPA DE ERRORES
+================================================================================
+
+ERROR DE AUDIO / TTS:
+
+  Revisar:
+    PROCESAR_TODO.bat
+    GENERAR_SOLO_VOZ.bat
+    generar_audio_tts_elevenlabs.py
+    claves.txt solo para nombres de variables, nunca imprimir claves
+
+ERROR DE WHISPER:
+
+  Revisar:
+    TRANSCRIBIR.bat
+    script de transcripcion
+    audio.mp3
+
+ERROR DE OPENAI / JSON:
+
+  Revisar:
+    generar_json_openai.py
+    timeline_base.json
+    guion.txt
+    claves.txt solo para validar variable
+
+ERROR DE ANCHORS:
+
+  Revisar:
+    resolver_overlay_anchors.py
+    palabras.json
+    guion_stock_overlay_final.json
+
+ERROR DE STOCK:
+
+  Revisar:
+    guion_a_clips.py
+    bad_stock_ids.json
+    stock_overrides.json
+    stock_visual_validation_report.csv
+    lista_clips.txt
+
+ERROR DE OVERLAYS:
+
+  Revisar:
+    generar_overlays_local.py
+    overlays.json
+    props.json
+    remotion/src/templates/
+    remotion/src/components/
+
+ERROR DE RENDER:
+
+  Revisar:
+    OVERLAY.bat
+    CREAR_VIDEO_CAPCUT.bat
+    FFmpeg
+    Remotion
+
+================================================================================
+17. PROMPT QUIRURGICO PARA CODEX
+================================================================================
+
+Usar este formato para ahorrar Codex:
+
+-------------------------------------------------------------------------------
+Codex, no revises todo el proyecto. No leas node_modules, clips, VIDEOS FINALES,
+_ARCHIVO ni carpetas pesadas. No hagas auditoria general.
+
+Error actual:
+
+[PEGAR AQUI EL ERROR EXACTO]
+
+Objetivo:
+Corrige unicamente el error necesario para que el pipeline continue.
+
+Archivos que puedes revisar:
+
+[PEGAR SOLO LOS ARCHIVOS RELEVANTES SEGUN EL ERROR]
+
+No modifiques claves.txt salvo para leer nombres de variables. Nunca imprimas
+claves. No cambies stock, overlays ni estructura general si el error no lo
+requiere. No ejecutes APIs salvo que sea estrictamente necesario.
+
+Crea backup .bak_codex solo del archivo que modifiques.
+
+Al terminar dime:
+1. causa del error,
+2. archivo modificado,
+3. cambio exacto,
+4. comando para probar.
+-------------------------------------------------------------------------------
+
+================================================================================
+18. CHECKLIST ANTES DE SUBIR A YOUTUBE
+================================================================================
+
+ANTES DE RENDER FINAL:
+
+  [ ] guion.txt correcto
+  [ ] titulo.txt correcto
+  [ ] audio.mp3 correcto o TTS generado bien
+  [ ] palabras.json y segmentos.json generados
+  [ ] guion_stock_overlay_resuelto.json generado
+  [ ] lista_clips.txt generado
+  [ ] stock_visual_validation_report.csv generado
+  [ ] stock_preview_sin_overlays.mp4 revisado visualmente
+  [ ] no hay ninos, escuelas, oficinas, teclados, motos, volcanes ni monumentos
+  [ ] overlays.json no tiene textos inventados
+  [ ] CTA correcto: COMENTA [PALABRA]
+  [ ] video_final_CAPCUT.mp4 generado
+
+DESPUES DE RENDER FINAL:
+
+  [ ] revisar video final rapido
+  [ ] revisar audio sincronizado
+  [ ] revisar overlays
+  [ ] revisar que no haya clips raros
+  [ ] copiar/subir video final
+
+================================================================================
+CIERRE
+================================================================================
+
+Este sistema ya no debe depender de Claude.
+Codex solo debe usarse para reparar errores puntuales.
+OpenAI API se usa como director visual.
+ElevenLabs se usa como voz principal.
+Whisper, Remotion y FFmpeg corren localmente.
+
+La forma correcta de trabajar es:
+
+  producir video
+  revisar preview
+  corregir solo lo necesario
+  renderizar final
+
+No reconstruir el sistema completo en cada error.
+
+================================================================================
