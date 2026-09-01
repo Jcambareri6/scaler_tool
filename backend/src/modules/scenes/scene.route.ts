@@ -6,6 +6,7 @@ import {
   updateScene,
   deleteScene,
   reorderScenes,
+  regenerateSceneVisual,
 } from "./scene.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
@@ -20,3 +21,4 @@ export const sceneRouter = Router({ mergeParams: true });
 sceneRouter.get("/", authMiddleware, getScene);
 sceneRouter.patch("/", authMiddleware, updateScene);
 sceneRouter.delete("/", authMiddleware, deleteScene);
+sceneRouter.post("/regenerate-visual", authMiddleware, regenerateSceneVisual);

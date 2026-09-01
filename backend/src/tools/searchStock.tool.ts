@@ -1,0 +1,207 @@
+import type { ToolDefinition } from "./tool.types.js";
+import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { getActiveProvider } from "../lib/providers.js";
+import { isMockMode } from "../lib/mock.js";
+import { supabase } from "../lib/supabase.js";
+import type { ContentPolicy } from "../types/shared/typeShared.js";
+
+export interface SearchStockInput {
+  keywords: string[];
+  content_policy?: ContentPolicy;
+}
+
+export interface StockCandidate {
+  provider: "pexels" | "pixabay" | "mock";
+  external_id: string;
+  url: string;
+  preview_url: string;
+  duration_seconds?: number;
+}
+
+// Video de muestra publico (Google Cloud Storage sample bucket), embebible
+// sin CORS -- sirve para poder previsualizar el StockReviewPanel del
+// frontend incluso sin ninguna cuenta de Pexels/Pixabay todavia.
+const MOCK_VIDEO_URL =
+  "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+
+function mockCandidates(keyword: string): StockCandidate[] {
+  return [
+    {
+      provider: "mock",
+      external_id: `mock-${keyword.replace(/\s+/g, "-")}`,
+      url: MOCK_VIDEO_URL,
+      preview_url: MOCK_VIDEO_URL,
+      duration_seconds: 10,
+    },
+  ];
+}
+
+export interface SearchStockOutput {
+  candidates: StockCandidate[];
+}
+
+const PEXELS_VIDEO_SEARCH_URL = "https://api.pexels.com/videos/search";
+const PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/";
+const RESULTS_PER_KEYWORD = 5;
+
+interface PexelsVideoFile {
+  link: string;
+  width: number;
+}
+
+interface PexelsVideo {
+  id: number;
+  url: string;
+  image: string;
+  duration: number;
+  video_files: PexelsVideoFile[];
+}
+
+// Pexels no expone tags/descripcion en su API de video (LEEME seccion 8: "a
+// veces la metadata no dice que hay ninos, escuelas o personas") -> aca no
+// hay texto contra el cual filtrar content_policy, solo aplica el cruce con
+// stock_library_entries y la revision visual manual que exige el LEEME.
+async function searchPexels(apiKey: string, keyword: string): Promise<StockCandidate[]> {
+  const url = `${PEXELS_VIDEO_SEARCH_URL}?query=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
+  const response = await fetch(url, { headers: { Authorization: apiKey } });
+
+  if (!response.ok) {
+    throw new Error(`Pexels API error (${response.status}): ${await response.text()}`);
+  }
+
+  const data = (await response.json()) as { videos: PexelsVideo[] };
+
+  return (data.videos ?? []).map((video) => ({
+    provider: "pexels" as const,
+    external_id: String(video.id),
+    url: video.url,
+    preview_url: [...video.video_files].sort((a, b) => a.width - b.width)[0]?.link ?? video.image,
+    duration_seconds: video.duration,
+  }));
+}
+
+interface PixabayHit {
+  id: number;
+  pageURL: string;
+  tags: string;
+  duration: number;
+  videos: {
+    medium?: { url: string };
+    small?: { url: string };
+    tiny?: { url: string };
+  };
+}
+
+function matchesAny(text: string, words: string[]): boolean {
+  const lower = text.toLowerCase();
+  return words.some((word) => lower.includes(word.toLowerCase()));
+}
+
+// Pixabay si expone "tags" (string separado por comas) en cada hit, asi que
+// aca el bloqueo de content_policy.block se puede aplicar antes de devolver
+// el candidato, a diferencia de Pexels.
+async function searchPixabay(
+  apiKey: string,
+  keyword: string,
+  block: string[]
+): Promise<StockCandidate[]> {
+  const url = `${PIXABAY_VIDEO_SEARCH_URL}?key=${apiKey}&q=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Pixabay API error (${response.status}): ${await response.text()}`);
+  }
+
+  const data = (await response.json()) as { hits: PixabayHit[] };
+
+  return (data.hits ?? [])
+    .filter((hit) => !matchesAny(hit.tags ?? "", block))
+    .map((hit) => ({
+      provider: "pixabay" as const,
+      external_id: String(hit.id),
+      url: hit.pageURL,
+      preview_url:
+        hit.videos.medium?.url ?? hit.videos.small?.url ?? hit.videos.tiny?.url ?? hit.pageURL,
+      duration_seconds: hit.duration,
+    }));
+}
+
+// Gap #2/#3 del LEEME: el filtrado final cruza los candidatos con
+// stock_library_entries (BLOCKED/PREFERRED, por usuario) y content_policy
+// (por proyecto) antes de devolverlos.
+export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput> = {
+  name: "search_stock",
+  description:
+    "Busca clips de stock (Pexels/Pixabay) por keywords y los filtra contra content_policy y stock_library_entries.",
+  parameters: {
+    type: "object",
+    properties: {
+      keywords: {
+        type: "array",
+        items: { type: "string" },
+        description: "Keywords de busqueda de stock",
+      },
+      content_policy: {
+        type: "object",
+        description: "Reglas de block/prefer del proyecto (opcional)",
+        properties: {
+          block: { type: "array", items: { type: "string" } },
+          prefer: { type: "array", items: { type: "string" } },
+          notes: { type: "string" },
+        },
+      },
+    },
+    required: ["keywords"],
+  },
+  async execute({ keywords, content_policy }, ctx) {
+    const [pexels, pixabay] = await Promise.all([
+      getActiveProvider("pexels"),
+      getActiveProvider("pixabay"),
+    ]);
+
+    const pexelsApiKey = pexels?.api_key;
+    const pixabayApiKey = pixabay?.api_key;
+
+    if (!pexelsApiKey && !pixabayApiKey && !isMockMode()) {
+      throw new ProviderNotConfiguredError("search_stock");
+    }
+
+    const block = content_policy?.block ?? [];
+
+    let candidates: StockCandidate[];
+    if (!pexelsApiKey && !pixabayApiKey) {
+      candidates = keywords.flatMap((keyword) => mockCandidates(keyword));
+    } else {
+      const results = await Promise.all(
+        keywords.flatMap((keyword) => [
+          pexelsApiKey ? searchPexels(pexelsApiKey, keyword) : Promise.resolve([]),
+          pixabayApiKey ? searchPixabay(pixabayApiKey, keyword, block) : Promise.resolve([]),
+        ])
+      );
+      candidates = results.flat();
+    }
+
+    const { data: entries, error } = await supabase
+      .from("stock_library_entries")
+      .select("provider, external_id, decision")
+      .eq("user_id", ctx.userId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const key = (c: { provider: string; external_id: string }) => `${c.provider}:${c.external_id}`;
+    const blocked = new Set(
+      (entries ?? []).filter((e) => e.decision === "BLOCKED").map(key)
+    );
+    const preferred = new Set(
+      (entries ?? []).filter((e) => e.decision === "PREFERRED").map(key)
+    );
+
+    candidates = candidates
+      .filter((c) => !blocked.has(key(c)))
+      .sort((a, b) => Number(preferred.has(key(b))) - Number(preferred.has(key(a))));
+
+    return { candidates };
+  },
+};

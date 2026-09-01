@@ -5,7 +5,7 @@ import type { ProjectDetail } from "./projects.types.js"
 
 export async function createProject(req: Request, res: Response) {
   try {
-    const { title, description, target_duration, content_policy } = req.body;
+    const { title, description, target_duration, content_policy, script_style_id } = req.body;
 
     const userId = req.user!.id;
 
@@ -18,6 +18,7 @@ export async function createProject(req: Request, res: Response) {
         description,
         target_duration,
         content_policy,
+        script_style_id,
       })
       .select()
       .single();
@@ -235,7 +236,7 @@ export async function updateProject(req: Request, res: Response) {
     console.log("PROJECT ID:", project_id);
     console.log("USER ID:", userId);
 
-    const { title, description, target_duration, status, content_policy } = req.body;
+    const { title, description, target_duration, status, content_policy, script_style_id } = req.body;
 
     const { data, error } = await supabase
       .from("video_projects")
@@ -245,6 +246,7 @@ export async function updateProject(req: Request, res: Response) {
         target_duration,
         status,
         content_policy,
+        script_style_id,
       })
       .eq("id", project_id)
       .eq("user_id", userId)

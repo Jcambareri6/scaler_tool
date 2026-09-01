@@ -128,6 +128,24 @@ export interface ToolExecution {
   created_at: string;
 }
 
+// Fase 1 (Script Styles): un "Prompt Maestro" por canal, derivado de 3
+// guiones de referencia via la Tool generate_script_style. Vive por
+// user_id (como StockLibraryEntry) porque se reusa en muchos VideoProject
+// del mismo usuario, no pertenece a uno solo.
+export type ScriptStyleStatus = "PENDING" | "READY" | "FAILED";
+
+export interface ScriptStyle {
+  id: string;
+  user_id: string;
+  name: string;
+  reference_scripts: string[];
+  master_prompt: string | null;
+  status: ScriptStyleStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Agent {
   id: string;
   name: string;

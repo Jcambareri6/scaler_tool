@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject, getOwnedJob } from "../../lib/ownership.js";
+import { runRenderPipeline } from "../../pipeline/orchestrator.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
 
 // Orden del pipeline (ver CLAUDE.md, gap #1 del LEEME): AWAITING_STOCK_REVIEW
@@ -181,7 +182,20 @@ export async function approveStockReview(req: Request, res: Response) {
       return res.status(400).json({ error: error.message });
     }
 
-    return res.status(200).json(data);
+    try {
+      await runRenderPipeline(job.video_project_id, { userId, jobId: job.id });
+    } catch (pipelineError) {
+      const message =
+        pipelineError instanceof Error ? pipelineError.message : "Render failed";
+      await supabase
+        .from("jobs")
+        .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
+        .eq("id", job_id);
+      return res.status(400).json({ error: message });
+    }
+
+    const { data: finalJob } = await supabase.from("jobs").select("*").eq("id", job_id).single();
+    return res.status(200).json(finalJob ?? data);
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

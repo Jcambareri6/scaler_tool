@@ -13,13 +13,21 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "mammoth": "^1.12.2",
+    "multer": "^2.3.0",
+    "pdf-parse": "^1.1.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
     "@types/node": "^26.2.0",
+    "@types/pdf-parse": "^1.1.5",
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3"

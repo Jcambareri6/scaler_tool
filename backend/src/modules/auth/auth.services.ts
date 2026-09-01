@@ -20,6 +20,30 @@ import type {LoginInput, RegisterInput} from './auth.types.js';
         if(error){
             throw new Error(error.message);
         }
-        return data ; 
-    }    
+        return data ;
+    }
+
+    async refresh(refreshToken: string) {
+        const { data, error } = await supabase.auth.refreshSession({
+            refresh_token: refreshToken,
+        });
+        if (error) {
+            throw new Error(error.message);
+        }
+        return data;
+    }
+
+    // skipBrowserRedirect: en el server no hay `window`, asi que
+    // signInWithOAuth nunca redirige solo — devuelve la url para que el
+    // frontend haga window.location.href = url.
+    async getOAuthUrl(provider: "google" | "github", redirectTo: string) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+            provider,
+            options: { redirectTo, skipBrowserRedirect: true },
+        });
+        if (error) {
+            throw new Error(error.message);
+        }
+        return data;
+    }
  }

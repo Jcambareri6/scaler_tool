@@ -36,6 +36,7 @@ export interface Project {
   target_duration: number | null;
   status: string;
   content_policy: ContentPolicy | null;
+  script_style_id: string | null;
   created_at: string;
   updated_at: string;
 }

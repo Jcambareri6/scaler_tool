@@ -1,0 +1,10 @@
+{
+  "description": "Create engaging videos effortlessly through an AI-assisted chat interface, allowing users to develop projects from ideas to scripts in a modern platform.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
