@@ -15,3 +15,19 @@ export async function getActiveProvider(slug: string): Promise<Provider | null> 
   if (error || !data) return null;
   return data;
 }
+
+// Para Tools que quieren pegarle a "todos los proveedores disponibles de
+// tal categoria" (ej: search_stock contra todos los de stock de video) sin
+// tener slugs hardcodeados -- agregar un proveedor nuevo de ese type es
+// solo una fila en la tabla + su cliente en el codigo de la Tool, no un
+// cambio en como se resuelven los proveedores.
+export async function getActiveProvidersByType(type: string): Promise<Provider[]> {
+  const { data, error } = await supabase
+    .from("providers")
+    .select("*")
+    .eq("type", type)
+    .eq("is_active", true);
+
+  if (error || !data) return [];
+  return data;
+}

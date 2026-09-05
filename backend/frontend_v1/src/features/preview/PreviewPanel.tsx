@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
+import { supabase } from "@/lib/supabaseClient";
+import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
-import type { Job } from "@/types";
+import type { Job, VisualSource } from "@/types";
 
 interface Props {
   projectId: string;
@@ -58,39 +60,59 @@ function JobStatus({ job }: { job: Job }) {
   );
 }
 
-// El pipeline corre sincronico en el backend hoy (ver pipeline.service.ts):
-// runPipeline/approveStockReview bloquean hasta llegar al proximo gate. El
-// polling queda como red de seguridad para cuando pase a background — con
-// el backend actual normalmente ni llega a disparar.
-const POLLABLE_STATUSES: Job["status"][] = ["QUEUED", "RUNNING"];
-const POLL_INTERVAL_MS = 3000;
-
 export default function PreviewPanel({ projectId }: Props) {
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [visualSource, setVisualSource] = useState<VisualSource>("stock");
 
   useEffect(() => {
     projectsService.getJob(projectId).then((j) => {
       setJob(j);
       setLoading(false);
     });
+    // Precarga el modo elegido la ultima vez para este proyecto (persiste
+    // en video_projects.visual_source) -- si el usuario ya lo eligio antes,
+    // no vuelve a "stock" por default en cada visita al tab.
+    projectsService.getProjectById(projectId).then((p) => {
+      if (p) setVisualSource(p.visualSource);
+    });
   }, [projectId]);
 
+  // El pipeline corre en background en el backend (ver pipeline.service.ts /
+  // job.service.ts::approveStockReview) y va actualizando status/progress
+  // en la fila del Job a medida que procesa cada paso. En vez de preguntar
+  // "¿ya termino?" cada pocos segundos (lo que en un video de varios
+  // minutos son decenas de requests), el frontend se suscribe a los
+  // cambios de esa fila puntual via Supabase Realtime -- el servidor
+  // avisa, el navegador no pregunta nada.
   useEffect(() => {
-    if (!job || !POLLABLE_STATUSES.includes(job.status)) return;
-    const interval = setInterval(async () => {
-      const latest = await projectsService.getJob(projectId);
-      setJob(latest);
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [projectId, job?.status]);
+    if (!job?.id) return;
+    const channel = supabase
+      .channel(`job-${job.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "jobs", filter: `id=eq.${job.id}` },
+        (payload) => {
+          setJob(mapJob(payload.new as Parameters<typeof mapJob>[0]));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [job?.id]);
 
   const handleGenerate = async () => {
     setGenerating(true);
     setError(null);
     try {
+      // El pipeline automatico (orchestrator.ts) lee visual_source del
+      // proyecto para decidir stock/IA/mixto por escena -- se persiste
+      // antes de arrancar para que la corrida use lo que se eligio ahora.
+      await projectsService.updateProject(projectId, { visualSource });
       const newJob = await projectsService.runPipeline(projectId);
       setJob(newJob);
     } catch (err) {
@@ -109,7 +131,15 @@ export default function PreviewPanel({ projectId }: Props) {
   }
 
   if (job?.status === "AWAITING_STOCK_REVIEW") {
-    return <StockReviewPanel projectId={projectId} jobId={job.id} onApproved={setJob} />;
+    return (
+      <StockReviewPanel
+        projectId={projectId}
+        jobId={job.id}
+        onApproved={setJob}
+        onRegenerate={handleGenerate}
+        regenerating={generating}
+      />
+    );
   }
 
   return (
@@ -194,10 +224,42 @@ export default function PreviewPanel({ projectId }: Props) {
           </button>
         </div>
       ) : (
-        <div className="flex flex-col items-center gap-3 text-center">
+        <div className="flex flex-col items-center gap-4 text-center">
           <p className="text-sm max-w-sm leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
             Cuando el guion y las escenas estén listos, generá el video final con IA.
           </p>
+
+          {/* Fuente visual para TODAS las escenas de esta corrida (ver
+              orchestrator.ts) -- se puede pisar despues por escena en el
+              tab Scenes. */}
+          <div className="flex flex-col gap-1.5 w-full max-w-xs">
+            <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+              Fuente de los clips
+            </span>
+            <div className="flex gap-2">
+              {(
+                [
+                  { value: "stock" as const, label: "Stock" },
+                  { value: "ai" as const, label: "Solo IA" },
+                  { value: "mixed" as const, label: "Mixto" },
+                ]
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setVisualSource(opt.value)}
+                  className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+                  style={
+                    visualSource === opt.value
+                      ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                      : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {error && <p className="text-xs" style={{ color: "#f87171" }}>{error}</p>}
           <button
             onClick={handleGenerate}

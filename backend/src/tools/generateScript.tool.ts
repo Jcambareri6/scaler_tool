@@ -8,11 +8,9 @@ import { supabase } from "../lib/supabase.js";
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5";
-// El guion (full_text) mas su desglose en scenes (mismo texto repartido)
-// duplica el contenido narrado dentro del JSON de salida -- para un guion
-// de 20-25k caracteres eso ronda los 20k tokens de salida. Se pide en
+// Un guion de 20-25k caracteres ronda los 10k tokens de salida. Se pide en
 // streaming para no pegar contra el timeout HTTP de una respuesta no-stream.
-const MAX_OUTPUT_TOKENS = 32000;
+const MAX_OUTPUT_TOKENS = 16000;
 
 const RETURN_SCRIPT_TOOL_NAME = "return_script";
 
@@ -40,34 +38,31 @@ export interface GenerateScriptInput {
   key_points?: string;
 }
 
-export interface GeneratedScene {
-  order: number;
-  text: string;
-}
-
 export interface GenerateScriptOutput {
   content: Record<string, unknown>;
-  scenes: GeneratedScene[];
 }
 
 interface GeneratedScriptPayload {
   title: string;
   full_text: string;
-  scenes: GeneratedScene[];
 }
 
+// LEEME (seccion 5): las escenas ya NO se arman aca. Un LLM adivinando
+// cortes narrativos antes de que exista audio real produce escenas
+// desincronizadas con la voz real -- la escena se arma despues, con
+// build_scenes, a partir del guion + la transcripcion real (ver ese tool y
+// pipeline/orchestrator.ts). generate_script solo escribe el texto.
 const BASE_RULES = `Sos el guionista de una plataforma de generacion de videos faceless para YouTube.
 Con la idea que te da el usuario, escribis un guion narrado completo, listo para locucion.
 
 Reglas:
 - "full_text" es el guion completo narrado, de principio a fin.
-- "scenes" divide "full_text" en unidades narrativas ordenadas (order arranca en 1); cada fragmento de "text" concatenado en orden debe reconstruir "full_text".
 - Escribi en el mismo idioma que la idea del usuario.
 - No inventes datos puntuales (numeros, nombres, fuentes) que el usuario no haya dado; si falta informacion especifica, mantene el guion generico pero completo.`;
 
 const OPENAI_FORMAT_INSTRUCTIONS = `Ademas de todas las reglas anteriores, responde EXCLUSIVAMENTE con un objeto JSON, sin texto adicional.
 El JSON debe tener esta forma exacta:
-{ "title": string, "full_text": string, "scenes": [ { "order": number, "text": string } ] }`;
+{ "title": string, "full_text": string }`;
 
 const ANTHROPIC_FORMAT_INSTRUCTIONS = `Ademas de todas las reglas anteriores, entrega el resultado exclusivamente a traves de la tool "${RETURN_SCRIPT_TOOL_NAME}".`;
 
@@ -82,16 +77,15 @@ function buildUserPrompt(idea: string, targetDuration?: number): string {
 
 // El Prompt Maestro (texto libre generado por generate_script_style) exige
 // devolver SOLO texto narrado limpio -- pero el resto del pipeline necesita
-// el mismo contrato {title, full_text, scenes} de siempre para poder
-// guardar en scripts/scenes. Se agrega esta instruccion de formato aparte,
-// sin tocar el contenido/tono que ya define el Prompt Maestro.
+// el mismo contrato {title, full_text} para poder guardar en scripts. Se
+// agrega esta instruccion de formato aparte, sin tocar el contenido/tono
+// que ya define el Prompt Maestro.
 function buildStyledFormatInstructions(provider: ScriptProvider): string {
-  const base = `"full_text" es el guion narrado completo, cumpliendo TODAS las reglas de arriba (sin timestamps, sin markdown, sin encabezados, sin referencias a la estructura del propio guion).
-"scenes" divide "full_text" en unidades narrativas ordenadas (order arranca en 1); cada fragmento de "text" concatenado en orden debe reconstruir "full_text" exactamente.`;
+  const base = `"full_text" es el guion narrado completo, cumpliendo TODAS las reglas de arriba (sin timestamps, sin markdown, sin encabezados, sin referencias a la estructura del propio guion).`;
 
   if (provider === "openai") {
     return `Ademas de todas las reglas anteriores, tenes que devolver tu respuesta EXCLUSIVAMENTE como un objeto JSON, sin texto adicional, con esta forma exacta:
-{ "title": string, "full_text": string, "scenes": [ { "order": number, "text": string } ] }
+{ "title": string, "full_text": string }
 ${base}`;
   }
 
@@ -139,20 +133,8 @@ const returnScriptTool: Anthropic.Tool = {
     properties: {
       title: { type: "string" },
       full_text: { type: "string" },
-      scenes: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            order: { type: "integer" },
-            text: { type: "string" },
-          },
-          required: ["order", "text"],
-        },
-      },
     },
-    required: ["title", "full_text", "scenes"],
+    required: ["title", "full_text"],
   },
   strict: true,
 };
@@ -162,19 +144,10 @@ function parseGeneratedScript(raw: unknown): GeneratedScriptPayload {
   if (!payload || typeof payload.full_text !== "string" || !payload.full_text.trim()) {
     throw new Error("El guion generado no tiene full_text");
   }
-  if (!Array.isArray(payload.scenes) || payload.scenes.length === 0) {
-    throw new Error("El guion generado no tiene scenes");
-  }
-
-  const scenes = payload.scenes.map((scene, index) => ({
-    order: typeof scene?.order === "number" ? scene.order : index + 1,
-    text: typeof scene?.text === "string" ? scene.text : "",
-  }));
 
   return {
     title: typeof payload.title === "string" && payload.title.trim() ? payload.title : "Sin titulo",
     full_text: payload.full_text,
-    scenes,
   };
 }
 
@@ -265,7 +238,7 @@ export const generateScriptTool: ToolDefinition<
 > = {
   name: "generate_script",
   description:
-    "Genera el contenido de un Script a partir de una idea, via un Provider de LLM.",
+    "Genera el texto de un Script a partir de una idea, via un Provider de LLM. Las escenas se arman despues, con build_scenes, una vez que hay voz y transcripcion reales.",
   parameters: {
     type: "object",
     properties: {
@@ -350,8 +323,10 @@ export const generateScriptTool: ToolDefinition<
         .eq("id", scriptId);
       if (updateError) throw new Error(updateError.message);
 
-      // Regenerar el guion reemplaza las escenas anteriores: son un
-      // desglose derivado de full_text, no ediciones manuales a preservar.
+      // Regenerar el guion invalida cualquier escena vieja (son un
+      // desglose derivado del full_text + audio anterior) -- se borran
+      // aca; build_scenes las vuelve a armar cuando corra el pipeline de
+      // nuevo con voz/transcripcion frescas.
       const { error: deleteError } = await supabase
         .from("scenes")
         .delete()
@@ -369,29 +344,6 @@ export const generateScriptTool: ToolDefinition<
       scriptId = insertedScript.id;
     }
 
-    const { data: insertedScenes, error: scenesError } = await supabase
-      .from("scenes")
-      .insert(
-        generated.scenes.map((scene) => ({
-          script_id: scriptId,
-          order: scene.order,
-          content: { text: scene.text },
-        }))
-      )
-      .select("order, content");
-
-    if (scenesError) {
-      throw new Error(scenesError.message);
-    }
-
-    return {
-      content,
-      scenes: (insertedScenes ?? [])
-        .map((scene) => ({
-          order: scene.order as number,
-          text: ((scene.content as { text?: string } | null)?.text) ?? "",
-        }))
-        .sort((a, b) => a.order - b.order),
-    };
+    return { content };
   },
 };

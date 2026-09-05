@@ -1,17 +1,26 @@
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
-import { getActiveProvider } from "../lib/providers.js";
+import { getActiveProvidersByType } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
-import type { ContentPolicy } from "../types/shared/typeShared.js";
+import { withRetry } from "../lib/retry.js";
+import type { ContentPolicy, Provider } from "../types/shared/typeShared.js";
 
 export interface SearchStockInput {
   keywords: string[];
   content_policy?: ContentPolicy;
+  // Si viene, se priorizan candidatos cuyo duration_seconds cubra la
+  // escena -- de lo contrario el video de stock corta antes de que
+  // termine la narracion (visto en produccion: escena de 52s con un clip
+  // de 16s). No descarta los mas cortos (a veces son los unicos
+  // disponibles), solo los manda al final.
+  min_duration_seconds?: number;
 }
 
 export interface StockCandidate {
-  provider: "pexels" | "pixabay" | "mock";
+  // Slug del Provider que lo devolvio (pexels, pixabay, mock, o el que se
+  // vaya agregando -- ver PROVIDER_CLIENTS).
+  provider: string;
   external_id: string;
   url: string;
   preview_url: string;
@@ -42,6 +51,7 @@ export interface SearchStockOutput {
 
 const PEXELS_VIDEO_SEARCH_URL = "https://api.pexels.com/videos/search";
 const PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/";
+const COVERR_VIDEO_SEARCH_URL = "https://api.coverr.co/videos";
 const RESULTS_PER_KEYWORD = 5;
 
 interface PexelsVideoFile {
@@ -63,13 +73,13 @@ interface PexelsVideo {
 // stock_library_entries y la revision visual manual que exige el LEEME.
 async function searchPexels(apiKey: string, keyword: string): Promise<StockCandidate[]> {
   const url = `${PEXELS_VIDEO_SEARCH_URL}?query=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
-  const response = await fetch(url, { headers: { Authorization: apiKey } });
-
-  if (!response.ok) {
-    throw new Error(`Pexels API error (${response.status}): ${await response.text()}`);
-  }
-
-  const data = (await response.json()) as { videos: PexelsVideo[] };
+  const data = await withRetry(async () => {
+    const response = await fetch(url, { headers: { Authorization: apiKey } });
+    if (!response.ok) {
+      throw new Error(`Pexels API error (${response.status}): ${await response.text()}`);
+    }
+    return (await response.json()) as { videos: PexelsVideo[] };
+  });
 
   return (data.videos ?? []).map((video) => ({
     provider: "pexels" as const,
@@ -106,13 +116,13 @@ async function searchPixabay(
   block: string[]
 ): Promise<StockCandidate[]> {
   const url = `${PIXABAY_VIDEO_SEARCH_URL}?key=${apiKey}&q=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Pixabay API error (${response.status}): ${await response.text()}`);
-  }
-
-  const data = (await response.json()) as { hits: PixabayHit[] };
+  const data = await withRetry(async () => {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Pixabay API error (${response.status}): ${await response.text()}`);
+    }
+    return (await response.json()) as { hits: PixabayHit[] };
+  });
 
   return (data.hits ?? [])
     .filter((hit) => !matchesAny(hit.tags ?? "", block))
@@ -126,13 +136,61 @@ async function searchPixabay(
     }));
 }
 
+interface CoverrVideo {
+  id: string;
+  title: string;
+  tags: string[];
+  // La API la devuelve como STRING (ej: "23.833333"), no numero -- se
+  // convierte explicitamente al mapear en vez de dejar que la resta/
+  // comparacion de duracion en el sort de mas abajo la coerciona sola.
+  duration: string;
+  urls?: { mp4?: string; mp4_preview?: string; mp4_download?: string };
+}
+
+// Coverr si expone "tags" (array) en cada video, asi que el bloqueo de
+// content_policy.block se puede aplicar antes de devolver el candidato,
+// igual que con Pixabay. Requiere `urls=true` en el query o la API no
+// manda las URLs del archivo (quedarian undefined).
+async function searchCoverr(apiKey: string, keyword: string, block: string[]): Promise<StockCandidate[]> {
+  const url = `${COVERR_VIDEO_SEARCH_URL}?query=${encodeURIComponent(keyword)}&page_size=${RESULTS_PER_KEYWORD}&urls=true`;
+  const data = await withRetry(async () => {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!response.ok) {
+      throw new Error(`Coverr API error (${response.status}): ${await response.text()}`);
+    }
+    return (await response.json()) as { hits: CoverrVideo[] };
+  });
+
+  return (data.hits ?? [])
+    .filter((video) => !matchesAny((video.tags ?? []).join(" "), block))
+    .filter((video): video is CoverrVideo & { urls: { mp4: string } } => !!video.urls?.mp4)
+    .map((video) => ({
+      provider: "coverr" as const,
+      external_id: video.id,
+      url: video.urls.mp4,
+      preview_url: video.urls.mp4,
+      duration_seconds: Number(video.duration),
+    }));
+}
+
+// Dispatch por slug -- agregar un proveedor nuevo de stock de video es:
+// 1) fila en `providers` con type='stock_video', 2) un cliente ac  y
+// registrarlo aca. search_stock en si no vuelve a tocarse (lee
+// getActiveProvidersByType("stock_video") y listo).
+type StockClient = (apiKey: string, keyword: string, block: string[]) => Promise<StockCandidate[]>;
+const PROVIDER_CLIENTS: Record<string, StockClient> = {
+  pexels: (apiKey, keyword) => searchPexels(apiKey, keyword),
+  pixabay: (apiKey, keyword, block) => searchPixabay(apiKey, keyword, block),
+  coverr: (apiKey, keyword, block) => searchCoverr(apiKey, keyword, block),
+};
+
 // Gap #2/#3 del LEEME: el filtrado final cruza los candidatos con
 // stock_library_entries (BLOCKED/PREFERRED, por usuario) y content_policy
 // (por proyecto) antes de devolverlos.
 export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput> = {
   name: "search_stock",
   description:
-    "Busca clips de stock (Pexels/Pixabay) por keywords y los filtra contra content_policy y stock_library_entries.",
+    "Busca clips de stock en todos los Providers activos de type=stock_video, por keywords, filtrados contra content_policy y stock_library_entries.",
   parameters: {
     type: "object",
     properties: {
@@ -150,35 +208,40 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
           notes: { type: "string" },
         },
       },
+      min_duration_seconds: {
+        type: "number",
+        description: "Duracion minima deseada del clip (ej: duracion de la escena que va a cubrir)",
+      },
     },
     required: ["keywords"],
   },
-  async execute({ keywords, content_policy }, ctx) {
-    const [pexels, pixabay] = await Promise.all([
-      getActiveProvider("pexels"),
-      getActiveProvider("pixabay"),
-    ]);
+  async execute({ keywords, content_policy, min_duration_seconds }, ctx) {
+    const providers: Provider[] = await getActiveProvidersByType("stock_video");
+    const usableProviders = providers.filter((p) => p.api_key && PROVIDER_CLIENTS[p.slug]);
 
-    const pexelsApiKey = pexels?.api_key;
-    const pixabayApiKey = pixabay?.api_key;
-
-    if (!pexelsApiKey && !pixabayApiKey && !isMockMode()) {
+    if (usableProviders.length === 0 && !isMockMode()) {
       throw new ProviderNotConfiguredError("search_stock");
     }
 
     const block = content_policy?.block ?? [];
 
     let candidates: StockCandidate[];
-    if (!pexelsApiKey && !pixabayApiKey) {
+    if (usableProviders.length === 0) {
       candidates = keywords.flatMap((keyword) => mockCandidates(keyword));
     } else {
-      const results = await Promise.all(
-        keywords.flatMap((keyword) => [
-          pexelsApiKey ? searchPexels(pexelsApiKey, keyword) : Promise.resolve([]),
-          pixabayApiKey ? searchPixabay(pixabayApiKey, keyword, block) : Promise.resolve([]),
-        ])
+      // allSettled, no all: si un proveedor puntual falla (rate limit,
+      // timeout, key vencida) no tiene que tirar abajo la busqueda entera
+      // -- se sigue con lo que hayan devuelto los demas. Solo si TODOS
+      // fallan, candidates queda vacio (mismo camino que "sin resultados"
+      // que ya manejan los callers).
+      const results = await Promise.allSettled(
+        keywords.flatMap((keyword) =>
+          usableProviders.map((provider) =>
+            PROVIDER_CLIENTS[provider.slug]!(provider.api_key!, keyword, block)
+          )
+        )
       );
-      candidates = results.flat();
+      candidates = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
     }
 
     const { data: entries, error } = await supabase
@@ -200,7 +263,23 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
 
     candidates = candidates
       .filter((c) => !blocked.has(key(c)))
-      .sort((a, b) => Number(preferred.has(key(b))) - Number(preferred.has(key(a))));
+      .sort((a, b) => {
+        if (min_duration_seconds) {
+          const aFits = (a.duration_seconds ?? 0) >= min_duration_seconds ? 1 : 0;
+          const bFits = (b.duration_seconds ?? 0) >= min_duration_seconds ? 1 : 0;
+          if (aFits !== bFits) return bFits - aFits;
+        }
+        // Antes solo se ordenaba por "encaja si/no" -- entre los que no
+        // encajaban quedaban en el orden crudo de la API, asi que el
+        // relleno greedy de replaceStockSegmentsForScene terminaba armando
+        // una escena con 3-4 clips cortitos en vez de 1-2 largos. Ordenando
+        // por duracion descendente, ese relleno agarra primero el candidato
+        // que mas terreno cubre (idealmente casi toda la escena) y recien
+        // despues suma uno mas corto para el resto, en vez de varios.
+        const durationDiff = (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0);
+        if (durationDiff !== 0) return durationDiff;
+        return Number(preferred.has(key(b))) - Number(preferred.has(key(a)));
+      });
 
     return { candidates };
   },

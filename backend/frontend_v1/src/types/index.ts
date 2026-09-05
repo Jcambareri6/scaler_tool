@@ -1,5 +1,7 @@
 export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "ERROR";
 
+export type VisualSource = "stock" | "ai" | "mixed";
+
 export type SceneVisualStatus = "PENDING" | "GENERATING" | "DONE" | "ERROR";
 
 export type ChatRole = "user" | "agent";
@@ -15,6 +17,7 @@ export interface VideoProject {
   updatedAt: string;
   thumbnailUrl?: string;
   scriptStyleId?: string;
+  visualSource: VisualSource;
 }
 
 export interface Script {

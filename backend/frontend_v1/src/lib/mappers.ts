@@ -1,4 +1,4 @@
-import type { ProjectStatus, VideoProject, Script, Scene, SceneVisualStatus, Job, JobStatus, Asset, AssetType, ScriptStyle, ScriptStyleStatus } from "@/types";
+import type { ProjectStatus, VideoProject, Script, Scene, SceneVisualStatus, Job, JobStatus, Asset, AssetType, ScriptStyle, ScriptStyleStatus, VisualSource } from "@/types";
 
 // --- video_projects -------------------------------------------------------
 
@@ -8,8 +8,15 @@ interface ProjectRow {
   status: string;
   description: string | null;
   script_style_id: string | null;
+  visual_source?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+const VISUAL_SOURCES: VisualSource[] = ["stock", "ai", "mixed"];
+
+function toVisualSource(value: string | null | undefined): VisualSource {
+  return (VISUAL_SOURCES as string[]).includes(value ?? "") ? (value as VisualSource) : "stock";
 }
 
 const PROJECT_STATUSES: ProjectStatus[] = ["DRAFT", "IN_PROGRESS", "GENERATING", "DONE", "ERROR"];
@@ -26,6 +33,7 @@ export function mapProject(row: ProjectRow): VideoProject {
     status: toProjectStatus(row.status),
     description: row.description ?? undefined,
     scriptStyleId: row.script_style_id ?? undefined,
+    visualSource: toVisualSource(row.visual_source),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

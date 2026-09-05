@@ -85,6 +85,13 @@ export interface ContentPolicy {
   notes?: string;
 }
 
+// "stock": solo busca en los Providers de stock (comportamiento historico).
+// "ai": genera cada escena con generate_video (SnapGen) en vez de buscar.
+// "mixed": intenta stock primero, y solo si ningun candidato cubre una
+// porcion razonable de la escena, genera el clip con IA para esa escena
+// puntual (ver orchestrator.ts). Default "stock" a nivel de columna.
+export type VisualSource = "stock" | "ai" | "mixed";
+
 // Gap #4 (LEEME): contrato del overlay para modo estricto — el texto SIEMPRE
 // debe derivar del guion (source: "script"), nunca inventarse. La
 // validación real vive en la Tool generate_overlay; esto documenta el shape
@@ -108,6 +115,10 @@ export interface Provider {
   id: string;
   name: string;
   slug: string;
+  // Categoria del proveedor (llm, tts, stock_video, render, ...) -- deja
+  // que una Tool busque "todos los proveedores activos de tal categoria"
+  // sin tener slugs hardcodeados (ver lib/providers.ts::getActiveProvidersByType).
+  type: string | null;
   api_key: string | null;
   configuration: Record<string, unknown>;
   is_active: boolean;

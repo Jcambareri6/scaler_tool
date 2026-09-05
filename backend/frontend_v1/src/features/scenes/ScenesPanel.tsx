@@ -7,6 +7,14 @@ interface Props {
   projectId: string;
 }
 
+// scene.duration viene como "Ns" (ver build_timeline.tool.ts). El clip de
+// stock crudo casi nunca dura exactamente eso -- puede ser mas corto o mas
+// largo que la escena que representa.
+function parseDurationSeconds(duration: string): number {
+  const match = duration.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : 0;
+}
+
 function SceneCard({ scene, selected, onSelect }: { scene: Scene; selected: boolean; onSelect: () => void }) {
   return (
     <button
@@ -52,31 +60,46 @@ function SceneCard({ scene, selected, onSelect }: { scene: Scene; selected: bool
 
 function SceneDetail({
   scene,
-  asset,
+  assets,
   onRegenerate,
 }: {
   scene: Scene;
-  asset: Asset | null;
-  onRegenerate: (sceneId: string, prompt: string) => Promise<void>;
+  assets: Asset[];
+  onRegenerate: (
+    sceneId: string,
+    options: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
+  ) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [narrative, setNarrative] = useState(scene.narrativeContent);
   const [visualPrompt, setVisualPrompt] = useState(scene.visualPrompt ?? "");
+  const [source, setSource] = useState<"stock" | "ai" | "ai_image">("stock");
+  const [aiPrompt, setAiPrompt] = useState("");
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
     setNarrative(scene.narrativeContent);
     setVisualPrompt(scene.visualPrompt ?? "");
+    setSource("stock");
+    setAiPrompt("");
     setEditing(false);
     setError(null);
+    setActiveIndex(0);
   }, [scene.id]);
+
+  const asset = assets[activeIndex] ?? null;
 
   const handleRegenerate = async () => {
     setRegenerating(true);
     setError(null);
     try {
-      await onRegenerate(scene.id, visualPrompt.trim());
+      if (source === "ai" || source === "ai_image") {
+        await onRegenerate(scene.id, { source, aiPrompt: aiPrompt.trim() });
+      } else {
+        await onRegenerate(scene.id, { source: "stock", prompt: visualPrompt.trim() });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo regenerar el visual");
     } finally {
@@ -115,7 +138,31 @@ function SceneDetail({
         }}
       >
         {asset ? (
-          <video key={asset.id} src={asset.storageKey} controls className="w-full h-full object-cover" />
+          asset.type === "IMAGE" ? (
+            // Imagen generada (generate_image): en el render final se ve con
+            // efecto Ken Burns (ver render_video.tool.ts), pero ese efecto es
+            // cosa de ffmpeg -- aca alcanza con mostrarla fija.
+            <img key={asset.id} src={asset.storageKey} className="w-full h-full object-cover" alt="Visual de la escena" />
+          ) : (
+            <video
+              key={asset.id}
+              src={asset.storageKey}
+              controls
+              loop
+              className="w-full h-full object-cover"
+              // El clip crudo casi nunca dura lo mismo que el tramo de escena
+              // que le toca cubrir (metadata.duration_seconds, asignado por
+              // replaceStockSegmentsForScene): si es mas corto, `loop` lo
+              // repite; si es mas largo, este handler lo corta y reinicia --
+              // mismo criterio que el timeline de Preview y el render final.
+              onTimeUpdate={(e) => {
+                const segmentDuration = Number(asset.metadata?.duration_seconds) || parseDurationSeconds(scene.duration);
+                if (segmentDuration > 0 && e.currentTarget.currentTime >= segmentDuration) {
+                  e.currentTarget.currentTime = 0;
+                }
+              }}
+            />
+          )
         ) : regenerating ? (
           <div className="relative text-center">
             <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(167,155,255,0.2)", borderTopColor: "#a78bfa" }} />
@@ -133,6 +180,28 @@ function SceneDetail({
           </>
         )}
       </div>
+
+      {/* Si la escena necesito mas de un clip para cubrir toda su duracion
+          (ver replaceStockSegmentsForScene), se listan acá en orden --
+          clic para previsualizar cada uno en el reproductor de arriba. */}
+      {assets.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {assets.map((a, i) => (
+            <button
+              key={a.id}
+              onClick={() => setActiveIndex(i)}
+              className="shrink-0 rounded-lg overflow-hidden"
+              style={{
+                width: 96,
+                height: 54,
+                border: i === activeIndex ? "2px solid #a78bfa" : "1px solid rgba(255,255,255,0.1)",
+              }}
+            >
+              <video src={a.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
@@ -165,16 +234,68 @@ function SceneDetail({
         )}
       </div>
 
-      {/* Visual prompt */}
+      {/* Fuente del visual: buscar en stock o generar con IA (SnapGen) */}
       <div>
-        <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>Prompt visual</label>
-        <textarea
-          value={visualPrompt}
-          onChange={(e) => setVisualPrompt(e.target.value)}
-          rows={3}
-          placeholder="Palabras clave para la búsqueda de stock (si lo dejás vacío, se usa la narrativa de la escena)..."
-          className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
-        />
+        <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>Fuente del visual</label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSource("stock")}
+            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+            style={
+              source === "stock"
+                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+            }
+          >
+            Buscar stock
+          </button>
+          <button
+            onClick={() => setSource("ai")}
+            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+            style={
+              source === "ai"
+                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+            }
+          >
+            Video con IA
+          </button>
+          <button
+            onClick={() => setSource("ai_image")}
+            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+            style={
+              source === "ai_image"
+                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+            }
+          >
+            Imagen con IA
+          </button>
+        </div>
+      </div>
+
+      {/* Prompt: de busqueda (stock) o de generacion (IA video/imagen), segun la fuente elegida arriba */}
+      <div>
+        <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
+          {source === "ai" || source === "ai_image" ? "Prompt de generación (IA)" : "Prompt visual"}
+        </label>
+        {source === "ai" || source === "ai_image" ? (
+          <textarea
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            rows={3}
+            placeholder="Describí la escena a generar (si lo dejás vacío, se deriva de la narrativa)..."
+            className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
+          />
+        ) : (
+          <textarea
+            value={visualPrompt}
+            onChange={(e) => setVisualPrompt(e.target.value)}
+            rows={3}
+            placeholder="Palabras clave para la búsqueda de stock (si lo dejás vacío, se usa la narrativa de la escena)..."
+            className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
+          />
+        )}
       </div>
 
       {/* Actions */}
@@ -202,21 +323,32 @@ function SceneDetail({
   );
 }
 
+// metadata.sequence lo asigna replaceStockSegmentsForScene -- define el
+// orden de reproduccion de los clips dentro de una misma escena.
+function sequenceOf(asset: Asset): number {
+  const value = asset.metadata?.sequence;
+  return typeof value === "number" ? value : 0;
+}
+
 export default function ScenesPanel({ projectId }: Props) {
   const [scenes, setScenes] = useState<Scene[]>([]);
-  const [assetsByScene, setAssetsByScene] = useState<Record<string, Asset>>({});
+  const [assetsByScene, setAssetsByScene] = useState<Record<string, Asset[]>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       projectsService.getScenes(projectId),
-      projectsService.getStockPreviewAssets(projectId),
+      projectsService.getSceneVideoAssets(projectId),
     ]).then(([s, assets]) => {
       setScenes(s);
-      const map: Record<string, Asset> = {};
+      const map: Record<string, Asset[]> = {};
       for (const asset of assets) {
-        if (asset.sceneId) map[asset.sceneId] = asset;
+        if (!asset.sceneId) continue;
+        (map[asset.sceneId] ??= []).push(asset);
+      }
+      for (const sceneAssets of Object.values(map)) {
+        sceneAssets.sort((a, b) => sequenceOf(a) - sequenceOf(b));
       }
       setAssetsByScene(map);
       if (s.length > 0) setSelectedId(s[0].id);
@@ -226,9 +358,12 @@ export default function ScenesPanel({ projectId }: Props) {
 
   const selectedScene = scenes.find((s) => s.id === selectedId) ?? null;
 
-  const handleRegenerate = async (sceneId: string, prompt: string) => {
-    const asset = await projectsService.regenerateSceneVisual(sceneId, prompt || undefined);
-    setAssetsByScene((prev) => ({ ...prev, [sceneId]: asset }));
+  const handleRegenerate = async (
+    sceneId: string,
+    options: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
+  ) => {
+    const assets = await projectsService.regenerateSceneVisual(sceneId, options);
+    setAssetsByScene((prev) => ({ ...prev, [sceneId]: assets }));
   };
 
   if (loading) {
@@ -250,7 +385,8 @@ export default function ScenesPanel({ projectId }: Props) {
         <div>
           <p className="text-sm font-medium mb-1" style={{ color: "var(--foreground)" }}>Sin escenas todavía</p>
           <p className="text-xs max-w-xs leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
-            Las escenas se generan a partir del guion. Generá el guion primero en la pestaña Script.
+            Las escenas se arman recién con la voz y la transcripción reales — generá el guion en
+            la pestaña Script y después corré "Generar video" en Preview.
           </p>
         </div>
       </div>
@@ -267,7 +403,7 @@ export default function ScenesPanel({ projectId }: Props) {
         {scenes.map((scene) => (
           <SceneCard
             key={scene.id}
-            scene={assetsByScene[scene.id] ? { ...scene, visualStatus: "DONE" } : scene}
+            scene={assetsByScene[scene.id]?.length ? { ...scene, visualStatus: "DONE" } : scene}
             selected={scene.id === selectedId}
             onSelect={() => setSelectedId(scene.id)}
           />
@@ -278,7 +414,7 @@ export default function ScenesPanel({ projectId }: Props) {
       {selectedScene ? (
         <SceneDetail
           scene={selectedScene}
-          asset={assetsByScene[selectedScene.id] ?? null}
+          assets={assetsByScene[selectedScene.id] ?? []}
           onRegenerate={handleRegenerate}
         />
       ) : (

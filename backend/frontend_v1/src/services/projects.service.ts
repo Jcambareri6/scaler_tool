@@ -40,6 +40,7 @@ export const projectsService = {
     // explicito, no se omite el campo (a diferencia del resto, donde
     // undefined = "no tocar este campo").
     if (updates.scriptStyleId !== undefined) body.script_style_id = updates.scriptStyleId || null;
+    if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
 
     try {
       const row = await api.patch<Parameters<typeof mapProject>[0]>(`/projects/${id}`, body);
@@ -106,23 +107,46 @@ export const projectsService = {
     return mapJob(row);
   },
 
-  // Assets de stock elegidos por escena (metadata.kind === "stock_preview",
-  // ver pipeline/orchestrator.ts::selectStockForScene). Se usan tanto para
+  // Clips de video elegidos/generados por escena -- metadata.kind es
+  // "stock_preview" (buscado en Pexels/Pixabay/Coverr, ver stockSegments.ts)
+  // o "ai_generated" (SnapGen, ver setAiVideoForScene). Se usan tanto para
   // la revision del gate humano (AWAITING_STOCK_REVIEW) como para mostrar
   // el clip real ya elegido en la pestana Scenes.
-  async getStockPreviewAssets(projectId: string): Promise<Asset[]> {
+  async getSceneVideoAssets(projectId: string): Promise<Asset[]> {
     const rows = await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`);
-    return rows.map(mapAsset).filter((asset) => asset.metadata?.kind === "stock_preview");
+    return rows
+      .map(mapAsset)
+      .filter((asset) => asset.metadata?.kind === "stock_preview" || asset.metadata?.kind === "ai_generated");
   },
 
-  // Repromptea el stock de UNA escena (scene.service.ts::regenerateSceneVisual):
-  // vuelve a buscar en Pexels/Pixabay con `prompt` (o el texto de la escena
-  // si no se manda) y reemplaza el Asset ya elegido, evitando repetirlo.
-  async regenerateSceneVisual(sceneId: string, prompt?: string): Promise<Asset> {
-    const row = await api.post<Parameters<typeof mapAsset>[0]>(`/scenes/${sceneId}/regenerate-visual`, {
-      ...(prompt ? { prompt } : {}),
+  // Audio narrado del proyecto entero (type=AUDIO, sceneId=null -- ver
+  // orchestrator.ts paso 1, generate_voice). Puede haber mas de uno si se
+  // corrio el pipeline varias veces; se toma el mas reciente (el backend ya
+  // ordena por created_at desc).
+  async getAudioAsset(projectId: string): Promise<Asset | null> {
+    const rows = await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`);
+    const audio = rows.map(mapAsset).find((asset) => asset.type === "AUDIO" && asset.sceneId === null);
+    return audio ?? null;
+  },
+
+  // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual).
+  // source="stock" (default): vuelve a buscar en todos los Providers de
+  // stock activos y arma la secuencia de clips que cubre la escena entera.
+  // source="ai": genera con SnapGen tantos clips seguidos como haga falta
+  // (Veo 3.1/Seedance 2 generan clips cortos, mas cortos que la escena) a
+  // partir de aiPrompt (si se deja vacio, se deriva uno de la narrativa).
+  // source="ai_image": genera UNA imagen con SnapGen en vez de video (mucho
+  // mas barato), mostrada con efecto Ken Burns en el render final.
+  async regenerateSceneVisual(
+    sceneId: string,
+    options?: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
+  ): Promise<Asset[]> {
+    const rows = await api.post<Parameters<typeof mapAsset>[0][]>(`/scenes/${sceneId}/regenerate-visual`, {
+      ...(options?.prompt ? { prompt: options.prompt } : {}),
+      ...(options?.source ? { source: options.source } : {}),
+      ...(options?.aiPrompt ? { ai_prompt: options.aiPrompt } : {}),
     });
-    return mapAsset(row);
+    return rows.map(mapAsset);
   },
 
   // Ejecuta la Tool generate_script (mismo path que usaria el Agent via

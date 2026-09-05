@@ -1,9 +1,29 @@
 import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedScript } from "../../lib/ownership.js";
-import { deriveKeywords } from "../../lib/keywords.js";
 import { runTool } from "../../tools/index.js";
+import {
+  replaceStockSegmentsForScene,
+  setAiVideoSegmentsForScene,
+  setAiImageForScene,
+  type AiVideoSegment,
+} from "../../lib/stockSegments.js";
 import type { SearchStockInput, SearchStockOutput } from "../../tools/searchStock.tool.js";
+import type {
+  GenerateStockKeywordsInput,
+  GenerateStockKeywordsOutput,
+} from "../../tools/generateStockKeywords.tool.js";
+import type { GenerateVideoInput, GenerateVideoOutput } from "../../tools/generateVideo.tool.js";
+import type {
+  GenerateVideoPromptInput,
+  GenerateVideoPromptOutput,
+} from "../../tools/generateVideoPrompt.tool.js";
+import type { GenerateImageInput, GenerateImageOutput } from "../../tools/generateImage.tool.js";
+import type { ContentPolicy } from "../../types/shared/typeShared.js";
+
+// Tope de seguridad, mismo criterio que orchestrator.ts::generateAiVisual --
+// evita gasto descontrolado si generate_video devolviera duration_seconds 0.
+const MAX_AI_VIDEO_SEGMENTS = 10;
 
 export async function createScene(req: Request, res: Response) {
   try {
@@ -178,7 +198,11 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
   try {
     const { scene_id } = req.params;
     const userId = req.user!.id;
-    const { prompt } = (req.body ?? {}) as { prompt?: string };
+    const { prompt, source, ai_prompt } = (req.body ?? {}) as {
+      prompt?: string;
+      source?: "stock" | "ai" | "ai_image";
+      ai_prompt?: string;
+    };
 
     const { data: scene, error: sceneError } = await supabase
       .from("scenes")
@@ -196,7 +220,7 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
 
     const { data: project, error: projectError } = await supabase
       .from("video_projects")
-      .select("id, content_policy")
+      .select("id, title, content_policy")
       .eq("id", script.video_project_id)
       .single();
     if (projectError || !project) {
@@ -204,6 +228,114 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
     }
 
     const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
+    const durationMatch = ((scene.content as { duration?: unknown } | null)?.duration as string | undefined)
+      ?.match(/(\d+(?:\.\d+)?)/);
+    const minDurationSeconds = durationMatch ? Number(durationMatch[1]) : 30;
+
+    // "ai" / "ai_image": mismo flujo que el pipeline automatico en modo
+    // visual_source "ai" (ver orchestrator.ts), pero con el prompt que haya
+    // tipeado el usuario aca en vez de uno derivado automaticamente -- si
+    // lo deja vacio, se deriva uno igual (generate_video_prompt) a partir
+    // de la narrativa de la escena. Ambas fuentes comparten esta derivacion
+    // de prompt (el prompt de video le sirve igual a la imagen: describe
+    // una escena filmable, que es tambien una buena descripcion de imagen).
+    if (source === "ai" || source === "ai_image") {
+      const customAiPrompt = typeof ai_prompt === "string" && ai_prompt.trim() ? ai_prompt.trim() : null;
+      let visualPrompt = customAiPrompt;
+      if (!visualPrompt) {
+        if (!sceneText.trim()) {
+          return res.status(400).json({
+            error: "No hay texto para generar el prompt de IA (mandá un prompt o cargá la narrativa de la escena primero)",
+          });
+        }
+        const videoTopic = (project as { title?: string }).title;
+        const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+        const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
+          "generate_video_prompt",
+          {
+            scene_text: sceneText,
+            ...(videoTopic ? { video_topic: videoTopic } : {}),
+            ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+          },
+          { userId }
+        );
+        visualPrompt = promptResult.prompt;
+      }
+
+      if (source === "ai_image") {
+        let image: GenerateImageOutput;
+        try {
+          image = await runTool<GenerateImageInput, GenerateImageOutput>(
+            "generate_image",
+            { prompt: visualPrompt, scene_id: scene_id as string },
+            { userId }
+          );
+        } catch (toolError) {
+          const message = toolError instanceof Error ? toolError.message : "generate_image failed";
+          return res.status(400).json({ error: message });
+        }
+
+        await setAiImageForScene(project.id, scene_id as string, {
+          storage_key: image.storage_key,
+          prompt: visualPrompt,
+        });
+
+        const { data: imageAsset, error: imageAssetError } = await supabase
+          .from("assets")
+          .select("*")
+          .eq("scene_id", scene_id)
+          .eq("type", "IMAGE");
+        if (imageAssetError) return res.status(400).json({ error: imageAssetError.message });
+
+        try {
+          await runTool("build_timeline", { video_project_id: project.id }, { userId });
+        } catch {
+          // No bloqueante, ver comentario equivalente mas abajo en la rama de stock.
+        }
+
+        return res.status(200).json(imageAsset ?? []);
+      }
+
+      // "ai": el modelo de video (Veo 3.1 8s fijos, Seedance 2 hasta 15s)
+      // genera clips mas cortos que la escena -- se piden varios seguidos
+      // con el mismo prompt hasta cubrirla entera (mismo criterio que
+      // orchestrator.ts::generateAiVisual y que search_stock completando
+      // con mas de un candidato).
+      const segments: AiVideoSegment[] = [];
+      let remaining = minDurationSeconds;
+      try {
+        for (let i = 0; i < MAX_AI_VIDEO_SEGMENTS && remaining > 0.5; i++) {
+          const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
+            "generate_video",
+            { prompt: visualPrompt, scene_id: scene_id as string, duration_seconds: remaining },
+            { userId }
+          );
+          segments.push({ storage_key: video.storage_key, duration_seconds: video.duration_seconds, prompt: visualPrompt });
+          remaining -= video.duration_seconds || 0.5;
+        }
+      } catch (toolError) {
+        const message = toolError instanceof Error ? toolError.message : "generate_video failed";
+        return res.status(400).json({ error: message });
+      }
+
+      await setAiVideoSegmentsForScene(project.id, scene_id as string, segments);
+
+      const { data: aiAsset, error: aiAssetError } = await supabase
+        .from("assets")
+        .select("*")
+        .eq("scene_id", scene_id)
+        .eq("type", "VIDEO");
+      if (aiAssetError) return res.status(400).json({ error: aiAssetError.message });
+
+      try {
+        await runTool("build_timeline", { video_project_id: project.id }, { userId });
+      } catch {
+        // No bloqueante, ver comentario equivalente mas abajo en la rama de stock.
+      }
+
+      return res.status(200).json(aiAsset ?? []);
+    }
+
     const customPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
     const promptText = customPrompt ?? sceneText;
     if (!promptText.trim()) {
@@ -212,26 +344,26 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
       });
     }
     // Con prompt custom: se busca tal cual lo escribio el usuario (permite
-    // separar con comas para dar variantes), sin pasar por deriveKeywords
-    // -- esa heuristica esta pensada para extraer keywords de un parrafo de
-    // narrativa (donde no toda palabra importa igual), no para respetar una
-    // busqueda que el usuario tipeo a proposito. Si la trocearamos igual,
-    // la primera palabra que sobreviva el filtro (no necesariamente la mas
-    // relevante) termina definiendo el resultado, porque el primer
-    // candidato devuelto es el de la primera keyword.
-    const keywords = customPrompt
-      ? customPrompt.split(",").map((p) => p.trim()).filter(Boolean)
-      : deriveKeywords(promptText);
-
-    const { data: existingAsset } = await supabase
-      .from("assets")
-      .select("id, metadata")
-      .eq("scene_id", scene_id)
-      .eq("type", "VIDEO")
-      .contains("metadata", { kind: "stock_preview" })
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // separar con comas para dar variantes), sin pasar por la IA -- eso
+    // esta pensado para traducir/interpretar un parrafo de narrativa, no
+    // para reinterpretar una busqueda que el usuario ya tipeo a proposito.
+    let keywords: string[];
+    if (customPrompt) {
+      keywords = customPrompt.split(",").map((p) => p.trim()).filter(Boolean);
+    } else {
+      const videoTopic = (project as { title?: string }).title;
+      const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+      const keywordsResult = await runTool<GenerateStockKeywordsInput, GenerateStockKeywordsOutput>(
+        "generate_stock_keywords",
+        {
+          scene_text: promptText,
+          ...(videoTopic ? { video_topic: videoTopic } : {}),
+          ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+        },
+        { userId }
+      );
+      keywords = keywordsResult.keywords;
+    }
 
     let searchOutput: SearchStockOutput;
     try {
@@ -240,6 +372,7 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
         {
           keywords,
           ...(project.content_policy ? { content_policy: project.content_policy } : {}),
+          min_duration_seconds: minDurationSeconds,
         },
         { userId }
       );
@@ -248,59 +381,51 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
       return res.status(400).json({ error: message });
     }
 
-    const previousExternalId = (existingAsset?.metadata as { external_id?: string } | null)
-      ?.external_id;
-    const chosen =
-      searchOutput.candidates.find((c) => c.external_id !== previousExternalId) ??
-      searchOutput.candidates[0];
-
-    if (!chosen) {
+    if (searchOutput.candidates.length === 0) {
       return res.status(404).json({ error: "No se encontraron clips de stock para ese prompt" });
     }
 
-    const assetPayload = {
-      video_project_id: project.id,
-      scene_id,
-      type: "VIDEO",
-      storage_key: chosen.preview_url,
-      metadata: {
-        kind: "stock_preview",
-        provider: chosen.provider,
-        external_id: chosen.external_id,
-        url: chosen.url,
-        prompt: promptText,
-      },
-    };
+    // Mismo criterio que el pipeline automatico: si ningun candidato solo
+    // alcanza para cubrir la escena entera, se completa con mas clips
+    // distintos en vez de repetir el mismo (ver replaceStockSegmentsForScene).
+    // Ademas de no repetir DENTRO de esta escena, tampoco se repite un clip
+    // que ya este en uso en OTRA escena del mismo video -- se arma el set
+    // a partir de lo que ya hay guardado en `assets` para el resto de las
+    // escenas del proyecto (esta escena se excluye porque se va a
+    // reemplazar entera).
+    const { data: otherSceneAssets, error: otherAssetsError } = await supabase
+      .from("assets")
+      .select("metadata")
+      .eq("video_project_id", project.id)
+      .eq("type", "VIDEO")
+      .neq("scene_id", scene_id as string)
+      .contains("metadata", { kind: "stock_preview" });
+    if (otherAssetsError) return res.status(400).json({ error: otherAssetsError.message });
+    const usedStockKeys = new Set<string>(
+      (otherSceneAssets ?? [])
+        .map((row) => row.metadata as { provider?: string; external_id?: string } | null)
+        .filter((meta): meta is { provider: string; external_id: string } => !!meta?.provider && !!meta?.external_id)
+        .map((meta) => `${meta.provider}:${meta.external_id}`)
+    );
+    await replaceStockSegmentsForScene(project.id, scene_id as string, searchOutput.candidates, minDurationSeconds, usedStockKeys);
 
-    let asset;
-    if (existingAsset) {
-      const { data, error } = await supabase
-        .from("assets")
-        .update(assetPayload)
-        .eq("id", existingAsset.id)
-        .select()
-        .single();
-      if (error) return res.status(400).json({ error: error.message });
-      asset = data;
-    } else {
-      const { data, error } = await supabase
-        .from("assets")
-        .insert(assetPayload)
-        .select()
-        .single();
-      if (error) return res.status(400).json({ error: error.message });
-      asset = data;
-    }
+    const { data: segments, error: segmentsError } = await supabase
+      .from("assets")
+      .select("*")
+      .eq("scene_id", scene_id)
+      .eq("type", "VIDEO")
+      .order("created_at", { ascending: true });
+    if (segmentsError) return res.status(400).json({ error: segmentsError.message });
 
     try {
       await runTool("build_timeline", { video_project_id: project.id }, { userId });
     } catch {
-      // No bloqueante: el Asset ya quedo persistido, y el proximo
-      // build_timeline (por ejemplo al aprobar el render) lo vuelve a
+      // No bloqueante: los Assets ya quedaron persistidos, y el proximo
+      // build_timeline (por ejemplo al aprobar el render) los vuelve a
       // resolver de todas formas.
     }
 
-    return res.status(200).json(asset);
+    return res.status(200).json(segments ?? []);
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

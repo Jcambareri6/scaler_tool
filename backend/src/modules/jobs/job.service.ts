@@ -182,20 +182,18 @@ export async function approveStockReview(req: Request, res: Response) {
       return res.status(400).json({ error: error.message });
     }
 
-    try {
-      await runRenderPipeline(job.video_project_id, { userId, jobId: job.id });
-    } catch (pipelineError) {
+    // Mismo criterio que runPipeline: el render (descarga de clips + FFmpeg)
+    // corre en background, la request responde ya con el Job en RENDERING.
+    res.status(202).json(data);
+
+    runRenderPipeline(job.video_project_id, { userId, jobId: job.id }).catch(async (pipelineError) => {
       const message =
         pipelineError instanceof Error ? pipelineError.message : "Render failed";
       await supabase
         .from("jobs")
         .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
         .eq("id", job_id);
-      return res.status(400).json({ error: message });
-    }
-
-    const { data: finalJob } = await supabase.from("jobs").select("*").eq("id", job_id).single();
-    return res.status(200).json(finalJob ?? data);
+    });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

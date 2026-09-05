@@ -5,7 +5,8 @@ import type {
   Asset,
   Timeline,
   Job,
-  ContentPolicy
+  ContentPolicy,
+  VisualSource
 } from "../../types/shared/typeShared.ts";
 
 export interface SceneDetail extends Scene {
@@ -37,6 +38,7 @@ export interface Project {
   status: string;
   content_policy: ContentPolicy | null;
   script_style_id: string | null;
+  visual_source: VisualSource;
   created_at: string;
   updated_at: string;
 }

@@ -126,11 +126,35 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
       .limit(1)
       .maybeSingle();
 
-    const { data: visualAssets } = await supabase
+    const { data: visualAssetsRaw } = await supabase
       .from("assets")
-      .select("scene_id, storage_key, metadata")
+      .select("scene_id, storage_key, metadata, type")
       .eq("video_project_id", video_project_id)
       .not("scene_id", "is", null);
+
+    interface VisualAssetRow {
+      scene_id: string;
+      storage_key: string;
+      metadata: Record<string, unknown> | null;
+      type: string;
+    }
+
+    // Una escena puede tener mas de un asset de stock (replaceStockSegmentsForScene
+    // completa con otro clip en vez de repetir el mismo cuando ninguno solo
+    // le alcanza) -- se agrupan por escena y se ordenan por metadata.sequence.
+    const visualAssetsByScene = new Map<string, VisualAssetRow[]>();
+    for (const asset of (visualAssetsRaw ?? []) as VisualAssetRow[]) {
+      const list = visualAssetsByScene.get(asset.scene_id) ?? [];
+      list.push(asset);
+      visualAssetsByScene.set(asset.scene_id, list);
+    }
+    for (const list of visualAssetsByScene.values()) {
+      list.sort((a, b) => {
+        const seqA = Number((a.metadata as { sequence?: number } | null)?.sequence ?? 0);
+        const seqB = Number((b.metadata as { sequence?: number } | null)?.sequence ?? 0);
+        return seqA - seqB;
+      });
+    }
 
     const { data: existingTimeline } = await supabase
       .from("timelines")
@@ -174,8 +198,29 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
       cursor = end;
       const durationSeconds = end - start;
 
-      const visualAsset = (visualAssets ?? []).find((a) => a.scene_id === scene.id);
+      const sceneVisualAssets = visualAssetsByScene.get(scene.id) ?? [];
       const overlay = (scene.content as { overlay?: unknown } | null)?.overlay ?? null;
+
+      // Reparte [start, end] de la escena entre sus assets en orden,
+      // usando metadata.duration_seconds como porcion de cada uno (el
+      // ultimo siempre cierra justo en `end`, sin importar redondeos).
+      let assetCursor = start;
+      const sceneAssets = sceneVisualAssets.map((asset, i) => {
+        const isLast = i === sceneVisualAssets.length - 1;
+        const allocated =
+          Number((asset.metadata as { duration_seconds?: number } | null)?.duration_seconds) ||
+          durationSeconds / sceneVisualAssets.length;
+        const segStart = assetCursor;
+        const segEnd = isLast ? end : Math.min(end, assetCursor + allocated);
+        assetCursor = segEnd;
+        return {
+          storage_key: asset.storage_key,
+          metadata: asset.metadata,
+          type: asset.type,
+          start: formatTime(segStart),
+          end: formatTime(segEnd),
+        };
+      });
 
       const updatedContent = {
         ...(scene.content ?? {}),
@@ -195,8 +240,12 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
         order: scene.order,
         start: formatTime(start),
         end: formatTime(end),
-        asset: visualAsset
-          ? { storage_key: visualAsset.storage_key, metadata: visualAsset.metadata }
+        // `assets`: uno o mas clips (en orden) que juntos cubren toda la
+        // escena. Se mantiene tambien `asset` (el primero) para no romper
+        // consumidores viejos del timeline que todavia esperan uno solo.
+        assets: sceneAssets,
+        asset: sceneAssets[0]
+          ? { storage_key: sceneAssets[0].storage_key, metadata: sceneAssets[0].metadata, type: sceneAssets[0].type }
           : null,
         overlay,
       });
