@@ -5,7 +5,7 @@ import cors from "cors";
 
 import { supabase } from './lib/supabase.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
-import authRouter from "../src/modules/auth/auth.route.js";
+import authRouter from "./modules/auth/auth.route.js";
 import Projectrouter from './modules/projects/projects.routes.js';
 import scriptRouter from './modules/scripts/script.route.js';
 import { sceneListRouter, sceneRouter } from './modules/scenes/scene.route.js';
@@ -31,7 +31,10 @@ const allowedOrigins = [
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
-
+// Sin auth a proposito -- lo pega el health check de Render (u otro
+// orquestador) para saber si el proceso esta vivo, antes de que exista
+// cualquier concepto de usuario logueado.
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 app.use("/auth",authRouter)
 app.use("/projects",Projectrouter)

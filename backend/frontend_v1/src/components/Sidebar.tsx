@@ -23,6 +23,18 @@ const navItems = [
       </svg>
     ),
   },
+  {
+    // Estilos de narracion (antes escondido dentro de la pestana Script de
+    // cada proyecto) -- son un recurso global por usuario, reusable entre
+    // proyectos, por eso tiene su propia entrada de primer nivel.
+    label: "Estilo de narración",
+    href: "/script-styles",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+      </svg>
+    ),
+  },
 ];
 
 const bottomItems = [
@@ -69,7 +81,7 @@ export default function Sidebar() {
           </svg>
         </div>
         <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--foreground)" }}>
-          Autora<span style={{ color: "var(--primary)" }}>AI</span>
+          Scaler<span style={{ color: "var(--primary)" }}>Tool</span>
         </span>
       </div>
 

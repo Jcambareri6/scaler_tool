@@ -4,6 +4,7 @@ import { getActiveProvidersByType } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
 import type { ContentPolicy, Provider } from "../types/shared/typeShared.js";
 
 export interface SearchStockInput {
@@ -74,7 +75,7 @@ interface PexelsVideo {
 async function searchPexels(apiKey: string, keyword: string): Promise<StockCandidate[]> {
   const url = `${PEXELS_VIDEO_SEARCH_URL}?query=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
   const data = await withRetry(async () => {
-    const response = await fetch(url, { headers: { Authorization: apiKey } });
+    const response = await fetchWithTimeout(url, { headers: { Authorization: apiKey } });
     if (!response.ok) {
       throw new Error(`Pexels API error (${response.status}): ${await response.text()}`);
     }
@@ -117,7 +118,7 @@ async function searchPixabay(
 ): Promise<StockCandidate[]> {
   const url = `${PIXABAY_VIDEO_SEARCH_URL}?key=${apiKey}&q=${encodeURIComponent(keyword)}&per_page=${RESULTS_PER_KEYWORD}`;
   const data = await withRetry(async () => {
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) {
       throw new Error(`Pixabay API error (${response.status}): ${await response.text()}`);
     }
@@ -154,7 +155,7 @@ interface CoverrVideo {
 async function searchCoverr(apiKey: string, keyword: string, block: string[]): Promise<StockCandidate[]> {
   const url = `${COVERR_VIDEO_SEARCH_URL}?query=${encodeURIComponent(keyword)}&page_size=${RESULTS_PER_KEYWORD}&urls=true`;
   const data = await withRetry(async () => {
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` } });
     if (!response.ok) {
       throw new Error(`Coverr API error (${response.status}): ${await response.text()}`);
     }

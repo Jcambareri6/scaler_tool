@@ -21,6 +21,10 @@
 }
 
 :root {
+  /* Paleta oficial de marca Scaler Tool (violeta sobre casi-negro,
+     estetica "glass") -- confirmada como identidad de marca, no cambiar
+     estos valores sin actualizar tambien el favicon (public/favicon.svg). */
+
   /* Base */
   --background: #050912;
   --foreground: #e2e4ef;
@@ -112,15 +116,20 @@ body {
   background: linear-gradient(135deg, #7c6aff 0%, #5b4de8 100%);
   box-shadow: var(--shadow-primary);
   color: white;
-  transition: opacity 0.15s, box-shadow 0.15s;
+  transition: opacity 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 .btn-primary:hover {
   opacity: 0.92;
   box-shadow: 0 0 28px rgba(124, 106, 255, 0.35), 0 4px 16px rgba(0, 0, 0, 0.35);
+  transform: scale(1.015);
+}
+.btn-primary:active {
+  transform: scale(0.99);
 }
 .btn-primary:disabled {
   opacity: 0.45;
   box-shadow: none;
+  transform: none;
   cursor: not-allowed;
 }
 
@@ -154,6 +163,18 @@ body {
 .input-glass:focus {
   border-color: rgba(124, 106, 255, 0.5);
   box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.12);
+}
+
+/* Entrada suave para paneles/formularios (ej: LoginPage) */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Scrollbars */

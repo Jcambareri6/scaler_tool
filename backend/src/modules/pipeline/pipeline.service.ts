@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject } from "../../lib/ownership.js";
 import { runPreRenderPipeline } from "../../pipeline/orchestrator.js";
+import { errorMessage } from "../../lib/errors.js";
+import { syncProjectStatus } from "../../lib/projectStatus.js";
 
 export async function runPipeline(req: Request, res: Response) {
   try {
@@ -27,6 +29,7 @@ export async function runPipeline(req: Request, res: Response) {
     if (jobError || !job) {
       return res.status(400).json({ error: jobError?.message ?? "Failed to create job" });
     }
+    await syncProjectStatus(project.id, "RUNNING");
 
     // El pipeline corre en background a partir de aca -- la request
     // responde de una con el Job recien creado, en vez de bloquear varios
@@ -37,12 +40,12 @@ export async function runPipeline(req: Request, res: Response) {
     res.status(202).json(job);
 
     runPreRenderPipeline(project.id, { userId, jobId: job.id }).catch(async (pipelineError) => {
-      const message =
-        pipelineError instanceof Error ? pipelineError.message : "Pipeline failed";
+      const message = errorMessage(pipelineError, "Pipeline failed");
       await supabase
         .from("jobs")
         .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
         .eq("id", job.id);
+      await syncProjectStatus(project.id, "FAILED");
     });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });

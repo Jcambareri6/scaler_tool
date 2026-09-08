@@ -1,6 +1,7 @@
 import type { AgentMessage } from "../agent.types.js";
 import type { LLMClient, LLMDecision, LLMToolSpec } from "../llmClient.types.js";
 import type { Provider } from "../../types/shared/typeShared.js";
+import { fetchWithTimeout } from "../../lib/http.js";
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini"; // modelo "mini" por default, en linea con el control de gasto del LEEME
@@ -101,7 +102,7 @@ export class OpenAIClient implements LLMClient {
   }
 
   async decide(messages: AgentMessage[], tools: LLMToolSpec[]): Promise<LLMDecision> {
-    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+    const response = await fetchWithTimeout(OPENAI_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

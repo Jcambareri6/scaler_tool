@@ -49,6 +49,13 @@ export type JobStatus =
   | "COMPLETED"
   | "FAILED";
 
+// video_projects.status -- el frontend (DashboardPage) lo usa para el badge
+// de cada proyecto y los contadores de "en progreso"/"terminados", pero
+// nada lo actualizaba nunca despues de crear el proyecto (quedaba en DRAFT
+// para siempre). Se sincroniza con el JobStatus del Job mas reciente, ver
+// lib/projectStatus.ts::syncProjectStatus.
+export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "ERROR";
+
 export interface Job {
   id: string;
   video_project_id: string;

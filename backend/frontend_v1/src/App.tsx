@@ -5,8 +5,10 @@ import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import AuthCallbackPage from "@/pages/AuthCallbackPage";
 import DashboardPage from "@/pages/DashboardPage";
+import ProjectsPage from "@/pages/ProjectsPage";
 import NewProjectPage from "@/pages/NewProjectPage";
 import ProjectWorkspacePage from "@/pages/ProjectWorkspacePage";
+import ScriptStylesPage from "@/pages/ScriptStylesPage";
 
 export default function App() {
   return (
@@ -23,8 +25,10 @@ export default function App() {
             }
           >
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/new" element={<NewProjectPage />} />
             <Route path="/projects/:projectId" element={<ProjectWorkspacePage />} />
+            <Route path="/script-styles" element={<ScriptStylesPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

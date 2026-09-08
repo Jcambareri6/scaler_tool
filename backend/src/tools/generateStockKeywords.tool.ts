@@ -3,6 +3,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { deriveKeywords } from "../lib/keywords.js";
 import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
 import type { ContentPolicy } from "../types/shared/typeShared.js";
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
@@ -88,7 +89,7 @@ export const generateStockKeywordsTool: ToolDefinition<
     const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_MODEL;
 
     const data = await withRetry(async () => {
-      const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      const response = await fetchWithTimeout(OPENAI_CHAT_COMPLETIONS_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

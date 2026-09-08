@@ -1,8 +1,9 @@
 import { runTool } from "../tools/index.js";
 import { supabase } from "../lib/supabase.js";
 import { replaceStockSegmentsForScene, setAiVideoSegmentsForScene, type AiVideoSegment } from "../lib/stockSegments.js";
+import { syncProjectStatus } from "../lib/projectStatus.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
-import type { ContentPolicy, VisualSource } from "../types/shared/typeShared.js";
+import type { ContentPolicy, VisualSource, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
 import type {
   GenerateVideoPromptInput,
@@ -57,9 +58,15 @@ async function getProjectOrThrow(projectId: string, userId: string) {
   return project;
 }
 
-async function setJobStatus(jobId: string, status: string, extra: Record<string, unknown> = {}) {
+async function setJobStatus(
+  jobId: string,
+  videoProjectId: string,
+  status: JobStatus,
+  extra: Record<string, unknown> = {}
+) {
   const { error } = await supabase.from("jobs").update({ status, ...extra }).eq("id", jobId);
   if (error) throw new Error(error.message);
+  await syncProjectStatus(videoProjectId, status);
 }
 
 // El pipeline ahora corre en background (ver pipeline.service.ts) -- estos
@@ -98,7 +105,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     throw new Error("El guion del proyecto esta vacio");
   }
 
-  await setJobStatus(ctx.jobId, "SCRIPT_DONE", { progress: 5 });
+  await setJobStatus(ctx.jobId, projectId, "SCRIPT_DONE", { progress: 5 });
 
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
 
@@ -123,7 +130,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     throw new Error(audioAssetError?.message ?? "Failed to create audio asset");
   }
 
-  await setJobStatus(ctx.jobId, "AUDIO_DONE", { progress: 15 });
+  await setJobStatus(ctx.jobId, projectId, "AUDIO_DONE", { progress: 15 });
 
   // 2. Timeline base -- todavia no hay escenas (se arman recien en el paso
   // 4), asi que esta pasada solo deja creado el registro de timeline con
@@ -307,7 +314,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     }
   });
 
-  await setJobStatus(ctx.jobId, "VISUALS_DONE", { progress: 90 });
+  await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90 });
 
   // 7. Timeline resuelto (vuelve a leer la DB, ahora con escenas + assets +
   // overlays)
@@ -318,7 +325,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   );
 
   // 8. Gate humano
-  await setJobStatus(ctx.jobId, "AWAITING_STOCK_REVIEW", { progress: 100 });
+  await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", { progress: 100 });
 }
 
 export async function runRenderPipeline(projectId: string, ctx: PipelineContext) {
@@ -353,7 +360,7 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
   });
   if (assetError) throw new Error(assetError.message);
 
-  await setJobStatus(ctx.jobId, "COMPLETED", {
+  await setJobStatus(ctx.jobId, projectId, "COMPLETED", {
     progress: 100,
     finished_at: new Date().toISOString(),
   });

@@ -1,0 +1,16 @@
+# Configurar en Netlify: "Base directory" = backend/frontend_v1 (este
+# repo tiene el frontend anidado, no en la raiz) -- con eso seteado, los
+# paths de aca abajo son relativos a esa carpeta.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA con React Router (client-side routing): sin esto, entrar directo a
+# una URL como /projects o refrescar la pagina ahi da 404 -- Netlify no
+# sabe que esa ruta la resuelve el JS del lado del cliente, no un archivo
+# real en el servidor.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

@@ -43,6 +43,12 @@ const config: Record<Status, { label: string; bg: string; text: string; border: 
   },
 };
 
+// Reusado por el filtro de estado de ProjectsPage para no duplicar los
+// mismos strings de label en dos lugares.
+export function statusLabel(status: Status): string {
+  return (config[status] ?? config.DRAFT).label;
+}
+
 interface Props {
   status: Status;
   size?: "sm" | "md";

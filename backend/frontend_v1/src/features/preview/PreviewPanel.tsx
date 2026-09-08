@@ -3,7 +3,7 @@ import { projectsService } from "@/services/projects.service";
 import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
-import type { Job, VisualSource } from "@/types";
+import type { Job, VisualSource, Asset } from "@/types";
 
 interface Props {
   projectId: string;
@@ -66,6 +66,8 @@ export default function PreviewPanel({ projectId }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
+  const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     projectsService.getJob(projectId).then((j) => {
@@ -104,6 +106,44 @@ export default function PreviewPanel({ projectId }: Props) {
       void supabase.removeChannel(channel);
     };
   }, [job?.id]);
+
+  // El render final (Cloudinary o Storage, ver render_video.tool.ts) recien
+  // existe como Asset una vez que el Job llega a DONE -- se trae aparte en
+  // vez de meterlo en el Job para no acoplar el polling/realtime de arriba
+  // a esta consulta.
+  useEffect(() => {
+    if (job?.status !== "DONE") {
+      setRenderAsset(null);
+      return;
+    }
+    projectsService.getFinalRenderAsset(projectId).then(setRenderAsset);
+  }, [projectId, job?.status]);
+
+  const handleDownload = async () => {
+    if (!renderAsset) return;
+    setDownloading(true);
+    try {
+      // <a download> no fuerza la descarga en recursos cross-origin (el
+      // video vive en Cloudinary/Supabase, no en este dominio) -- se trae
+      // como blob y se dispara la descarga desde un object URL propio, que
+      // si es same-origin para el navegador.
+      const response = await fetch(renderAsset.storageKey);
+      if (!response.ok) throw new Error("No se pudo descargar el video");
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${projectId}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo descargar el video");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -156,16 +196,17 @@ export default function PreviewPanel({ projectId }: Props) {
       >
         <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 50% 50%, rgba(60,50,140,0.15) 0%, transparent 65%)" }} />
 
-        {job?.status === "DONE" ? (
+        {job?.status === "DONE" && renderAsset ? (
+          <video
+            key={renderAsset.id}
+            src={renderAsset.storageKey}
+            controls
+            className="w-full h-full object-contain relative"
+          />
+        ) : job?.status === "DONE" ? (
           <div className="relative text-center">
-            <button
-              className="w-16 h-16 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-105"
-              style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.18)", backdropFilter: "blur(8px)" }}
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="white" style={{ marginLeft: 2 }}>
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
+            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(167,155,255,0.2)", borderTopColor: "#a78bfa" }} />
+            <p className="text-xs" style={{ color: "#a78bfa" }}>Cargando video...</p>
           </div>
         ) : job?.status === "RUNNING" || job?.status === "QUEUED" ? (
           <div className="relative text-center">
@@ -204,13 +245,22 @@ export default function PreviewPanel({ projectId }: Props) {
               </svg>
               Regenerar
             </button>
-            <button className="btn-primary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
+            <button
+              onClick={handleDownload}
+              disabled={!renderAsset || downloading}
+              className="btn-primary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+            >
+              {downloading ? (
+                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              )}
               Descargar
             </button>
           </div>
+          {error && <p className="text-xs" style={{ color: "#f87171" }}>{error}</p>}
         </div>
       ) : job?.status === "FAILED" ? (
         <div className="flex flex-col items-center gap-3 text-center max-w-md">

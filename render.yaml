@@ -1,0 +1,28 @@
+# Blueprint de Render para el backend (Node/Express + ffmpeg).
+# El repo tiene un solo servicio real a deployar (el backend) -- el frontend
+# va a Netlify (ver backend/frontend_v1/netlify.toml), no aca.
+#
+# Uso: en Render, "New +" -> "Blueprint", conectar este repo. Render lee
+# este archivo solo (no hace falta crear el servicio a mano en el dashboard
+# primero). Las env vars marcadas "sync: false" hay que cargarlas a mano en
+# el dashboard despues de crear el servicio (son secretos, no van committeados).
+services:
+  - type: web
+    name: scaler-tool-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.9.0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: MOCK_PROVIDERS
+        value: "false"
+      - key: FRONTEND_ORIGIN
+        sync: false

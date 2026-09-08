@@ -1,5 +1,6 @@
 import { runTool, listTools } from "../tools/index.js";
 import { resolveLLMClient } from "./llmClient.js";
+import { errorMessage } from "../lib/errors.js";
 import type {
   AgentContext,
   AgentMessage,
@@ -53,7 +54,7 @@ export async function runAgent(
         userId: ctx.userId,
       });
     } catch (error) {
-      call.error = error instanceof Error ? error.message : "Tool execution failed";
+      call.error = errorMessage(error, "Tool execution failed");
     }
 
     toolCalls.push(call);

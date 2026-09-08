@@ -4,6 +4,7 @@ import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
 
 export interface GenerateVoiceInput {
   script_id: string;
@@ -54,7 +55,7 @@ async function pollAi33Task(taskId: string, apiKey: string): Promise<Ai33TaskRes
     // una sola consulta de estado.
     const task = await withRetry(
       async () => {
-        const response = await fetch(`${AI33_BASE_URL}/v1/task/${taskId}`, {
+        const response = await fetchWithTimeout(`${AI33_BASE_URL}/v1/task/${taskId}`, {
           headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
         });
         if (!response.ok) {
@@ -88,7 +89,7 @@ async function generateWithAi33(
   formData.append("with_transcript", "true");
 
   const submitted = await withRetry(async () => {
-    const submitResponse = await fetch(`${AI33_BASE_URL}/v3/text-to-speech`, {
+    const submitResponse = await fetchWithTimeout(`${AI33_BASE_URL}/v3/text-to-speech`, {
       method: "POST",
       headers: { "xi-api-key": apiKey },
       body: formData,
@@ -113,7 +114,7 @@ async function generateWithAi33(
   // URL de ai33.pro tal cual -- no depende de que ese archivo siga vivo en
   // su CDN despues.
   const audioBuffer = await withRetry(async () => {
-    const audioResponse = await fetch(audioUrl);
+    const audioResponse = await fetchWithTimeout(audioUrl);
     if (!audioResponse.ok) {
       throw new Error(`No se pudo descargar el audio generado (${audioResponse.status})`);
     }

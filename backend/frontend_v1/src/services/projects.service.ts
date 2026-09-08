@@ -129,6 +129,18 @@ export const projectsService = {
     return audio ?? null;
   },
 
+  // Video final ya compuesto (type=VIDEO, sceneId=null, metadata.kind=
+  // "final_render" -- ver orchestrator.ts::runRenderPipeline). El backend ya
+  // ordena por created_at desc, asi que el primero que matchea es el mas
+  // reciente si el pipeline se corrio mas de una vez.
+  async getFinalRenderAsset(projectId: string): Promise<Asset | null> {
+    const rows = await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`);
+    const render = rows
+      .map(mapAsset)
+      .find((asset) => asset.type === "VIDEO" && asset.sceneId === null && asset.metadata?.kind === "final_render");
+    return render ?? null;
+  },
+
   // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual).
   // source="stock" (default): vuelve a buscar en todos los Providers de
   // stock activos y arma la secuencia de clips que cubre la escena entera.

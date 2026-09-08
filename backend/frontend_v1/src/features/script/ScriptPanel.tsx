@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
-import { filesService } from "@/services/files.service";
 import type { Script, VideoProject, ScriptStyle } from "@/types";
 
 interface Props {
@@ -9,167 +9,12 @@ interface Props {
   project: VideoProject;
 }
 
-// Cada slot de guion de referencia acepta texto pegado y/o un archivo .txt
-// adjuntado -- adjuntar un archivo reemplaza el contenido del textarea con
-// el texto leido, pero el usuario puede seguir editandolo a mano despues.
-function ReferenceScriptSlot({
-  index,
-  value,
-  onChange,
-}: {
-  index: number;
-  value: string;
-  onChange: (text: string) => void;
-}) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [extracting, setExtracting] = useState(false);
-
-  const handleFileSelected = async (file: File | null) => {
-    if (!file) return;
-    setFileError(null);
-    setExtracting(true);
-    try {
-      const text = await filesService.extractText(file);
-      onChange(text);
-    } catch (err) {
-      setFileError(err instanceof Error ? err.message : "No se pudo leer el archivo");
-    } finally {
-      setExtracting(false);
-      // Permite volver a elegir el mismo archivo (o reintentar) sin que el
-      // input ignore el cambio por tener el mismo valor que antes.
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
-          Guion de referencia {index + 1}
-        </span>
-        <div className="flex items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.docx,.pdf"
-            className="hidden"
-            onChange={(e) => handleFileSelected(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={extracting}
-            className="text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
-            style={{ color: "var(--primary)" }}
-          >
-            {extracting ? "Leyendo archivo..." : "Adjuntar archivo (.txt, .docx, .pdf)"}
-          </button>
-        </div>
-      </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={`Pegá el texto del guion ${index + 1} o adjuntá un archivo (.txt, .docx, .pdf)`}
-        rows={4}
-        className="input-glass w-full rounded-lg px-3 py-2 text-xs font-mono resize-none"
-      />
-      {fileError && <p className="text-[11px]" style={{ color: "#f87171" }}>{fileError}</p>}
-    </div>
-  );
-}
-
-function CreateStyleModal({
-  onCreated,
-  onClose,
-}: {
-  onCreated: (style: ScriptStyle) => void;
-  onClose: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [scripts, setScripts] = useState(["", "", ""]);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleCreate = async () => {
-    const referenceScripts = scripts.map((s) => s.trim()).filter(Boolean);
-    if (!name.trim() || referenceScripts.length === 0) {
-      setError("Completá el nombre y al menos un guion de referencia");
-      return;
-    }
-    setCreating(true);
-    setError(null);
-    try {
-      const created = await scriptStylesService.create(name.trim(), referenceScripts);
-      const ready = await scriptStylesService.generate(created.id);
-      onCreated(ready);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo crear el estilo");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.6)" }}
-      onClick={() => !creating && onClose()}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="glass-md w-full max-w-lg rounded-xl p-5 space-y-3 max-h-[90vh] overflow-y-auto"
-      >
-        <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
-          Nuevo estilo de guion (Prompt Maestro)
-        </p>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Nombre del canal/cliente"
-          className="input-glass w-full rounded-lg px-3 py-2 text-sm"
-        />
-        {scripts.map((s, i) => (
-          <ReferenceScriptSlot
-            key={i}
-            index={i}
-            value={s}
-            onChange={(text) => {
-              const next = [...scripts];
-              next[i] = text;
-              setScripts(next);
-            }}
-          />
-        ))}
-        {error && <p className="text-xs" style={{ color: "#f87171" }}>{error}</p>}
-        <div className="flex gap-2">
-          <button
-            onClick={handleCreate}
-            disabled={creating}
-            className="btn-primary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50"
-          >
-            {creating ? (
-              <>
-                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Analizando...
-              </>
-            ) : (
-              "Analizar y crear"
-            )}
-          </button>
-          <button
-            onClick={onClose}
-            disabled={creating}
-            className="btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50"
-          >
-            Cancelar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// La creacion de estilos (subir 3 guiones de referencia, analizarlos con
+// el LLM) vive ahora en su propia seccion del nav ("Estilo de narración",
+// ver src/pages/ScriptStylesPage.tsx) -- un ScriptStyle es un recurso
+// global por usuario, reusable entre proyectos, no algo exclusivo de este
+// panel. Aca solo queda elegir CUAL estilo (ya creado) usar para el guion
+// de este proyecto puntual, que si es un concern de Script.
 
 export default function ScriptPanel({ projectId, project }: Props) {
   const [script, setScript] = useState<Script | null>(null);
@@ -183,7 +28,6 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const [styles, setStyles] = useState<ScriptStyle[]>([]);
   const [selectedStyleId, setSelectedStyleId] = useState(project.scriptStyleId ?? "");
   const [provider, setProvider] = useState<"anthropic" | "openai">("anthropic");
-  const [showCreateStyle, setShowCreateStyle] = useState(false);
   const [thumbnailDescription, setThumbnailDescription] = useState("");
   const [approxChars, setApproxChars] = useState("");
   const [referenceScript, setReferenceScript] = useState("");
@@ -210,12 +54,6 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const handleSelectStyle = async (styleId: string) => {
     setSelectedStyleId(styleId);
     await projectsService.updateProject(projectId, { scriptStyleId: styleId });
-  };
-
-  const handleStyleCreated = async (style: ScriptStyle) => {
-    setStyles((prev) => [style, ...prev]);
-    setShowCreateStyle(false);
-    await handleSelectStyle(style.id);
   };
 
   const handleGenerate = async () => {
@@ -345,15 +183,13 @@ export default function ScriptPanel({ projectId, project }: Props) {
             <option value="anthropic">Claude</option>
             <option value="openai">GPT</option>
           </select>
-          {!showCreateStyle && (
-            <button
-              onClick={() => setShowCreateStyle(true)}
-              className="text-[11px] transition-opacity hover:opacity-80"
-              style={{ color: "var(--primary)" }}
-            >
-              + Crear estilo nuevo
-            </button>
-          )}
+          <Link
+            to="/script-styles"
+            className="text-[11px] transition-opacity hover:opacity-80"
+            style={{ color: "var(--primary)" }}
+          >
+            + Crear estilo nuevo
+          </Link>
         </div>
 
         {selectedStyle && selectedStyle.status === "READY" && (
@@ -440,10 +276,6 @@ export default function ScriptPanel({ projectId, project }: Props) {
           </div>
         )}
       </div>
-
-      {showCreateStyle && (
-        <CreateStyleModal onCreated={handleStyleCreated} onClose={() => setShowCreateStyle(false)} />
-      )}
     </div>
   );
 }

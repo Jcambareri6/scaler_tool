@@ -4,6 +4,12 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { getOwnedProject, getOwnedScriptStyle } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
+import { fetchWithTimeout } from "../lib/http.js";
+
+// Un guion completo (hasta MAX_OUTPUT_TOKENS) puede tardar bastante mas que
+// una llamada de chat corta -- 30s (el default de fetchWithTimeout) cortaria
+// generaciones legitimas a mitad de camino.
+const OPENAI_SCRIPT_TIMEOUT_MS = 120 * 1000;
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
@@ -192,21 +198,25 @@ async function generateWithOpenAI(
   }
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_OPENAI_MODEL;
 
-  const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${provider.api_key}`,
+  const response = await fetchWithTimeout(
+    OPENAI_CHAT_COMPLETIONS_URL,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${provider.api_key}`,
+      },
+      body: JSON.stringify({
+        model,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    }),
-  });
+    OPENAI_SCRIPT_TIMEOUT_MS
+  );
 
   if (!response.ok) {
     const body = await response.text();

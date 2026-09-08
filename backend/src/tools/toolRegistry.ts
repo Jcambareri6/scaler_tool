@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase.js";
+import { errorMessage } from "../lib/errors.js";
 import type { AnyToolDefinition, ToolContext } from "./tool.types.js";
 
 const tools = new Map<string, AnyToolDefinition>();
@@ -70,7 +71,7 @@ export async function runTool<TInput, TOutput>(
 
     return output as TOutput;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Tool execution failed";
+    const message = errorMessage(error, "Tool execution failed");
 
     await supabase
       .from("tool_executions")

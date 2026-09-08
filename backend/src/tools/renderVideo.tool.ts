@@ -7,12 +7,14 @@ import path from "node:path";
 // -- mismo patron que pdf-parse en transcribeAudio.tool.ts, se importa con
 // require via createRequire en vez de pelear con los tipos.
 import { createRequire } from "module";
+import { v2 as cloudinary } from "cloudinary";
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 
 const require = createRequire(import.meta.url);
@@ -116,15 +118,85 @@ function flattenSegments(scenes: TimelineSceneEntry[]): RenderSegment[] {
   return segments;
 }
 
+const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
+
 async function downloadTo(url: string, destPath: string): Promise<void> {
   const buffer = await withRetry(async () => {
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url, {}, DOWNLOAD_TIMEOUT_MS);
     if (!response.ok) {
       throw new Error(`No se pudo descargar ${url} (${response.status})`);
     }
     return Buffer.from(await response.arrayBuffer());
   });
   await writeFile(destPath, buffer);
+}
+
+// Cloudinary sirve el render final por CDN (reproduce bien en un <video> del
+// navegador y tiene descarga directa) -- Supabase Storage queda como
+// fallback si el provider no esta configurado, para no romper instalaciones
+// viejas sin cuenta de Cloudinary. Credenciales van en la fila `providers`
+// (slug "cloudinary"): api_key column = api_secret, configuration =
+// { cloud_name, api_key } (el api_key PUBLICO de Cloudinary, distinto del
+// secret).
+const CLOUDINARY_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+
+async function uploadRenderToCloudinary(
+  videoProjectId: string,
+  outputPath: string,
+  cloudName: string,
+  apiKey: string,
+  apiSecret: string
+): Promise<string> {
+  cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
+  // uploader.upload (sin _large) rechaza con 413 "Payload Too Large" para
+  // videos de mas de ~100MB (limite de subida no fragmentada de Cloudinary,
+  // visto en produccion) -- upload_large sube en chunks y no tiene ese
+  // techo, sirve igual para archivos chicos asi que no hace falta elegir
+  // entre uno u otro segun tamano.
+  // OJO: sin callback, upload_large NO devuelve una Promise -- devuelve
+  // directo el stream interno de subida (confirmado en produccion: el
+  // "resultado" resultaba ser el objeto Writable, no la respuesta de
+  // Cloudinary, y secure_url salia undefined). El tipo del .d.ts sugiere lo
+  // contrario, pero hay que pasarle el callback si o si y envolverlo en una
+  // Promise a mano para obtener el resultado real.
+  const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
+    cloudinary.uploader.upload_large(
+      outputPath,
+      {
+        resource_type: "video",
+        folder: "skaler-renders",
+        public_id: videoProjectId,
+        overwrite: true,
+        timeout: CLOUDINARY_UPLOAD_TIMEOUT_MS,
+      },
+      (error, uploadResult) => {
+        if (error) reject(error);
+        else if (!uploadResult) reject(new Error("Cloudinary no devolvio resultado para la subida"));
+        else resolve(uploadResult as { secure_url: string });
+      }
+    );
+  });
+  return result.secure_url;
+}
+
+async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buffer): Promise<string> {
+  const { error: bucketError } = await supabase.storage.createBucket(RENDER_BUCKET, { public: true });
+  if (bucketError && !/already exists/i.test(bucketError.message)) {
+    throw new Error(bucketError.message);
+  }
+
+  const renderPath = `${videoProjectId}.mp4`;
+  const { error: uploadError } = await supabase.storage
+    .from(RENDER_BUCKET)
+    .upload(renderPath, outputBuffer, { contentType: "video/mp4", upsert: true });
+  if (uploadError) {
+    throw new Error(uploadError.message);
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from(RENDER_BUCKET).getPublicUrl(renderPath);
+  return publicUrl;
 }
 
 function runFfmpeg(args: string[]): Promise<void> {
@@ -173,11 +245,13 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     throw new Error("El timeline no tiene audio narrado todavia");
   }
 
+  console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos)`);
   const workDir = await mkdtemp(path.join(tmpdir(), "skaler-render-"));
   try {
     const audioPath = path.join(workDir, "narration.mp3");
     await downloadTo(content.audio.storage_key, audioPath);
 
+    console.log(`[render_video] descargando ${segments.length} clips/imagenes...`);
     const clipPaths = await mapWithConcurrency(segments, 5, async (segment, i) => {
       // La extension real importa: el demuxer "image2" (usado con -loop 1
       // para las imagenes generadas) espera un patron de secuencia tipo
@@ -226,6 +300,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     const audioInputIndex = segments.length;
     const outputPath = path.join(workDir, "final.mp4");
 
+    console.log(`[render_video] corriendo ffmpeg...`);
     await runFfmpeg([
       ...inputArgs,
       "-i",
@@ -247,29 +322,33 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       outputPath,
     ]);
 
-    const outputBuffer = await readFile(outputPath);
-
-    const { error: bucketError } = await supabase.storage.createBucket(RENDER_BUCKET, { public: true });
-    if (bucketError && !/already exists/i.test(bucketError.message)) {
-      throw new Error(bucketError.message);
+    console.log(`[render_video] ffmpeg listo, subiendo...`);
+    const cloudinaryProvider = await getActiveProvider("cloudinary");
+    const cloudName = cloudinaryProvider?.configuration?.cloud_name as string | undefined;
+    const cloudinaryApiKey = cloudinaryProvider?.configuration?.api_key as string | undefined;
+    let publicUrl: string;
+    if (cloudinaryProvider?.api_key && cloudName && cloudinaryApiKey) {
+      publicUrl = await uploadRenderToCloudinary(videoProjectId, outputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key);
+    } else {
+      const outputBuffer = await readFile(outputPath);
+      publicUrl = await uploadRenderToSupabase(videoProjectId, outputBuffer);
     }
-
-    const renderPath = `${videoProjectId}.mp4`;
-    const { error: uploadError } = await supabase.storage
-      .from(RENDER_BUCKET)
-      .upload(renderPath, outputBuffer, { contentType: "video/mp4", upsert: true });
-    if (uploadError) {
-      throw new Error(uploadError.message);
-    }
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from(RENDER_BUCKET).getPublicUrl(renderPath);
+    console.log(`[render_video] listo: ${publicUrl}`);
 
     const totalDuration = parseTime(scenes[scenes.length - 1]!.end);
     return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration) };
   } finally {
-    await rm(workDir, { recursive: true, force: true });
+    // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
+    // solto un archivo que uso ffmpeg (visto en produccion) -- si esto
+    // pasa DESPUES de un render+upload exitoso, tirar el error ac aca
+    // pisaba el resultado bueno y hacia parecer que todo el render fallo.
+    // Es solo limpieza de un temp dir, no vale la pena que tumbe un
+    // resultado que ya se genero bien.
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn(`[render_video] no se pudo limpiar ${workDir}:`, cleanupError);
+    }
   }
 }
 

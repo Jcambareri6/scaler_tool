@@ -1,4 +1,4 @@
-# figma-make-app
+# Scaler Tool (frontend)
 
 React + Vite + Tailwind CSS project running inside Figma Make.
 

@@ -4,6 +4,11 @@ import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
+
+// Whisper transcribe un audio completo (varios minutos) en una sola
+// request no-stream -- mas lento que una llamada de chat corta.
+const WHISPER_TIMEOUT_MS = 3 * 60 * 1000;
 
 export interface TranscribeAudioInput {
   asset_id: string;
@@ -43,7 +48,7 @@ async function transcribeWithOpenAI(
   storageKey: string,
   apiKey: string
 ): Promise<TranscribeAudioOutput> {
-  const audioResponse = await fetch(storageKey);
+  const audioResponse = await fetchWithTimeout(storageKey);
   if (!audioResponse.ok) {
     throw new Error(`No se pudo descargar el audio a transcribir (${audioResponse.status})`);
   }
@@ -58,11 +63,15 @@ async function transcribeWithOpenAI(
   formData.append("timestamp_granularities[]", "segment");
 
   const data = await withRetry(async () => {
-    const response = await fetch(OPENAI_TRANSCRIPTIONS_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-    });
+    const response = await fetchWithTimeout(
+      OPENAI_TRANSCRIPTIONS_URL,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: formData,
+      },
+      WHISPER_TIMEOUT_MS
+    );
 
     if (!response.ok) {
       const body = await response.text();

@@ -1,5 +1,10 @@
 {
-  "description": "Create engaging videos effortlessly through an AI-assisted chat interface, allowing users to develop projects from ideas to scripts in a modern platform.",
+  "title": "Scaler Tool",
+  "description": "Scaler Tool: creá videos de forma automática con IA, de la idea al guion, la voz y el render final, en una plataforma pensada para escalar tu producción de contenido.",
+  "language": "es",
+  "icons": {
+    "icon": "/favicon.svg"
+  },
   "robots": {
     "index": false
   },

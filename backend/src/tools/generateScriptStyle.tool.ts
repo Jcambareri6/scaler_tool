@@ -2,9 +2,13 @@ import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { supabase } from "../lib/supabase.js";
+import { fetchWithTimeout } from "../lib/http.js";
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
+// Sintetiza un "Prompt Maestro" a partir de 3 guiones de referencia
+// completos -- input/output mas grande que una llamada de chat corta.
+const OPENAI_STYLE_TIMEOUT_MS = 90 * 1000;
 
 export interface GenerateScriptStyleInput {
   script_style_id: string;
@@ -90,20 +94,24 @@ export const generateScriptStyleTool: ToolDefinition<
     const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_MODEL;
 
     try {
-      const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${provider.api_key}`,
+      const response = await fetchWithTimeout(
+        OPENAI_CHAT_COMPLETIONS_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${provider.api_key}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: META_PROMPT },
+              { role: "user", content: buildUserMessage(referenceScripts) },
+            ],
+          }),
         },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: META_PROMPT },
-            { role: "user", content: buildUserMessage(referenceScripts) },
-          ],
-        }),
-      });
+        OPENAI_STYLE_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         const body = await response.text();
