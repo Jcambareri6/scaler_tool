@@ -10,11 +10,17 @@ services:
   - type: web
     name: scaler-tool-backend
     runtime: node
-    plan: free
+    plan: starter
     rootDir: backend
     buildCommand: npm install && npm run build
     startCommand: npm start
-    healthCheckPath: /health
+    # SIN healthCheckPath a proposito: con el path seteado, Render reinicia
+    # el servicio si /health no responde rapido -- y durante un render
+    # pesado (ffmpeg a upa de la CPU compartida del plan) el proceso de
+    # Node puede tardar en contestar aunque este vivo, causando un reinicio
+    # que mata el render a mitad de camino (visto en produccion). Sin este
+    # path, Render solo chequea que el puerto este escuchando, mucho mas
+    # tolerante a esto.
     envVars:
       - key: NODE_VERSION
         value: 20.9.0
