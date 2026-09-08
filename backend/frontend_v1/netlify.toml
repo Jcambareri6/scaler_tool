@@ -6,6 +6,9 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "20"
+
 # SPA con React Router (client-side routing): sin esto, entrar directo a
 # una URL como /projects o refrescar la pagina ahi da 404 -- Netlify no
 # sabe que esa ruta la resuelve el JS del lado del cliente, no un archivo
