@@ -2,24 +2,14 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
-import ChatPanel from "@/features/chat/ChatPanel";
 import ScriptPanel from "@/features/script/ScriptPanel";
 import ScenesPanel from "@/features/scenes/ScenesPanel";
 import PreviewPanel from "@/features/preview/PreviewPanel";
 import type { VideoProject } from "@/types";
 
-type Tab = "chat" | "script" | "scenes" | "preview";
+type Tab = "script" | "scenes" | "preview";
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  {
-    id: "chat",
-    label: "Chat",
-    icon: (
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-  },
   {
     id: "script",
     label: "Script",
@@ -58,7 +48,7 @@ export default function ProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [project, setProject] = useState<VideoProject | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [activeTab, setActiveTab] = useState<Tab>("script");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -152,7 +142,6 @@ export default function ProjectWorkspacePage() {
 
       {/* Panel */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "chat" && <ChatPanel projectId={projectId} />}
         {activeTab === "script" && <ScriptPanel projectId={projectId} project={project} />}
         {activeTab === "scenes" && <ScenesPanel projectId={projectId} />}
         {activeTab === "preview" && <PreviewPanel projectId={projectId} />}

@@ -71,6 +71,65 @@ export async function replaceStockSegmentsForScene(
   }
 }
 
+const SCENE_UPLOADS_BUCKET = "scene-uploads";
+
+async function ensureSceneUploadsBucket(): Promise<void> {
+  const { error } = await supabase.storage.createBucket(SCENE_UPLOADS_BUCKET, { public: true });
+  if (error && !/already exists/i.test(error.message)) {
+    throw new Error(error.message);
+  }
+}
+
+// Sube un archivo que el usuario elige a mano desde el panel de escenas
+// (reemplazo puntual "subir propio") a Storage propio -- a diferencia del
+// stock (URL del provider) y de la IA (URL de SnapGen), este archivo no
+// existe en ningun lado hasta que el usuario lo carga, asi que si o si hay
+// que persistirlo nosotros. Mismo bucket publico + upsert por nombre unico
+// que ensureAiImageBucket en generateImage.tool.ts.
+export async function uploadSceneAssetFile(
+  buffer: Buffer,
+  contentType: string,
+  extension: string
+): Promise<string> {
+  await ensureSceneUploadsBucket();
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+  const { error } = await supabase.storage
+    .from(SCENE_UPLOADS_BUCKET)
+    .upload(path, buffer, { contentType, upsert: true });
+  if (error) throw new Error(error.message);
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from(SCENE_UPLOADS_BUCKET).getPublicUrl(path);
+  return publicUrl;
+}
+
+// Contraparte de replaceStockSegmentsForScene/setAiVideoSegmentsForScene
+// para un archivo subido por el usuario: siempre UN solo Asset (no hay
+// forma de saber de antemano si hace falta mas de un clip para cubrir la
+// escena, y no tiene sentido pedirle al usuario que suba varios), sin
+// duration_seconds en metadata -- el reproductor de StockReviewPanel ya
+// tolera eso mostrando el clip completo dentro de la ventana de la escena.
+export async function setUploadedVisualForScene(
+  projectId: string,
+  sceneId: string,
+  upload: { storage_key: string; type: "VIDEO" | "IMAGE" }
+): Promise<void> {
+  await clearSceneVisualAssets(sceneId);
+
+  const { error } = await supabase.from("assets").insert({
+    video_project_id: projectId,
+    scene_id: sceneId,
+    type: upload.type,
+    storage_key: upload.storage_key,
+    metadata: {
+      kind: "user_upload",
+      sequence: 0,
+    },
+  });
+  if (error) throw new Error(error.message);
+}
+
 export interface AiVideoSegment {
   storage_key: string;
   duration_seconds: number;

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
+import ScenePanel from "./ScenePanel";
+import SceneReplaceModal from "./SceneReplaceModal";
 import type { Asset, Job, Scene } from "@/types";
 
 interface Props {
@@ -14,17 +16,7 @@ interface Props {
   regenerating: boolean;
 }
 
-// Escala adaptativa: un guion largo (10+ minutos, comun en este proyecto)
-// a una escala fija de px/segundo arma un timeline de decenas de miles de
-// px de ancho -- inusable, solo se ve la primera escena sin scrollear una
-// eternidad. Se apunta a que el timeline entero ronde TARGET_WIDTH px,
-// escalando px/segundo segun la duracion total, con piso y techo para que
-// ni un video de 1 hora quede ilegible ni uno de 20 segundos quede
-// microscopico.
-const TARGET_TIMELINE_WIDTH = 1600;
-const MIN_PIXELS_PER_SECOND = 3;
-const MAX_PIXELS_PER_SECOND = 40;
-const MIN_CLIP_WIDTH = 40;
+const WAVEFORM_BAR_COUNT = 160;
 
 function parseTimeToSeconds(time: string): number {
   const [mm, ss] = time.split(":").map((n) => Number(n) || 0);
@@ -64,14 +56,17 @@ function sequenceOf(asset: Asset): number {
   return typeof value === "number" ? value : 0;
 }
 
-// Gate humano (Job.status === AWAITING_STOCK_REVIEW): timeline estilo
-// CapCut -- track de video (clips de stock por escena, ancho proporcional
-// a su duracion real) + track de audio (la narracion completa), con un
-// solo playhead compartido. El <audio> es el reloj maestro: el <video> de
-// arriba solo sigue que escena le toca mostrar segun currentTime, no tiene
-// su propio audio (queda muted). storage_key en esta fase ya es una URL
-// fetcheable (CDN de stock o nuestro bucket de audio), no depende de que
-// el frontend resuelva Storage por su cuenta.
+// Gate humano (Job.status === AWAITING_STOCK_REVIEW). Layout tipo
+// "panel de escenas a la derecha" (ver mejoras-interfaz-preview-scalertool.md):
+// player grande a la izquierda + lista vertical de escenas a la derecha, en
+// vez del filmstrip horizontal de antes -- cada fila mapea 1:1 con una
+// escena real, no con un ancho proporcional a su duracion. La franja
+// inferior queda solo para scrubbing temporal global (waveform), no como
+// selector de escena. El <audio> sigue siendo el reloj maestro: el
+// <video>/<img> de arriba solo sigue que escena le toca mostrar segun
+// currentTime, no tiene su propio audio (queda muted). storage_key en esta
+// fase ya es una URL fetcheable (CDN de stock o nuestro bucket de audio),
+// no depende de que el frontend resuelva Storage por su cuenta.
 export default function StockReviewPanel({ projectId, jobId, onApproved, onRegenerate, regenerating }: Props) {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -79,12 +74,20 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [replacingScene, setReplacingScene] = useState<Scene | null>(null);
+  // Seleccion explicita (solo cambia con un click en una fila de ScenePanel)
+  // -- distinta de "que segmento esta sonando ahora" (activeSegment, mas
+  // abajo). El boton "Reemplazar clip" arranca deshabilitado y solo se
+  // habilita cuando hay una escena tocada, no simplemente porque el audio
+  // este pasando por ahi.
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const waveformRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -132,11 +135,6 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
   const totalDuration = segments.length > 0 ? segments[segments.length - 1]!.endSec : 0;
 
-  const pixelsPerSecond =
-    totalDuration > 0
-      ? Math.min(MAX_PIXELS_PER_SECOND, Math.max(MIN_PIXELS_PER_SECOND, TARGET_TIMELINE_WIDTH / totalDuration))
-      : MAX_PIXELS_PER_SECOND;
-
   const activeSegmentIndex = useMemo(() => {
     const idx = segments.findIndex((s) => currentTime >= s.startSec && currentTime < s.endSec);
     if (idx !== -1) return idx;
@@ -161,9 +159,11 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // elemento cubre el caso de un clip de stock mas corto que su segmento
   // (aun despues de completar con otro clip puede sobrar un resto chico) --
   // sin esto el video llegaba a su ultimo frame y se quedaba congelado ahi.
+  // Solo aplica a assets de video -- una imagen (IA o subida a mano) se
+  // muestra directo con <img>, no pasa por este elemento.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !activeSegment?.asset) return;
+    if (!video || !activeSegment?.asset || activeSegment.asset.type !== "VIDEO") return;
     if (!video.src.endsWith(activeSegment.asset.storageKey)) {
       video.src = activeSegment.asset.storageKey;
       video.currentTime = 0;
@@ -186,6 +186,31 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     setCurrentTime(audio.currentTime);
   };
 
+  const handleWaveformClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (totalDuration <= 0 || !waveformRef.current) return;
+    const rect = waveformRef.current.getBoundingClientRect();
+    const fraction = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    handleSeek(fraction * totalDuration);
+  };
+
+  // Click en una fila del panel de escenas: salta el player al inicio de
+  // esa escena (no de un segmento puntual -- si la escena tiene varios
+  // clips, siempre arranca desde el primero) y la marca como seleccionada,
+  // que es lo que habilita el boton "Reemplazar clip" de arriba del panel.
+  const handleSelectScene = (scene: Scene) => {
+    setSelectedSceneId(scene.id);
+    handleSeek(parseTimeToSeconds(scene.timeStart));
+  };
+
+  const handleOpenReplace = () => {
+    const scene = scenes.find((s) => s.id === selectedSceneId);
+    if (scene) setReplacingScene(scene);
+  };
+
+  const handleReplaced = (sceneId: string, newAssets: Asset[]) => {
+    setAssets((prev) => [...prev.filter((a) => a.sceneId !== sceneId), ...newAssets]);
+  };
+
   const handleApprove = async () => {
     setApproving(true);
     setError(null);
@@ -206,9 +231,6 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     );
   }
 
-  const timelineWidth = Math.max(totalDuration * pixelsPerSecond, 400);
-  const waveformBarCount = Math.floor(timelineWidth / 4);
-
   return (
     <div className="flex flex-col h-full">
       <div className="px-6 pt-5 pb-3 text-center">
@@ -221,160 +243,157 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
         {error && <p className="text-xs mt-2" style={{ color: "#f87171" }}>{error}</p>}
       </div>
 
-      {/* Preview grande */}
-      <div className="flex-1 min-h-0 flex items-center justify-center px-6">
-        <div
-          className="relative w-full max-w-2xl rounded-2xl overflow-hidden flex items-center justify-center"
-          style={{ aspectRatio: "16/9", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
-        >
-          {activeSegment?.asset ? (
-            <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" />
-          ) : (
-            <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>Sin clip para esta escena</p>
-          )}
-
-          {activeSegment && (
+      <div className="flex-1 min-h-0 flex">
+        {/* Columna izquierda: player + barra contextual + toolbar + scrubber */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="flex-1 min-h-0 flex items-center justify-center px-6">
             <div
-              className="absolute bottom-2 left-2 px-2 py-1 rounded-md text-[11px] font-mono"
-              style={{ background: "rgba(0,0,0,0.55)", color: "rgba(255,255,255,0.8)", backdropFilter: "blur(4px)" }}
+              className="relative w-full max-w-2xl rounded-2xl overflow-hidden flex items-center justify-center"
+              style={{ aspectRatio: "16/9", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
             >
-              Escena {activeSegment.scene.order} · {activeSegment.scene.timeStart}–{activeSegment.scene.timeEnd}
+              {activeSegment?.asset ? (
+                activeSegment.asset.type === "IMAGE" ? (
+                  <img key={activeSegment.asset.id} src={activeSegment.asset.storageKey} className="w-full h-full object-cover" alt="Visual de la escena" />
+                ) : (
+                  <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" />
+                )
+              ) : (
+                <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>Sin clip para esta escena</p>
+              )}
             </div>
-          )}
-        </div>
-      </div>
-
-      {audioAsset && (
-        <audio
-          ref={audioRef}
-          src={audioAsset.storageKey}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          className="hidden"
-        />
-      )}
-
-      {/* Toolbar: play/pause, tiempo, aprobar */}
-      <div className="flex items-center justify-between px-6 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleTogglePlay}
-            disabled={!audioAsset}
-            className="w-9 h-9 rounded-full flex items-center justify-center transition-opacity disabled:opacity-40"
-            style={{ background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)" }}
-          >
-            {isPlaying ? (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
-            ) : (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
-            )}
-          </button>
-          <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
-            {formatSeconds(currentTime)} / {formatSeconds(totalDuration)}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onRegenerate}
-            disabled={approving || regenerating}
-            className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
-          >
-            {regenerating ? (
-              <>
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Regenerando...
-              </>
-            ) : (
-              "Regenerar todo"
-            )}
-          </button>
-          <button
-            onClick={handleApprove}
-            disabled={approving || regenerating}
-            className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
-          >
-            {approving ? (
-              <>
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Renderizando...
-              </>
-            ) : (
-              "Aprobar y renderizar"
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Timeline: track de video + track de audio */}
-      <div className="px-6 pb-5 overflow-x-auto" style={{ background: "rgba(0,0,0,0.15)" }}>
-        <div style={{ width: timelineWidth, position: "relative" }} className="pt-3">
-          {/* Playhead */}
-          <div
-            className="absolute top-0 bottom-0 w-px z-10 pointer-events-none"
-            style={{ left: currentTime * pixelsPerSecond, background: "#a78bfa", boxShadow: "0 0 6px rgba(167,155,255,0.8)" }}
-          />
-
-          {/* Track de video -- una escena con mas de un clip aparece como
-              varios bloques contiguos con el mismo numero de escena. */}
-          <div className="flex gap-0.5 mb-1">
-            {segments.length === 0 ? (
-              <p className="text-xs py-4" style={{ color: "var(--muted-foreground)" }}>
-                Todavía no hay escenas para mostrar.
-              </p>
-            ) : (
-              segments.map((segment, i) => {
-                const widthPx = Math.max((segment.endSec - segment.startSec) * pixelsPerSecond, MIN_CLIP_WIDTH);
-                return (
-                  <button
-                    key={segment.asset?.id ?? `${segment.scene.id}-empty`}
-                    onClick={() => handleSeek(segment.startSec)}
-                    className="relative shrink-0 rounded-md overflow-hidden text-left transition-all"
-                    style={{
-                      width: widthPx,
-                      height: 84,
-                      background: "#111319",
-                      border: i === activeSegmentIndex ? "2px solid #a78bfa" : "1px solid rgba(255,255,255,0.08)",
-                    }}
-                  >
-                    {segment.asset ? (
-                      <video src={segment.asset.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover opacity-80" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.03)" }}>
-                        <span className="text-[10px]" style={{ color: "var(--muted-foreground)" }}>sin clip</span>
-                      </div>
-                    )}
-                    <span
-                      className="absolute top-1 left-1 px-1 rounded text-[10px] font-mono"
-                      style={{ background: "rgba(0,0,0,0.6)", color: "white" }}
-                    >
-                      {segment.scene.order}
-                    </span>
-                  </button>
-                );
-              })
-            )}
           </div>
 
-          {/* Track de audio */}
-          {audioAsset && totalDuration > 0 && (
-            <div
-              className="flex items-end gap-[2px] rounded-md px-2"
-              style={{ height: 48, background: "rgba(124,106,255,0.08)", border: "1px solid rgba(124,106,255,0.15)" }}
-            >
-              {Array.from({ length: waveformBarCount }).map((_, i) => (
-                <div
-                  key={i}
-                  className="flex-1 rounded-full"
-                  style={{ height: `${waveformHeight(i)}%`, background: "rgba(167,155,255,0.55)", minWidth: 1 }}
-                />
-              ))}
-            </div>
+          {audioAsset && (
+            <audio
+              ref={audioRef}
+              src={audioAsset.storageKey}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+              onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+              className="hidden"
+            />
           )}
+
+          {/* Toolbar: play/pause, tiempo, aprobar */}
+          <div className="flex items-center justify-between px-6 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleTogglePlay}
+                disabled={!audioAsset}
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-opacity disabled:opacity-40"
+                style={{ background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)" }}
+              >
+                {isPlaying ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
+                )}
+              </button>
+              <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                {formatSeconds(currentTime)} / {formatSeconds(totalDuration)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onRegenerate}
+                disabled={approving || regenerating}
+                className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+              >
+                {regenerating ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Regenerando...
+                  </>
+                ) : (
+                  "Regenerar todo"
+                )}
+              </button>
+              <button
+                onClick={handleApprove}
+                disabled={approving || regenerating}
+                className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+              >
+                {approving ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Renderizando...
+                  </>
+                ) : (
+                  "Aprobar y renderizar"
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Scrubbing temporal global: solo waveform, ya no mezcla miniaturas
+              de escena (ver diagnostico en mejoras-interfaz-preview-scalertool.md). */}
+          <div className="px-6 pb-5" style={{ background: "rgba(0,0,0,0.15)" }}>
+            <div
+              ref={waveformRef}
+              onClick={handleWaveformClick}
+              className="relative pt-3"
+              style={{ cursor: totalDuration > 0 ? "pointer" : "default" }}
+            >
+              {audioAsset && totalDuration > 0 && (
+                <>
+                  {/* Playhead */}
+                  <div
+                    className="absolute top-0 bottom-0 w-px z-10 pointer-events-none"
+                    style={{ left: `${(currentTime / totalDuration) * 100}%`, background: "#a78bfa", boxShadow: "0 0 6px rgba(167,155,255,0.8)" }}
+                  />
+                  {/* Marcadores de limite de escena -- referencia liviana, no
+                      son clickeables por si (el click va a handleWaveformClick). */}
+                  {scenes.map((scene) => (
+                    <div
+                      key={scene.id}
+                      className="absolute top-3 pointer-events-none"
+                      style={{
+                        left: `${(parseTimeToSeconds(scene.timeStart) / totalDuration) * 100}%`,
+                        width: 1,
+                        height: 48,
+                        background: "rgba(255,255,255,0.14)",
+                      }}
+                    />
+                  ))}
+
+                  <div
+                    className="flex items-end gap-[2px] rounded-md px-2"
+                    style={{ height: 48, background: "rgba(124,106,255,0.08)", border: "1px solid rgba(124,106,255,0.15)" }}
+                  >
+                    {Array.from({ length: WAVEFORM_BAR_COUNT }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="flex-1 rounded-full"
+                        style={{ height: `${waveformHeight(i)}%`, background: "rgba(167,155,255,0.55)", minWidth: 1 }}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
+
+        {/* Columna derecha: panel vertical de escenas */}
+        <ScenePanel
+          scenes={scenes}
+          assets={assets}
+          selectedSceneId={selectedSceneId}
+          playingSceneId={activeSegment?.scene.id ?? null}
+          onSelectScene={handleSelectScene}
+          onReplace={handleOpenReplace}
+        />
       </div>
+
+      {replacingScene && (
+        <SceneReplaceModal
+          scene={replacingScene}
+          onClose={() => setReplacingScene(null)}
+          onReplaced={handleReplaced}
+        />
+      )}
     </div>
   );
 }

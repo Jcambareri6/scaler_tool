@@ -1,4 +1,4 @@
-import type { VideoProject, Script, Scene, ChatMessage, Job } from "@/types";
+import type { VideoProject, Script, Scene, Job } from "@/types";
 
 export const mockProjects: VideoProject[] = [
   {
@@ -133,69 +133,6 @@ export const mockScenes: Record<string, Scene[]> = {
       narrativeContent: "River Plate no es solo un club de fútbol. Es una institución que conecta generaciones, une familias y trasciende las fronteras del deporte.",
       visualPrompt: "Montage of fans of all ages wearing River Plate jerseys, emotional faces, multigenerational families",
       visualStatus: "PENDING",
-    },
-  ],
-};
-
-export const mockChatMessages: Record<string, ChatMessage[]> = {
-  "1": [
-    {
-      id: "m1",
-      projectId: "1",
-      role: "user",
-      content: "Quiero crear un video documental sobre la historia de River Plate.",
-      timestamp: "2026-08-18T10:00:00Z",
-    },
-    {
-      id: "m2",
-      projectId: "1",
-      role: "agent",
-      content: "Perfecto, qué proyecto interesante. River Plate tiene más de 120 años de historia apasionante.\n\n¿Tenés algún guion o material previo, o querés que te ayude a desarrollarlo desde cero?\n\nTambién me podés contar: ¿cuánto tiempo tendrá el video aproximadamente y para qué plataforma es?",
-      timestamp: "2026-08-18T10:00:15Z",
-    },
-    {
-      id: "m3",
-      projectId: "1",
-      role: "user",
-      content: "No tengo guion. Quiero que me ayudes a desarrollarlo. El video debería durar entre 3 y 5 minutos, para YouTube.",
-      timestamp: "2026-08-18T10:01:30Z",
-    },
-    {
-      id: "m4",
-      projectId: "1",
-      role: "agent",
-      content: "Perfecto. Para un documental de 3 a 5 minutos en YouTube, te propongo esta estructura narrativa:\n\n**1. Apertura impactante** (0:00–0:25)\nImágenes aéreas del Monumental con narración que ubique temporalmente al espectador.\n\n**2. Los orígenes** (0:25–1:10)\nFundación en La Boca, 1901. Los primeros pasos del club.\n\n**3. La Máquina** (1:10–2:00)\nLa delantera histórica de los años 40. Dominio continental.\n\n**4. La Copa Libertadores 2018** (2:00–3:00)\nEl climax narrativo: la final en Madrid.\n\n**5. Cierre institucional** (3:00–3:30)\nRiver como institución más allá del fútbol.\n\n¿Te gusta esta estructura? ¿Querés agregar o cambiar algo antes de generar el guion completo?",
-      timestamp: "2026-08-18T10:01:45Z",
-    },
-    {
-      id: "m5",
-      projectId: "1",
-      role: "user",
-      content: "Me gusta. Generá el guion completo.",
-      timestamp: "2026-08-18T10:03:00Z",
-    },
-    {
-      id: "m6",
-      projectId: "1",
-      role: "agent",
-      content: "Guion generado con éxito. Podés verlo en la sección **Script**.\n\nTambién generé 5 escenas con sus descripciones visuales y tiempos. Las encontrás en la sección **Scenes**.\n\n¿Querés que ajuste el tono narrativo, la duración de alguna escena, o comenzamos con la generación de los assets visuales?",
-      timestamp: "2026-08-18T10:03:30Z",
-    },
-  ],
-  "2": [
-    {
-      id: "m7",
-      projectId: "2",
-      role: "user",
-      content: "Quiero hacer un video sobre el futuro de la inteligencia artificial.",
-      timestamp: "2026-08-15T14:20:00Z",
-    },
-    {
-      id: "m8",
-      projectId: "2",
-      role: "agent",
-      content: "Excelente tema y muy vigente. La IA está redefiniendo prácticamente todos los sectores.\n\n¿Qué ángulo te interesa explorar?\n\n- **Divulgativo general**: qué es la IA, cómo funciona, hacia dónde va\n- **Impacto laboral**: automatización, trabajos del futuro\n- **IA generativa**: arte, música, texto, video\n- **Ética y riesgos**: regulación, deepfakes, privacidad\n- **Otro ángulo que tengas en mente**",
-      timestamp: "2026-08-15T14:20:30Z",
     },
   ],
 };

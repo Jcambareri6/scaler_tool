@@ -13,7 +13,6 @@ import { jobListRouter, jobRouter } from './modules/jobs/job.route.js';
 import { assetListRouter, assetRouter } from './modules/assets/asset.route.js';
 import toolRouter from './modules/tools/tool.route.js';
 import providerRouter from './modules/providers/provider.route.js';
-import agentRouter from './modules/agents/agent.route.js';
 import pipelineRouter from './modules/pipeline/pipeline.route.js';
 import scriptStyleRouter from './modules/scriptStyles/scriptStyle.route.js';
 import fileRouter from './modules/files/file.route.js';
@@ -48,7 +47,6 @@ app.use("/assets/:asset_id", assetRouter)
 app.use("/projects/:project_id/pipeline", pipelineRouter)
 app.use("/tools", toolRouter)
 app.use("/providers", providerRouter)
-app.use("/agents", agentRouter)
 app.use("/script-styles", scriptStyleRouter)
 app.use("/files", fileRouter)
 

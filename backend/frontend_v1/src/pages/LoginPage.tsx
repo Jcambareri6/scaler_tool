@@ -152,9 +152,9 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex" style={{ background: "var(--background)" }}>
       {/* Lado formulario */}
-      <div className="flex-1 flex items-center justify-center p-6 sm:p-10 relative overflow-hidden">
+      <div className="flex-1 flex items-center justify-center p-6 sm:p-10 relative">
         <div
-          className="pointer-events-none fixed rounded-full"
+          className="pointer-events-none absolute rounded-full"
           style={{
             width: 700,
             height: 700,

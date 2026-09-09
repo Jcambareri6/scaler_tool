@@ -4,8 +4,6 @@ export type VisualSource = "stock" | "ai" | "mixed";
 
 export type SceneVisualStatus = "PENDING" | "GENERATING" | "DONE" | "ERROR";
 
-export type ChatRole = "user" | "agent";
-
 export type JobStatus = "QUEUED" | "RUNNING" | "AWAITING_STOCK_REVIEW" | "DONE" | "FAILED";
 
 export interface VideoProject {
@@ -40,15 +38,6 @@ export interface Scene {
   visualPrompt?: string;
   visualStatus: SceneVisualStatus;
   duration: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  projectId: string;
-  role: ChatRole;
-  content: string;
-  timestamp: string;
-  attachments?: { name: string; type: string }[];
 }
 
 export interface Job {

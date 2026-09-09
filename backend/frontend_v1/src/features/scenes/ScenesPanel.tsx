@@ -62,6 +62,7 @@ function SceneDetail({
   scene,
   assets,
   onRegenerate,
+  onSaved,
 }: {
   scene: Scene;
   assets: Asset[];
@@ -69,6 +70,7 @@ function SceneDetail({
     sceneId: string,
     options: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
   ) => Promise<void>;
+  onSaved: (scene: Scene) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [narrative, setNarrative] = useState(scene.narrativeContent);
@@ -78,6 +80,7 @@ function SceneDetail({
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setNarrative(scene.narrativeContent);
@@ -104,6 +107,28 @@ function SceneDetail({
       setError(err instanceof Error ? err.message : "No se pudo regenerar el visual");
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  // Persiste narrativa + prompt visual editados a mano. El backend
+  // reemplaza `content` entero (no hace merge), asi que se manda la escena
+  // completa con esos dos campos pisados -- el resto (title, timeStart,
+  // etc.) viaja sin cambios para no perderlo.
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await projectsService.updateScene(scene.id, scene.projectId, {
+        ...scene,
+        narrativeContent: narrative,
+        visualPrompt,
+      });
+      onSaved(updated);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar la escena");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -311,11 +336,19 @@ function SceneDetail({
           }
           Regenerar visual
         </button>
-        <button className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-xl">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-            <polyline points="17 21 17 13 7 13 7 21" />
-          </svg>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-xl disabled:opacity-50"
+        >
+          {saving ? (
+            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+            </svg>
+          )}
           Guardar cambios
         </button>
       </div>
@@ -364,6 +397,10 @@ export default function ScenesPanel({ projectId }: Props) {
   ) => {
     const assets = await projectsService.regenerateSceneVisual(sceneId, options);
     setAssetsByScene((prev) => ({ ...prev, [sceneId]: assets }));
+  };
+
+  const handleSceneSaved = (updated: Scene) => {
+    setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   };
 
   if (loading) {
@@ -416,6 +453,7 @@ export default function ScenesPanel({ projectId }: Props) {
           scene={selectedScene}
           assets={assetsByScene[selectedScene.id] ?? []}
           onRegenerate={handleRegenerate}
+          onSaved={handleSceneSaved}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "var(--muted-foreground)" }}>

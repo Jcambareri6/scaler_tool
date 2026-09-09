@@ -1,5 +1,5 @@
 import { api, ApiError } from "@/lib/api";
-import { mapProject, mapScript, mapScene, mapJob, mapAsset } from "@/lib/mappers";
+import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
 import type { VideoProject, Script, Scene, Job, Asset } from "@/types";
 
 function isNotFound(err: unknown): boolean {
@@ -116,7 +116,12 @@ export const projectsService = {
     const rows = await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`);
     return rows
       .map(mapAsset)
-      .filter((asset) => asset.metadata?.kind === "stock_preview" || asset.metadata?.kind === "ai_generated");
+      .filter(
+        (asset) =>
+          asset.metadata?.kind === "stock_preview" ||
+          asset.metadata?.kind === "ai_generated" ||
+          asset.metadata?.kind === "user_upload"
+      );
   },
 
   // Audio narrado del proyecto entero (type=AUDIO, sceneId=null -- ver
@@ -141,6 +146,18 @@ export const projectsService = {
     return render ?? null;
   },
 
+  // El backend reemplaza TODO `content` de una en el UPDATE (ver
+  // scene.service.ts::updateScene) -- no es un merge parcial, asi que el
+  // caller tiene que mandar el objeto ya mergeado con los campos que NO
+  // esta editando (sceneToContent en mappers.ts espera la escena completa,
+  // no un parche). Botón "Guardar cambios" de ScenesPanel/SceneDetail.
+  async updateScene(sceneId: string, projectId: string, scene: Scene): Promise<Scene> {
+    const row = await api.patch<Parameters<typeof mapScene>[0]>(`/scenes/${sceneId}`, {
+      content: sceneToContent(scene),
+    });
+    return mapScene(row, projectId);
+  },
+
   // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual).
   // source="stock" (default): vuelve a buscar en todos los Providers de
   // stock activos y arma la secuencia de clips que cubre la escena entera.
@@ -158,6 +175,16 @@ export const projectsService = {
       ...(options?.source ? { source: options.source } : {}),
       ...(options?.aiPrompt ? { ai_prompt: options.aiPrompt } : {}),
     });
+    return rows.map(mapAsset);
+  },
+
+  // Contraparte de regenerateSceneVisual para la vía "subir propio" del
+  // modal de reemplazo -- multipart en vez de JSON, ver
+  // scene.route.ts::upload-visual.
+  async uploadSceneVisual(sceneId: string, file: File): Promise<Asset[]> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const rows = await api.postForm<Parameters<typeof mapAsset>[0][]>(`/scenes/${sceneId}/upload-visual`, formData);
     return rows.map(mapAsset);
   },
 

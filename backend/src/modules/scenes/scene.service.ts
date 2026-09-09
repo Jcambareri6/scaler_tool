@@ -6,6 +6,8 @@ import {
   replaceStockSegmentsForScene,
   setAiVideoSegmentsForScene,
   setAiImageForScene,
+  setUploadedVisualForScene,
+  uploadSceneAssetFile,
   type AiVideoSegment,
 } from "../../lib/stockSegments.js";
 import type { SearchStockInput, SearchStockOutput } from "../../tools/searchStock.tool.js";
@@ -426,6 +428,68 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
     }
 
     return res.status(200).json(segments ?? []);
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// Reemplaza el visual de UNA escena con un archivo que el usuario elige a
+// mano (tercera vía del modal de reemplazo, junto a "stock" y "ai" en
+// regenerateSceneVisual arriba) -- mismo criterio de ownership y de
+// respuesta (devuelve los Assets ya persistidos + dispara build_timeline
+// best-effort) que esas otras dos ramas.
+export async function uploadSceneVisual(req: Request, res: Response) {
+  try {
+    const { scene_id } = req.params;
+    const userId = req.user!.id;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: "file is required" });
+    }
+
+    const isVideo = file.mimetype.startsWith("video/");
+    const isImage = file.mimetype.startsWith("image/");
+    if (!isVideo && !isImage) {
+      return res.status(400).json({ error: "El archivo debe ser un video o una imagen" });
+    }
+
+    const { data: scene, error: sceneError } = await supabase
+      .from("scenes")
+      .select("id, script_id")
+      .eq("id", scene_id)
+      .single();
+    if (sceneError || !scene) {
+      return res.status(404).json({ error: "Scene not found" });
+    }
+
+    const script = await getOwnedScript(scene.script_id, userId);
+    if (!script) {
+      return res.status(404).json({ error: "Scene not found" });
+    }
+
+    const extension = (file.originalname.split(".").pop() || (isVideo ? "mp4" : "png")).toLowerCase();
+    const storageKey = await uploadSceneAssetFile(file.buffer, file.mimetype, extension);
+
+    await setUploadedVisualForScene(script.video_project_id, scene_id as string, {
+      storage_key: storageKey,
+      type: isVideo ? "VIDEO" : "IMAGE",
+    });
+
+    const { data: asset, error: assetError } = await supabase
+      .from("assets")
+      .select("*")
+      .eq("scene_id", scene_id)
+      .in("type", ["VIDEO", "IMAGE"]);
+    if (assetError) return res.status(400).json({ error: assetError.message });
+
+    try {
+      await runTool("build_timeline", { video_project_id: script.video_project_id }, { userId });
+    } catch {
+      // No bloqueante, mismo criterio que las otras ramas de regenerate-visual.
+    }
+
+    return res.status(200).json(asset ?? []);
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }
