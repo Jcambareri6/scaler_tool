@@ -390,6 +390,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       {replacingScene && (
         <SceneReplaceModal
           scene={replacingScene}
+          currentAssets={assets.filter((a) => a.sceneId === replacingScene.id)}
           onClose={() => setReplacingScene(null)}
           onReplaced={handleReplaced}
         />

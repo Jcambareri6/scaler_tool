@@ -114,24 +114,33 @@ async function generateWithSnapgen(
   const seconds = closestSupportedSeconds(durationSeconds, model);
 
   console.log(`[generate_video] submitting to SnapGen (model=${model}, seconds=${seconds})`);
-  const submitted = await withRetry(async () => {
-    const response = await fetch(`${SNAPGEN_BASE_URL}/v1/videos`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      // aspect_ratio es requerido por Veo 3.1 / Seedance 2 (docs.snapgen.org):
-      // 16:9 matchea la salida fija de render_video.tool.ts (1280x720).
-      body: JSON.stringify({ model, prompt, seconds: String(seconds), aspect_ratio: "16:9" }),
-      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`SnapGen API error (${response.status}): ${body}`);
-    }
-    return (await response.json()) as { id: string };
+  // SIN retry automatico: a diferencia de search_stock/generate_stock_keywords
+  // (llamadas de solo lectura, seguras de repetir), este POST arranca una
+  // generacion que SnapGen cobra apenas la acepta. Si la respuesta tarda mas
+  // de SUBMIT_TIMEOUT_MS o la conexion se corta, NO hay forma de saber si
+  // SnapGen ya recibio y arranco el pedido (y ya lo cobro) o no -- withRetry
+  // trataba ese caso ("sin status HTTP identificable") como retryable y
+  // reintentaba el POST hasta 3 veces mas, pudiendo disparar varios pedidos
+  // pagos en paralelo para una sola generacion que el usuario nunca llego a
+  // ver (plata gastada sin nada persistido). Mejor fallar fuerte y que el
+  // reintento sea una decision explicita del usuario (click de nuevo), no
+  // automatica y silenciosa.
+  const response = await fetch(`${SNAPGEN_BASE_URL}/v1/videos`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    // aspect_ratio es requerido por Veo 3.1 / Seedance 2 (docs.snapgen.org):
+    // 16:9 matchea la salida fija de render_video.tool.ts (1280x720).
+    body: JSON.stringify({ model, prompt, seconds: String(seconds), aspect_ratio: "16:9" }),
+    signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
   });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`SnapGen API error (${response.status}): ${body}`);
+  }
+  const submitted = (await response.json()) as { id: string };
   if (!submitted.id) {
     throw new Error("SnapGen no devolvio id de tarea para el pedido de video");
   }

@@ -4,6 +4,10 @@ import type { Asset, Scene } from "@/types";
 
 interface Props {
   scene: Scene;
+  // Assets YA asignados a esta escena (si los hay) -- solo para mostrar de
+  // que keyword/clip vienen (metadata.keyword/provider/external_id, ver
+  // replaceStockSegmentsForScene), no para editarlos aca.
+  currentAssets: Asset[];
   onClose: () => void;
   onReplaced: (sceneId: string, assets: Asset[]) => void;
 }
@@ -17,7 +21,7 @@ type Tab = "stock" | "upload" | "ai";
 // projectsService (mismo endpoint que ya usa ScenesPanel/SceneDetail para
 // "Regenerar visual" fuera de este gate), la tercera es nueva
 // (upload-visual, multipart).
-export default function SceneReplaceModal({ scene, onClose, onReplaced }: Props) {
+export default function SceneReplaceModal({ scene, currentAssets, onClose, onReplaced }: Props) {
   const [tab, setTab] = useState<Tab>("stock");
   const [stockPrompt, setStockPrompt] = useState(scene.visualPrompt ?? "");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -124,6 +128,22 @@ export default function SceneReplaceModal({ scene, onClose, onReplaced }: Props)
             <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
               Prompt de búsqueda
             </label>
+            {/* De donde viene el/los clip/s YA asignados a esta escena --
+                sirve para auditar si dos escenas que "se ven parecidas"
+                son en realidad el mismo clip (mismo provider:external_id)
+                o dos clips distintos que casualmente lucen similares.
+                Solo informativo: no se pisa el textarea de abajo con esto
+                (ver mismo criterio en ScenesPanel.tsx). */}
+            {currentAssets.length > 0 && (
+              <div className="mb-2 space-y-0.5">
+                {currentAssets.map((a) => (
+                  <p key={a.id} className="text-[11px] font-mono" style={{ color: "var(--muted-foreground)" }}>
+                    {a.metadata?.keyword ? `Keyword: ${String(a.metadata.keyword)} · ` : ""}
+                    Clip: <span style={{ color: "var(--foreground)" }}>{a.metadata?.provider ? `${a.metadata.provider}:${a.metadata.external_id}` : "sin datos"}</span>
+                  </p>
+                ))}
+              </div>
+            )}
             <textarea
               value={stockPrompt}
               onChange={(e) => setStockPrompt(e.target.value)}

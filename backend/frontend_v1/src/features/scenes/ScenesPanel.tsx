@@ -304,6 +304,16 @@ function SceneDetail({
         <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
           {source === "ai" || source === "ai_image" ? "Prompt de generación (IA)" : "Prompt visual"}
         </label>
+        {/* Keyword que realmente encontro el clip actual (metadata.keyword,
+            ver replaceStockSegmentsForScene) -- solo informativa, no se
+            pisa el campo editable de abajo con esto: si el usuario escribe
+            algo ahi, regenerateSceneVisual lo toma como busqueda literal y
+            se salta por completo la cascada de 4 keywords con IA. */}
+        {source === "stock" && asset?.metadata?.keyword ? (
+          <p className="text-[11px] font-mono mb-2" style={{ color: "var(--muted-foreground)" }}>
+            Keyword usada para este clip: <span style={{ color: "var(--foreground)" }}>{String(asset.metadata.keyword)}</span>
+          </p>
+        ) : null}
         {source === "ai" || source === "ai_image" ? (
           <textarea
             value={aiPrompt}

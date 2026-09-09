@@ -8,6 +8,8 @@ import {
   setAiImageForScene,
   setUploadedVisualForScene,
   uploadSceneAssetFile,
+  appendStockHistory,
+  readStockHistory,
   type AiVideoSegment,
 } from "../../lib/stockSegments.js";
 import type { SearchStockInput, SearchStockOutput } from "../../tools/searchStock.tool.js";
@@ -367,29 +369,15 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
       keywords = keywordsResult.keywords;
     }
 
-    let searchOutput: SearchStockOutput;
-    try {
-      searchOutput = await runTool<SearchStockInput, SearchStockOutput>(
-        "search_stock",
-        {
-          keywords,
-          ...(project.content_policy ? { content_policy: project.content_policy } : {}),
-          min_duration_seconds: minDurationSeconds,
-        },
-        { userId }
-      );
-    } catch (toolError) {
-      const message = toolError instanceof Error ? toolError.message : "search_stock failed";
-      return res.status(400).json({ error: message });
-    }
-
-    if (searchOutput.candidates.length === 0) {
-      return res.status(404).json({ error: "No se encontraron clips de stock para ese prompt" });
-    }
-
-    // Mismo criterio que el pipeline automatico: si ningun candidato solo
-    // alcanza para cubrir la escena entera, se completa con mas clips
-    // distintos en vez de repetir el mismo (ver replaceStockSegmentsForScene).
+    // Se calcula ANTES de buscar (no despues, como estaba antes) -- si
+    // search_stock no sabe que ya esta usado, la cascada se corta en la
+    // primera keyword que traiga CUALQUIER resultado no bloqueado, aunque
+    // esos resultados ya esten todos gastados en otra escena. Con keywords
+    // de nicho (4-6 palabras) el stock disponible puede ser 2-3 clips
+    // nada mas, asi que sin esto la busqueda le devolvia a esta escena la
+    // misma tanda agotada y replaceStockSegmentsForScene los terminaba
+    // descartando a todos -- eso es lo que se veia como el mismo clip (o
+    // contenido generico casi identico) repetido en escenas distintas.
     // Ademas de no repetir DENTRO de esta escena, tampoco se repite un clip
     // que ya este en uso en OTRA escena del mismo video -- se arma el set
     // a partir de lo que ya hay guardado en `assets` para el resto de las
@@ -409,7 +397,46 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
         .filter((meta): meta is { provider: string; external_id: string } => !!meta?.provider && !!meta?.external_id)
         .map((meta) => `${meta.provider}:${meta.external_id}`)
     );
-    await replaceStockSegmentsForScene(project.id, scene_id as string, searchOutput.candidates, minDurationSeconds, usedStockKeys);
+    // A diferencia de "otra escena", el clip que YA estaba en ESTA escena ya
+    // se borra (clearSceneVisualAssets, dentro de replaceStockSegmentsForScene)
+    // antes de insertar el nuevo, asi que sin este historial la busqueda --
+    // que con las mismas keywords es deterministica -- siempre volveria a
+    // traer el mismo candidato top en cada regeneracion. Se acumula en
+    // scene.content.stock_history (ver appendStockHistory) precisamente para
+    // sobrevivir a ese borrado.
+    for (const usedKey of readStockHistory(scene.content as Record<string, unknown> | null)) {
+      usedStockKeys.add(usedKey);
+    }
+
+    let searchOutput: SearchStockOutput;
+    try {
+      searchOutput = await runTool<SearchStockInput, SearchStockOutput>(
+        "search_stock",
+        {
+          keywords,
+          ...(project.content_policy ? { content_policy: project.content_policy } : {}),
+          min_duration_seconds: minDurationSeconds,
+          exclude_keys: Array.from(usedStockKeys),
+        },
+        { userId }
+      );
+    } catch (toolError) {
+      const message = toolError instanceof Error ? toolError.message : "search_stock failed";
+      return res.status(400).json({ error: message });
+    }
+
+    if (searchOutput.candidates.length === 0) {
+      return res.status(404).json({ error: "No se encontraron clips de stock para ese prompt" });
+    }
+
+    const { usedKeys: newlyUsedKeys } = await replaceStockSegmentsForScene(
+      project.id,
+      scene_id as string,
+      searchOutput.candidates,
+      minDurationSeconds,
+      usedStockKeys
+    );
+    await appendStockHistory(scene_id as string, scene.content as Record<string, unknown> | null, newlyUsedKeys);
 
     const { data: segments, error: segmentsError } = await supabase
       .from("assets")

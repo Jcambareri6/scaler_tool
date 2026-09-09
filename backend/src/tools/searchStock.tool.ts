@@ -16,6 +16,17 @@ export interface SearchStockInput {
   // de 16s). No descarta los mas cortos (a veces son los unicos
   // disponibles), solo los manda al final.
   min_duration_seconds?: number;
+  // Keys "provider:external_id" ya usadas en OTRAS escenas de este mismo
+  // video (o en regeneraciones previas de esta escena, ver
+  // stockSegments.ts::readStockHistory). Sin esto, la cascada de keywords
+  // se corta apenas UNA keyword trae resultados sin saber si esos
+  // resultados ya estan todos gastados -- si una keyword especifica de
+  // nicho solo tiene 2-3 clips relevantes y otra escena ya se quedo con
+  // ambos, esta escena terminaba "conformandose" con esa tanda agotada en
+  // vez de probar la siguiente keyword (mas amplia) para traer candidatos
+  // frescos, y eso es lo que se veia como el mismo clip/contenido
+  // generico repetido en escenas distintas.
+  exclude_keys?: string[];
 }
 
 export interface StockCandidate {
@@ -26,6 +37,12 @@ export interface StockCandidate {
   url: string;
   preview_url: string;
   duration_seconds?: number;
+  // Que keyword de la cascada (o del fallback de seguridad) trajo este
+  // candidato -- se persiste en metadata del Asset (ver
+  // replaceStockSegmentsForScene) para poder auditar despues por que se
+  // eligio tal clip, y para poder distinguir a simple vista un match
+  // literal de un fallback generico.
+  matched_keyword?: string;
 }
 
 // Video de muestra publico (Google Cloud Storage sample bucket), embebible
@@ -42,6 +59,7 @@ function mockCandidates(keyword: string): StockCandidate[] {
       url: MOCK_VIDEO_URL,
       preview_url: MOCK_VIDEO_URL,
       duration_seconds: 10,
+      matched_keyword: keyword,
     },
   ];
 }
@@ -213,10 +231,15 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
         type: "number",
         description: "Duracion minima deseada del clip (ej: duracion de la escena que va a cubrir)",
       },
+      exclude_keys: {
+        type: "array",
+        items: { type: "string" },
+        description: "Keys 'provider:external_id' ya usadas en este video (otras escenas o regeneraciones previas de esta) -- si una keyword de la cascada trae resultados pero todos ya estan en esta lista, se prueba la siguiente keyword en vez de conformarse",
+      },
     },
     required: ["keywords"],
   },
-  async execute({ keywords, content_policy, min_duration_seconds }, ctx) {
+  async execute({ keywords, content_policy, min_duration_seconds, exclude_keys }, ctx) {
     const providers: Provider[] = await getActiveProvidersByType("stock_video");
     const usableProviders = providers.filter((p) => p.api_key && PROVIDER_CLIENTS[p.slug]);
 
@@ -243,19 +266,34 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
       (entries ?? []).filter((e) => e.decision === "PREFERRED").map(key)
     );
 
-    let candidates: StockCandidate[];
-    if (usableProviders.length === 0) {
-      candidates = keywords.length > 0 ? mockCandidates(keywords[0]!) : [];
-    } else {
-      // Cascada (prompt del cliente, Fase 2): `keywords` llega ordenada de
-      // mas especifica a mas amplia (generate_stock_keywords) -- se prueba
-      // cada una contra todos los Providers en paralelo y se corta apenas
-      // una trae al menos un candidato utilizable (no bloqueado), en vez de
-      // buscar las 4 siempre y mezclar todo. Si ninguna keyword trae nada,
-      // candidates queda vacio (mismo camino que "sin resultados" que ya
-      // manejan los callers).
-      candidates = [];
-      for (const keyword of keywords) {
+    // Si ninguna de las 4 keywords especificas trae nada utilizable
+    // (proveedor caido, termino muy de nicho), en vez de dejar la escena sin
+    // ningun visual se prueba esta ultima red de contencion: terminos
+    // genericos de b-roll que Pexels/Pixabay practicamente siempre tienen
+    // indexados. No es tan preciso como una keyword especifica, pero es
+    // mejor una metafora/ambiente generico acorde que una escena vacia.
+    const FALLBACK_SAFETY_KEYWORDS = [
+      "cinematic background b-roll",
+      "abstract motion background",
+      "nature landscape aerial",
+    ];
+
+    const excludeKeys = new Set(exclude_keys ?? []);
+
+    // Antes esta funcion se conformaba con la PRIMERA keyword que trajera
+    // algo no bloqueado, sin saber si esos candidatos ya estaban todos
+    // gastados en otras escenas/regeneraciones de este mismo video. Con
+    // keywords de nicho (4-6 palabras, la mas especifica de la cascada) el
+    // stock disponible puede ser 2-3 clips nada mas -- si otra escena ya se
+    // quedo con esos, esta escena terminaba recibiendo la misma tanda
+    // agotada (y replaceStockSegmentsForScene los descartaba a todos, o en
+    // el peor caso quedaba sin clip). Ahora sigue bajando en la cascada
+    // mientras la tanda actual no tenga NINGUN candidato fresco, y solo si
+    // ninguna keyword trae algo fresco vuelve al primer resultado no vacio
+    // (mejor repetir contenido que dejar la escena sin ningun visual).
+    async function tryKeywordCascade(list: string[]): Promise<StockCandidate[]> {
+      let fallback: StockCandidate[] = [];
+      for (const keyword of list) {
         // allSettled, no all: si un proveedor puntual falla (rate limit,
         // timeout, key vencida) no tiene que tirar abajo el intento entero
         // -- se sigue con lo que hayan devuelto los demas.
@@ -265,34 +303,62 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
           )
         );
         const found = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-        const usable = found.filter((c) => !blocked.has(key(c)));
-        if (usable.length > 0) {
-          candidates = usable;
-          break;
-        }
+        // Se marca aca la keyword que efectivamente trajo el candidato
+        // (matched_keyword) -- replaceStockSegmentsForScene la persiste en
+        // metadata para poder auditar despues que keyword eligio cada clip.
+        const usable = found
+          .filter((c) => !blocked.has(key(c)))
+          .map((c) => ({ ...c, matched_keyword: keyword }));
+        if (usable.length === 0) continue;
+        if (fallback.length === 0) fallback = usable;
+        const hasFreshCandidate = usable.some((c) => !excludeKeys.has(key(c)));
+        if (hasFreshCandidate) return usable;
+      }
+      return fallback;
+    }
+
+    let candidates: StockCandidate[];
+    if (usableProviders.length === 0) {
+      candidates = keywords.length > 0 ? mockCandidates(keywords[0]!) : [];
+    } else {
+      // Cascada (prompt del cliente, Fase 2): `keywords` llega ordenada de
+      // mas especifica a mas amplia (generate_stock_keywords) -- se prueba
+      // cada una contra todos los Providers en paralelo y se corta apenas
+      // una trae al menos un candidato utilizable (no bloqueado), en vez de
+      // buscar las 4 siempre y mezclar todo. Si ninguna trae nada, se cae al
+      // fallback generico de arriba antes de rendirse.
+      candidates = await tryKeywordCascade(keywords);
+      if (candidates.length === 0) {
+        candidates = await tryKeywordCascade(FALLBACK_SAFETY_KEYWORDS);
       }
     }
 
-    candidates = candidates
-      .filter((c) => !blocked.has(key(c)))
-      .sort((a, b) => {
-        if (min_duration_seconds) {
-          const aFits = (a.duration_seconds ?? 0) >= min_duration_seconds ? 1 : 0;
-          const bFits = (b.duration_seconds ?? 0) >= min_duration_seconds ? 1 : 0;
-          if (aFits !== bFits) return bFits - aFits;
-        }
-        // Antes solo se ordenaba por "encaja si/no" -- entre los que no
-        // encajaban quedaban en el orden crudo de la API, asi que el
-        // relleno greedy de replaceStockSegmentsForScene terminaba armando
-        // una escena con 3-4 clips cortitos en vez de 1-2 largos. Ordenando
-        // por duracion descendente, ese relleno agarra primero el candidato
-        // que mas terreno cubre (idealmente casi toda la escena) y recien
-        // despues suma uno mas corto para el resto, en vez de varios.
-        const durationDiff = (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0);
-        if (durationDiff !== 0) return durationDiff;
-        return Number(preferred.has(key(b))) - Number(preferred.has(key(a)));
-      });
+    candidates = candidates.filter((c) => !blocked.has(key(c)));
 
-    return { candidates };
+    // Los candidatos que YA cubren la escena entera (min_duration_seconds)
+    // no necesitan ordenarse por duracion -- cualquiera de ellos alcanza,
+    // asi que ahi conviene preservar el orden de relevancia que devuelve el
+    // Provider (el mas relevante al keyword primero) en vez de pisarlo con
+    // la duracion. Antes se reordenaba TODO por duracion descendente sin
+    // condicion, asi que un clip largo pero poco relacionado le podia ganar
+    // a uno mas corto y mucho mas relevante -- eso es justamente lo que se
+    // ve como "clips sin contexto" en produccion.
+    const fitsScene = (c: StockCandidate) =>
+      !min_duration_seconds || (c.duration_seconds ?? 0) >= min_duration_seconds;
+    const fitting = candidates.filter(fitsScene);
+    const short = candidates.filter((c) => !fitsScene(c));
+
+    fitting.sort((a, b) => Number(preferred.has(key(b))) - Number(preferred.has(key(a))));
+    // Los que NO alcanzan a cubrir la escena solos si se ordenan por
+    // duracion descendente: el relleno greedy de replaceStockSegmentsForScene
+    // agarra primero el que mas terreno cubre y arma la escena con 1-2 clips
+    // en vez de 3-4 cortitos.
+    short.sort((a, b) => {
+      const durationDiff = (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0);
+      if (durationDiff !== 0) return durationDiff;
+      return Number(preferred.has(key(b))) - Number(preferred.has(key(a)));
+    });
+
+    return { candidates: [...fitting, ...short] };
   },
 };

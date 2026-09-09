@@ -32,11 +32,12 @@ export async function replaceStockSegmentsForScene(
   // El check-and-add es sincronico (sin await entre medio), asi que es
   // seguro aunque las escenas se procesen en paralelo (mapWithConcurrency).
   usedKeysAcrossVideo: Set<string> = new Set()
-): Promise<void> {
+): Promise<{ usedKeys: string[] }> {
   await clearSceneVisualAssets(sceneId);
 
   let remaining = sceneDurationSeconds;
   let sequence = 0;
+  const usedKeys: string[] = [];
 
   for (const candidate of candidates) {
     if (remaining <= 0.5) break;
@@ -44,6 +45,7 @@ export async function replaceStockSegmentsForScene(
     const key = `${candidate.provider}:${candidate.external_id}`;
     if (usedKeysAcrossVideo.has(key)) continue;
     usedKeysAcrossVideo.add(key);
+    usedKeys.push(key);
 
     const candidateDuration = candidate.duration_seconds ?? remaining;
     const allocatedSeconds = Math.min(candidateDuration, remaining);
@@ -60,6 +62,9 @@ export async function replaceStockSegmentsForScene(
         provider: candidate.provider,
         external_id: candidate.external_id,
         url: candidate.url,
+        // Keyword de la cascada (o del fallback generico) que trajo este
+        // candidato -- permite auditar despues por que se eligio tal clip.
+        keyword: candidate.matched_keyword ?? null,
         sequence,
         duration_seconds: allocatedSeconds,
       },
@@ -69,6 +74,51 @@ export async function replaceStockSegmentsForScene(
     remaining -= allocatedSeconds;
     sequence += 1;
   }
+
+  return { usedKeys };
+}
+
+// Tope de entradas guardadas por escena -- alcanza de sobra (una escena
+// normalmente usa 1-3 clips por regeneracion) y evita que scene.content
+// crezca sin limite si el usuario regenera la misma escena muchas veces.
+const MAX_STOCK_HISTORY = 30;
+
+// Complementa a replaceStockSegmentsForScene: los Assets de stock se borran
+// enteros en cada regeneracion (clearSceneVisualAssets), asi que sin esto no
+// queda ningun registro de "este clip ya se probo en esta escena" -- y como
+// la busqueda con las mismas keywords es deterministica, regenerar siempre
+// volvia a traer el mismo candidato top. Guarda las keys ya usadas dentro de
+// scene.content (campo JSON existente, sin necesidad de migracion) para que
+// el caller pueda excluirlas la proxima vez que regenere esta escena.
+export async function appendStockHistory(
+  sceneId: string,
+  currentContent: Record<string, unknown> | null,
+  newKeys: string[]
+): Promise<void> {
+  if (newKeys.length === 0) return;
+
+  const previousHistory = Array.isArray((currentContent as { stock_history?: unknown[] } | null)?.stock_history)
+    ? ((currentContent as { stock_history?: unknown[] }).stock_history as unknown[]).filter(
+        (entry): entry is string => typeof entry === "string"
+      )
+    : [];
+  const merged = Array.from(new Set([...previousHistory, ...newKeys])).slice(-MAX_STOCK_HISTORY);
+
+  const { error } = await supabase
+    .from("scenes")
+    .update({ content: { ...(currentContent ?? {}), stock_history: merged } })
+    .eq("id", sceneId);
+  if (error) throw new Error(error.message);
+}
+
+// Lee el historial de clips ya usados por esta escena puntual (ver
+// appendStockHistory) para excluirlos al armar el set de keys ya usadas
+// antes de regenerar -- sin esto, regenerar la MISMA escena repetidas veces
+// siempre vuelve a traer el mismo candidato top (search_stock es
+// deterministico para las mismas keywords).
+export function readStockHistory(content: Record<string, unknown> | null): string[] {
+  const history = (content as { stock_history?: unknown[] } | null)?.stock_history;
+  return Array.isArray(history) ? history.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 const SCENE_UPLOADS_BUCKET = "scene-uploads";

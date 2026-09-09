@@ -1,6 +1,11 @@
 import { runTool } from "../tools/index.js";
 import { supabase } from "../lib/supabase.js";
-import { replaceStockSegmentsForScene, setAiVideoSegmentsForScene, type AiVideoSegment } from "../lib/stockSegments.js";
+import {
+  replaceStockSegmentsForScene,
+  setAiVideoSegmentsForScene,
+  appendStockHistory,
+  type AiVideoSegment,
+} from "../lib/stockSegments.js";
 import { syncProjectStatus } from "../lib/projectStatus.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import type { ContentPolicy, VisualSource, JobStatus } from "../types/shared/typeShared.js";
@@ -303,12 +308,19 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       // repetir la escena anterior (ver sceneKeywords mas arriba).
       const keywords = sceneKeywords.get(scene.id) ?? [];
 
+      // exclude_keys: sin esto, la cascada de search_stock se corta en la
+      // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
+      // saber si esos resultados ya estan gastados en otra escena de este
+      // mismo video -- con keywords de nicho el stock disponible puede ser
+      // 2-3 clips nada mas, asi que dos escenas con contenido similar
+      // terminaban recibiendo la misma tanda agotada de candidatos.
       const stock = await runTool<SearchStockInput, SearchStockOutput>(
         "search_stock",
         {
           keywords,
           ...(contentPolicy ? { content_policy: contentPolicy } : {}),
           min_duration_seconds: minDurationSeconds,
+          exclude_keys: Array.from(usedStockKeys),
         },
         toolCtx
       );
@@ -320,7 +332,19 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       if (visualSource === "mixed" && stockFallsShort) {
         await generateAiVisual(scene.id, sceneText, minDurationSeconds);
       } else {
-        await replaceStockSegmentsForScene(projectId, scene.id, stock.candidates, minDurationSeconds, usedStockKeys);
+        const { usedKeys } = await replaceStockSegmentsForScene(
+          projectId,
+          scene.id,
+          stock.candidates,
+          minDurationSeconds,
+          usedStockKeys
+        );
+        // Deja registro de que clips ya se usaron en ESTA escena (sobrevive
+        // al borrado de Assets que hace cada regeneracion puntual, ver
+        // regenerateSceneVisual en scene.service.ts) -- sin esto, la primera
+        // vez que el usuario regenera una escena desde el pipeline
+        // automatico no tiene memoria de que candidato ya se probo aca.
+        await appendStockHistory(scene.id, scene.content as Record<string, unknown> | null, usedKeys);
       }
     }
 
