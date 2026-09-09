@@ -218,12 +218,68 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-// Composicion real: descarga cada clip de stock y el audio narrado, arma
-// UN input por escena recortado/loopeado a la duracion exacta de esa
-// escena (`-stream_loop -1 -t <dur>` cubre los dos casos con el mismo
-// flag: si el clip es mas largo que la escena, `-t` lo corta; si es mas
-// corto, el loop lo rellena), normaliza resolucion/fps para poder
-// concatenar, y pega el audio narrado completo encima del video resultante.
+const OUTPUT_FPS = 30;
+// Ken Burns escalaba 2x antes para no perder nitidez al hacer zoom-in --
+// bajado a 1.4x: el filtro `zoompan` de ffmpeg es conocido por consumir
+// memoria de forma desproporcionada al tamaño del frame que procesa, y esa
+// resolucion extra sumaba bastante sin aportar demasiado a la nitidez
+// percibida en un output final de 1280x720.
+const KEN_BURNS_UPSCALE = 1.4;
+
+// Cuantos segmentos entran en CADA ffmpeg individual antes de armar el
+// video final. Procesar TODOS los segmentos en un solo ffmpeg (como se
+// hacia antes) hace que la memoria necesaria crezca con la cantidad de
+// segmentos SIN TECHO -- confirmado en produccion: 22-26 segmentos se
+// quedaron sin memoria tanto en un plan de 512MB como en uno de 4GB. Con
+// tandas chicas, la memoria de cada ffmpeg queda acotada al tamaño de la
+// tanda, sin importar cuantos segmentos tenga el video en total.
+const BATCH_SIZE = 4;
+
+// Arma los argumentos de ffmpeg (inputs + filter_complex) para UNA tanda de
+// segmentos -- misma logica de siempre (loop+zoompan para imagenes,
+// stream_loop+scale para video), generalizada para operar sobre un
+// subconjunto en vez de la lista completa.
+function buildFfmpegArgsForBatch(
+  batchSegments: RenderSegment[],
+  batchClipPaths: string[]
+): { inputArgs: string[]; filterComplex: string } {
+  const inputArgs: string[] = [];
+  const filterParts: string[] = [];
+  batchSegments.forEach((segment, i) => {
+    const duration = Math.max(0.1, parseTime(segment.end) - parseTime(segment.start));
+    if (segment.isImage) {
+      const totalFrames = Math.max(1, Math.round(duration * OUTPUT_FPS));
+      const upscaledWidth = Math.round(OUTPUT_WIDTH * KEN_BURNS_UPSCALE);
+      const upscaledHeight = Math.round(OUTPUT_HEIGHT * KEN_BURNS_UPSCALE);
+      inputArgs.push("-loop", "1", "-i", batchClipPaths[i]!);
+      // OJO: `-framerate`/`-t` en el input MULTIPLICA la duracion en vez de
+      // fijarla junto con `d` de zoompan (validado localmente: con -t 3 a
+      // 30fps son 90 frames de input, y zoompan aplica d=90 POR CADA UNO,
+      // dando 8100 frames = 4:30 en vez de 3s) -- `d` solo controla cuantos
+      // frames salen de esta rama.
+      filterParts.push(
+        `[${i}:v]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase,` +
+          `crop=${upscaledWidth}:${upscaledHeight},` +
+          `zoompan=z='min(zoom+0.0015,1.3)':d=${totalFrames}:s=${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}:fps=${OUTPUT_FPS},setsar=1[v${i}]`
+      );
+    } else {
+      inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(2), "-i", batchClipPaths[i]!);
+      filterParts.push(
+        `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,` +
+          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}[v${i}]`
+      );
+    }
+  });
+  const concatInputs = batchSegments.map((_, i) => `[v${i}]`).join("");
+  const filterComplex = `${filterParts.join(";")};${concatInputs}concat=n=${batchSegments.length}:v=1:a=0[outv]`;
+  return { inputArgs, filterComplex };
+}
+
+// Composicion real: descarga cada clip de stock y el audio narrado, procesa
+// los segmentos EN TANDAS chicas (ver BATCH_SIZE) para mantener acotada la
+// memoria de cada ffmpeg sin importar cuantos segmentos tenga el video, y
+// al final pega las tandas ya codificadas sin recomprimir (`-c copy`, cero
+// perdida de calidad) junto con el audio narrado completo.
 async function realRender(videoProjectId: string, timelineId: string): Promise<RenderVideoOutput> {
   const { data: timeline, error } = await supabase
     .from("timelines")
@@ -263,58 +319,60 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       return clipPath;
     });
 
-    const OUTPUT_FPS = 30;
-    // Ken Burns (zoom lento) para escenas con imagen generada en vez de
-    // video: sin esto se ve una foto fija toda la escena. `-loop 1` repite
-    // el unico frame de la imagen indefinidamente como input, y zoompan
-    // "consume" de ahi exactamente `d` frames para producir el zoom
-    // progresivo -- validado localmente (sin gastar SnapGen) que agregar
-    // ademas `-framerate`/`-t` en el input MULTIPLICA la duracion en vez de
-    // fijarla (zoompan aplica `d` frames POR CADA frame de input que recibe:
-    // con -t 3 a 30fps son 90 frames de input, y con d=90 c/u salieron 90
-    // frames = 8100 frames = 4:30 en vez de 3s). `d` solo, sin esos flags,
-    // es lo unico que debe controlar cuantos frames salen de esta rama. Se
-    // escala 2x antes del zoom para no perder nitidez al hacer zoom-in.
-    const inputArgs: string[] = [];
-    const filterParts: string[] = [];
-    segments.forEach((segment, i) => {
-      const duration = Math.max(0.1, parseTime(segment.end) - parseTime(segment.start));
-      if (segment.isImage) {
-        const totalFrames = Math.max(1, Math.round(duration * OUTPUT_FPS));
-        inputArgs.push("-loop", "1", "-i", clipPaths[i]!);
-        filterParts.push(
-          `[${i}:v]scale=${OUTPUT_WIDTH * 2}:${OUTPUT_HEIGHT * 2}:force_original_aspect_ratio=increase,` +
-            `crop=${OUTPUT_WIDTH * 2}:${OUTPUT_HEIGHT * 2},` +
-            `zoompan=z='min(zoom+0.0015,1.3)':d=${totalFrames}:s=${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}:fps=${OUTPUT_FPS},setsar=1[v${i}]`
-        );
-      } else {
-        inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(2), "-i", clipPaths[i]!);
-        filterParts.push(
-          `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,` +
-            `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}[v${i}]`
-        );
-      }
-    });
-    const concatInputs = segments.map((_, i) => `[v${i}]`).join("");
-    const filterComplex = `${filterParts.join(";")};${concatInputs}concat=n=${segments.length}:v=1:a=0[outv]`;
-    const audioInputIndex = segments.length;
-    const outputPath = path.join(workDir, "final.mp4");
+    const totalBatches = Math.ceil(segments.length / BATCH_SIZE);
+    const batchOutputPaths: string[] = [];
+    for (let b = 0; b < totalBatches; b++) {
+      const batchStart = b * BATCH_SIZE;
+      const batchSegments = segments.slice(batchStart, batchStart + BATCH_SIZE);
+      const batchClipPaths = clipPaths.slice(batchStart, batchStart + BATCH_SIZE);
+      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths);
+      const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 
-    console.log(`[render_video] corriendo ffmpeg...`);
+      console.log(`[render_video] corriendo ffmpeg (tanda ${b + 1}/${totalBatches}, ${batchSegments.length} segmentos)...`);
+      await runFfmpeg([
+        ...inputArgs,
+        "-filter_complex",
+        filterComplex,
+        "-map",
+        "[outv]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-y",
+        batchOutputPath,
+      ]);
+      batchOutputPaths.push(batchOutputPath);
+    }
+
+    // Union final: las tandas ya estan codificadas con el mismo codec/
+    // resolucion/fps, asi que pegarlas con el demuxer "concat" + `-c:v copy`
+    // no vuelve a comprimir nada (cero perdida de calidad) -- mucho mas
+    // liviano en memoria que un unico ffmpeg gigante. El audio narrado
+    // completo se mezcla en este mismo paso.
+    const concatListPath = path.join(workDir, "concat-list.txt");
+    const concatListContent = batchOutputPaths
+      .map((p) => `file '${p.replace(/\\/g, "/")}'`)
+      .join("\n");
+    await writeFile(concatListPath, concatListContent);
+
+    const outputPath = path.join(workDir, "final.mp4");
+    console.log(`[render_video] uniendo ${totalBatches} tandas + audio...`);
     await runFfmpeg([
-      ...inputArgs,
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      concatListPath,
       "-i",
       audioPath,
-      "-filter_complex",
-      filterComplex,
       "-map",
-      "[outv]",
+      "0:v",
       "-map",
-      `${audioInputIndex}:a`,
+      "1:a",
       "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
+      "copy",
       "-c:a",
       "aac",
       "-shortest",
