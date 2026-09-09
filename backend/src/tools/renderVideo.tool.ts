@@ -235,6 +235,32 @@ const KEN_BURNS_UPSCALE = 1.4;
 // tanda, sin importar cuantos segmentos tenga el video en total.
 const BATCH_SIZE = 4;
 
+// Cloudinary rechaza subidas de mas de 100MB en la cuenta actual (visto en
+// produccion: "File size too large. Got 107751893. Maximum is 104857600").
+// Con CRF por defecto el peso final depende del contenido y puede pasarse
+// (paso con un video de 12:44 -> 107.75MB). Para no depender de eso, se
+// calcula un bitrate de video objetivo segun la duracion total, apuntando a
+// un poco menos de 100MB (SAFETY_MARGIN) para dejar margen al overhead del
+// contenedor y a que la estimacion de audio no sea exacta al byte.
+const CLOUDINARY_MAX_BYTES = 100 * 1024 * 1024;
+const CLOUDINARY_SAFETY_MARGIN = 0.92;
+const AUDIO_BITRATE_BPS = 128_000;
+// Piso de calidad: por debajo de esto el video queda visiblemente pixelado.
+// Un video tan largo que necesitaria menos que esto para entrar en 100MB va
+// a pasarse igual (se prioriza que se vea aceptable antes que cumplir el
+// limite a cualquier costo) -- ver log de warning cuando esto pasa.
+const MIN_VIDEO_BITRATE_BPS = 400_000;
+
+// Devuelve null si no hace falta acotar el bitrate (destino sin limite de
+// tamano, ej. Supabase Storage) -- en ese caso se deja el CRF por defecto de
+// libx264, que da mejor calidad que fijar un bitrate a mano.
+function computeTargetVideoBitrateBps(durationSeconds: number, capToCloudinaryLimit: boolean): number | null {
+  if (!capToCloudinaryLimit || durationSeconds <= 0) return null;
+  const budgetBits = CLOUDINARY_MAX_BYTES * 8 * CLOUDINARY_SAFETY_MARGIN;
+  const videoBudgetBps = budgetBits / durationSeconds - AUDIO_BITRATE_BPS;
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.floor(videoBudgetBps));
+}
+
 // Arma los argumentos de ffmpeg (inputs + filter_complex) para UNA tanda de
 // segmentos -- misma logica de siempre (loop+zoompan para imagenes,
 // stream_loop+scale para video), generalizada para operar sobre un
@@ -275,6 +301,29 @@ function buildFfmpegArgsForBatch(
   return { inputArgs, filterComplex };
 }
 
+// Args de codec de video para pasarle a ffmpeg en cada tanda. Sin bitrate
+// objetivo (null) se deja el CRF por defecto de libx264 -- mejor calidad,
+// usado cuando el destino final no tiene limite de tamano (Supabase
+// Storage). Con bitrate objetivo, se fuerza para que la suma de tandas de
+// como resultado un archivo final de un tamano predecible.
+function videoCodecArgs(targetVideoBitrateBps: number | null): string[] {
+  if (targetVideoBitrateBps === null) {
+    return ["-c:v", "libx264", "-preset", "veryfast"];
+  }
+  return [
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-b:v",
+    `${targetVideoBitrateBps}`,
+    "-maxrate",
+    `${Math.round(targetVideoBitrateBps * 1.2)}`,
+    "-bufsize",
+    `${Math.round(targetVideoBitrateBps * 2)}`,
+  ];
+}
+
 // Composicion real: descarga cada clip de stock y el audio narrado, procesa
 // los segmentos EN TANDAS chicas (ver BATCH_SIZE) para mantener acotada la
 // memoria de cada ffmpeg sin importar cuantos segmentos tenga el video, y
@@ -299,6 +348,30 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
   }
   if (!content.audio?.storage_key) {
     throw new Error("El timeline no tiene audio narrado todavia");
+  }
+
+  const totalDuration = parseTime(scenes[scenes.length - 1]!.end);
+
+  // El destino de la subida decide si hace falta acotar el bitrate: solo
+  // Cloudinary tiene el limite de 100MB (ver CLOUDINARY_MAX_BYTES) --
+  // Supabase Storage no, asi que en ese caso se prioriza calidad (CRF por
+  // defecto) en vez de forzar un bitrate a mano.
+  const cloudinaryProvider = await getActiveProvider("cloudinary");
+  const cloudName = cloudinaryProvider?.configuration?.cloud_name as string | undefined;
+  const cloudinaryApiKey = cloudinaryProvider?.configuration?.api_key as string | undefined;
+  const usingCloudinary = Boolean(cloudinaryProvider?.api_key && cloudName && cloudinaryApiKey);
+
+  const targetVideoBitrateBps = computeTargetVideoBitrateBps(totalDuration, usingCloudinary);
+  if (targetVideoBitrateBps !== null) {
+    console.log(
+      `[render_video] ajustando bitrate de video a ~${Math.round(targetVideoBitrateBps / 1000)}kbps ` +
+        `para que el final (${Math.round(totalDuration)}s) entre en el limite de 100MB de Cloudinary`
+    );
+    if (targetVideoBitrateBps === MIN_VIDEO_BITRATE_BPS) {
+      console.warn(
+        `[render_video] video muy largo (${Math.round(totalDuration)}s): no entra en 100MB sin bajar del piso de calidad minimo, va a pesar mas de 100MB igual`
+      );
+    }
   }
 
   console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos)`);
@@ -335,10 +408,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         filterComplex,
         "-map",
         "[outv]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
+        ...videoCodecArgs(targetVideoBitrateBps),
         "-y",
         batchOutputPath,
       ]);
@@ -375,17 +445,16 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       "copy",
       "-c:a",
       "aac",
+      "-b:a",
+      `${AUDIO_BITRATE_BPS}`,
       "-shortest",
       "-y",
       outputPath,
     ]);
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);
-    const cloudinaryProvider = await getActiveProvider("cloudinary");
-    const cloudName = cloudinaryProvider?.configuration?.cloud_name as string | undefined;
-    const cloudinaryApiKey = cloudinaryProvider?.configuration?.api_key as string | undefined;
     let publicUrl: string;
-    if (cloudinaryProvider?.api_key && cloudName && cloudinaryApiKey) {
+    if (usingCloudinary && cloudName && cloudinaryApiKey && cloudinaryProvider?.api_key) {
       publicUrl = await uploadRenderToCloudinary(videoProjectId, outputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key);
     } else {
       const outputBuffer = await readFile(outputPath);
@@ -393,7 +462,6 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     }
     console.log(`[render_video] listo: ${publicUrl}`);
 
-    const totalDuration = parseTime(scenes[scenes.length - 1]!.end);
     return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration) };
   } finally {
     // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
