@@ -191,14 +191,14 @@ const PROVIDER_CLIENTS: Record<string, StockClient> = {
 export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput> = {
   name: "search_stock",
   description:
-    "Busca clips de stock en todos los Providers activos de type=stock_video, por keywords, filtrados contra content_policy y stock_library_entries.",
+    "Busca clips de stock en todos los Providers activos de type=stock_video probando `keywords` en cascada (la primera que traiga resultados gana), filtrados contra content_policy y stock_library_entries.",
   parameters: {
     type: "object",
     properties: {
       keywords: {
         type: "array",
         items: { type: "string" },
-        description: "Keywords de busqueda de stock",
+        description: "Keywords de busqueda de stock, ordenadas de mas especifica a mas amplia -- se prueban en orden, cortando en la primera que traiga resultados",
       },
       content_policy: {
         type: "object",
@@ -226,25 +226,6 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
 
     const block = content_policy?.block ?? [];
 
-    let candidates: StockCandidate[];
-    if (usableProviders.length === 0) {
-      candidates = keywords.flatMap((keyword) => mockCandidates(keyword));
-    } else {
-      // allSettled, no all: si un proveedor puntual falla (rate limit,
-      // timeout, key vencida) no tiene que tirar abajo la busqueda entera
-      // -- se sigue con lo que hayan devuelto los demas. Solo si TODOS
-      // fallan, candidates queda vacio (mismo camino que "sin resultados"
-      // que ya manejan los callers).
-      const results = await Promise.allSettled(
-        keywords.flatMap((keyword) =>
-          usableProviders.map((provider) =>
-            PROVIDER_CLIENTS[provider.slug]!(provider.api_key!, keyword, block)
-          )
-        )
-      );
-      candidates = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-    }
-
     const { data: entries, error } = await supabase
       .from("stock_library_entries")
       .select("provider, external_id, decision")
@@ -261,6 +242,36 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
     const preferred = new Set(
       (entries ?? []).filter((e) => e.decision === "PREFERRED").map(key)
     );
+
+    let candidates: StockCandidate[];
+    if (usableProviders.length === 0) {
+      candidates = keywords.length > 0 ? mockCandidates(keywords[0]!) : [];
+    } else {
+      // Cascada (prompt del cliente, Fase 2): `keywords` llega ordenada de
+      // mas especifica a mas amplia (generate_stock_keywords) -- se prueba
+      // cada una contra todos los Providers en paralelo y se corta apenas
+      // una trae al menos un candidato utilizable (no bloqueado), en vez de
+      // buscar las 4 siempre y mezclar todo. Si ninguna keyword trae nada,
+      // candidates queda vacio (mismo camino que "sin resultados" que ya
+      // manejan los callers).
+      candidates = [];
+      for (const keyword of keywords) {
+        // allSettled, no all: si un proveedor puntual falla (rate limit,
+        // timeout, key vencida) no tiene que tirar abajo el intento entero
+        // -- se sigue con lo que hayan devuelto los demas.
+        const results = await Promise.allSettled(
+          usableProviders.map((provider) =>
+            PROVIDER_CLIENTS[provider.slug]!(provider.api_key!, keyword, block)
+          )
+        );
+        const found = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+        const usable = found.filter((c) => !blocked.has(key(c)));
+        if (usable.length > 0) {
+          candidates = usable;
+          break;
+        }
+      }
+    }
 
     candidates = candidates
       .filter((c) => !blocked.has(key(c)))

@@ -19,6 +19,10 @@ import type {
   GenerateStockKeywordsInput,
   GenerateStockKeywordsOutput,
 } from "../tools/generateStockKeywords.tool.js";
+import type {
+  GenerateVisualContextInput,
+  GenerateVisualContextOutput,
+} from "../tools/generateVisualContext.tool.js";
 import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/generateOverlay.tool.js";
 import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
@@ -196,6 +200,45 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // replaceStockSegmentsForScene).
   const usedStockKeys = new Set<string>();
 
+  // Contexto visual global (Fase 1 del prompt del cliente de stock, ver
+  // generate_visual_context): UNA sola vez por video, no por escena, para
+  // que las 4 queries de cada escena (Fase 2, generate_stock_keywords) sean
+  // coherentes entre si -- misma epoca, misma ubicacion, mismo tono. Solo
+  // hace falta si alguna escena va a buscar stock ("stock"/"mixed" -- "ai"
+  // no usa keywords de stock en absoluto).
+  const sceneKeywords = new Map<string, string[]>();
+  if (visualSource !== "ai" && sceneRows.length > 0) {
+    const contextResult = await runTool<GenerateVisualContextInput, GenerateVisualContextOutput>(
+      "generate_visual_context",
+      { full_text: scriptText, ...(videoTopic ? { video_topic: videoTopic } : {}) },
+      toolCtx
+    );
+
+    // Generacion de las 4 queries POR ESCENA en orden SECUENCIAL -- a
+    // diferencia del resto del loop (que corre en paralelo con
+    // SCENE_CONCURRENCY), la regla del cliente de "no repetir queries entre
+    // bloques adyacentes" necesita conocer que devolvio la escena anterior
+    // antes de pedir la siguiente. Es solo texto corto por LLM, no busqueda
+    // de stock, asi que el costo de serializar este paso puntual es bajo.
+    let previousQueries: string[] | undefined;
+    for (const scene of sceneRows) {
+      const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
+      const keywordsResult = await runTool<GenerateStockKeywordsInput, GenerateStockKeywordsOutput>(
+        "generate_stock_keywords",
+        {
+          scene_text: sceneText,
+          ...(videoTopic ? { video_topic: videoTopic } : {}),
+          ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+          visual_context: contextResult.visual_context,
+          ...(previousQueries ? { previous_scene_queries: previousQueries } : {}),
+        },
+        toolCtx
+      );
+      sceneKeywords.set(scene.id, keywordsResult.keywords);
+      previousQueries = keywordsResult.keywords;
+    }
+  }
+
   // "mixed": si el mejor candidato de stock cubre menos de esta fraccion de
   // la duracion de la escena (o no hay ninguno), se genera el clip con IA
   // para esa escena en vez de rellenar con varios clips cortitos.
@@ -255,22 +298,15 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       await generateAiVisual(scene.id, sceneText, minDurationSeconds);
     } else {
       // LEEME (seccion 2): "OpenAI es el director visual", decide que
-      // buscar en stock -- reemplaza al heuristico mecanico (deriveKeywords)
-      // que solo agarraba las primeras palabras largas del texto tal cual.
-      const keywordsResult = await runTool<GenerateStockKeywordsInput, GenerateStockKeywordsOutput>(
-        "generate_stock_keywords",
-        {
-          scene_text: sceneText,
-          ...(videoTopic ? { video_topic: videoTopic } : {}),
-          ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-        },
-        toolCtx
-      );
+      // buscar en stock -- las keywords (4 por escena, en cascada) ya se
+      // generaron arriba en orden secuencial, con contexto global y sin
+      // repetir la escena anterior (ver sceneKeywords mas arriba).
+      const keywords = sceneKeywords.get(scene.id) ?? [];
 
       const stock = await runTool<SearchStockInput, SearchStockOutput>(
         "search_stock",
         {
-          keywords: keywordsResult.keywords,
+          keywords,
           ...(contentPolicy ? { content_policy: contentPolicy } : {}),
           min_duration_seconds: minDurationSeconds,
         },

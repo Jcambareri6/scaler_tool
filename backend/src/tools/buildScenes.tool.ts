@@ -22,91 +22,161 @@ export interface BuildScenesOutput {
 // transcripcion (Whisper), no adivinadas por el guionista al mismo tiempo
 // que escribe el texto -- asi el limite de cada escena cae exactamente
 // donde se dice esa parte en la voz real, en vez de una aproximacion.
-const TARGET_SCENE_SECONDS = 35;
-const MAX_SCENE_SECONDS = 60;
+//
+// Umbrales pedidos por el cliente (ver backend/claude/PROMPT PARA AGRUPAR
+// TIMESTAMPS EN BLOQUES DE ESCENA CORTOS_.docx / PLAN_escenas_cortas_y_
+// stock_contexto_global.md): escenas mucho mas cortas que antes (35-60s)
+// para video dinamico con cambios visuales frecuentes.
+const TARGET_MIN_SECONDS = 5;
+const MAX_SCENE_SECONDS = 12;
+const MIN_SCENE_SECONDS = 4;
+
+// Umbral de palabras a cada lado de una coma para tratarla como punto de
+// corte valido (aproxima "dos frases largas e independientes" del prompt
+// del cliente -- no hay forma deterministica de "entender" la frase, asi
+// que se usa longitud como proxy: una coma de enumeracion tipica tiene
+// fragmentos cortos de un lado o del otro).
+const MIN_COMMA_CLAUSE_WORDS = 6;
 
 function wordCount(text: string): number {
   return text.trim() ? text.trim().split(/\s+/).length : 0;
 }
 
-// Split deterministico por oraciones -- no hace falta un LLM para esto, y
-// mantenerlo mecanico evita otro punto donde el texto de la escena pueda
-// desviarse del full_text real.
-function splitIntoSentences(fullText: string): string[] {
-  const sentences: string[] = [];
-  const regex = /[^.!?]+[.!?]+(?:\s+|$)/g;
-  let match: RegExpExecArray | null;
-  let lastIndex = 0;
-  while ((match = regex.exec(fullText)) !== null) {
-    sentences.push(match[0].trim());
-    lastIndex = regex.lastIndex;
-  }
-  const rest = fullText.slice(lastIndex).trim();
-  if (rest) sentences.push(rest);
-  return sentences.filter(Boolean);
+interface RawFragment {
+  text: string;
+  term: string;
+  kind: "strong" | "colon" | "comma" | "none";
 }
 
-interface AlignedSentence {
+// Tokeniza el guion en fragmentos atomicos, cada uno terminado en como
+// maximo un signo de puntuacion (una corrida de ".","!","?" cuenta como uno
+// solo, asi "..." no se parte en tres). El texto se preserva tal cual
+// (incluye espacios) para poder reconstruir el original sin tocar una sola
+// palabra.
+function tokenizeFragments(fullText: string): RawFragment[] {
+  const fragments: RawFragment[] = [];
+  const regex = /([^.!?;:,]+)([.!?]+|[;:,])?/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(fullText)) !== null) {
+    const text = match[1] ?? "";
+    if (!text) continue;
+    const term = match[2] ?? "";
+    let kind: RawFragment["kind"] = "none";
+    if (term === ":") kind = "colon";
+    else if (term === ",") kind = "comma";
+    else if (term) kind = "strong";
+    fragments.push({ text, term, kind });
+  }
+  return fragments;
+}
+
+// Agrupa los fragmentos atomicos en "clausulas": unidades de texto que
+// SIEMPRE terminan en un punto de corte valido segun las reglas del
+// cliente -- "." "!" "?" "..." ";" y ":" son siempre validos: "," solo si
+// separa dos fragmentos "largos" (ver MIN_COMMA_CLAUSE_WORDS). Nunca
+// modifica, agrega ni reordena texto -- solo decide donde es valido cortar.
+function splitIntoClauses(fullText: string): string[] {
+  const fragments = tokenizeFragments(fullText);
+  const clauses: string[] = [];
+  let pendingParts: string[] = [];
+
+  for (let i = 0; i < fragments.length; i++) {
+    const fragment = fragments[i]!;
+    pendingParts.push(fragment.text + fragment.term);
+
+    let isValidCut: boolean;
+    if (fragment.kind === "comma") {
+      const before = wordCount(pendingParts.join(""));
+      const after = wordCount(fragments[i + 1]?.text ?? "");
+      isValidCut = before >= MIN_COMMA_CLAUSE_WORDS && after >= MIN_COMMA_CLAUSE_WORDS;
+    } else {
+      isValidCut = true;
+    }
+
+    if (isValidCut) {
+      const clauseText = pendingParts.join("").trim();
+      if (clauseText) clauses.push(clauseText);
+      pendingParts = [];
+    }
+  }
+
+  if (pendingParts.length > 0) {
+    const clauseText = pendingParts.join("").trim();
+    if (clauseText) clauses.push(clauseText);
+  }
+
+  return clauses;
+}
+
+interface AlignedClause {
   text: string;
   start: number;
   end: number;
 }
 
-// Las oraciones concatenadas reconstruyen full_text en orden, igual que las
+// Las clausulas concatenadas reconstruyen full_text en orden, igual que las
 // escenas lo hacian antes -- alcanza con consumir la lista de palabras
 // transcriptas de forma secuencial (mismo criterio que
-// buildTimeline.tool.ts::alignScenesToWords, pero a nivel oracion).
-function alignSentencesToWords(sentences: string[], words: TranscribedWord[]): AlignedSentence[] {
-  const aligned: AlignedSentence[] = [];
+// buildTimeline.tool.ts::alignScenesToWords, pero a nivel clausula).
+function alignClausesToWords(clauses: string[], words: TranscribedWord[]): AlignedClause[] {
+  const aligned: AlignedClause[] = [];
   let wordIndex = 0;
 
-  for (const sentence of sentences) {
-    const count = wordCount(sentence);
+  for (const clause of clauses) {
+    const count = wordCount(clause);
     if (count === 0) continue;
 
     const slice = words.slice(wordIndex, wordIndex + count);
     if (slice.length === 0) break;
 
-    aligned.push({ text: sentence, start: slice[0]!.start, end: slice[slice.length - 1]!.end });
+    aligned.push({ text: clause, start: slice[0]!.start, end: slice[slice.length - 1]!.end });
     wordIndex += slice.length;
   }
 
   return aligned;
 }
 
-// Agrupa oraciones consecutivas en escenas apuntando a TARGET_SCENE_SECONDS
-// de narracion real, sin pasar MAX_SCENE_SECONDS -- nunca corta a mitad de
-// una oracion.
-function groupIntoScenes(sentences: AlignedSentence[]): { text: string; start: number; end: number }[] {
+// Agrupa clausulas consecutivas en escenas: cierra el bloque apenas la
+// duracion acumulada llega a TARGET_MIN_SECONDS en un punto de corte valido
+// (las clausulas ya garantizan eso). Si una sola clausula ya supera
+// MAX_SCENE_SECONDS por si sola (oracion larga sin comas/`;`/`:` internos
+// validos), queda como bloque individual sin cortarla -- la regla de "nunca
+// cortar a mitad de idea" tiene prioridad sobre el tope de duracion.
+function groupIntoScenes(clauses: AlignedClause[]): { text: string; start: number; end: number }[] {
   const scenes: { text: string; start: number; end: number }[] = [];
-  let current: AlignedSentence[] = [];
+  let current: AlignedClause[] = [];
 
-  for (const sentence of sentences) {
-    if (current.length > 0) {
-      const wouldBeDuration = sentence.end - current[0]!.start;
-      if (wouldBeDuration > MAX_SCENE_SECONDS) {
-        scenes.push(commitScene(current));
-        current = [];
-      }
-    }
-
-    current.push(sentence);
-    const currentDuration = sentence.end - current[0]!.start;
-    if (currentDuration >= TARGET_SCENE_SECONDS) {
+  for (const clause of clauses) {
+    current.push(clause);
+    const duration = clause.end - current[0]!.start;
+    if (duration >= TARGET_MIN_SECONDS) {
       scenes.push(commitScene(current));
       current = [];
     }
   }
 
-  if (current.length > 0) scenes.push(commitScene(current));
+  if (current.length > 0) {
+    const leftoverDuration = current[current.length - 1]!.end - current[0]!.start;
+    // El ultimo resto del guion no tiene "siguiente punto de corte" al cual
+    // seguir acumulando (regla 3) -- si queda por debajo del piso, se
+    // fusiona con la escena anterior en vez de dejar un bloque invalido.
+    if (leftoverDuration < MIN_SCENE_SECONDS && scenes.length > 0) {
+      const last = scenes[scenes.length - 1]!;
+      last.text = `${last.text} ${current.map((c) => c.text).join(" ")}`;
+      last.end = current[current.length - 1]!.end;
+    } else {
+      scenes.push(commitScene(current));
+    }
+  }
+
   return scenes;
 }
 
-function commitScene(sentences: AlignedSentence[]): { text: string; start: number; end: number } {
+function commitScene(clauses: AlignedClause[]): { text: string; start: number; end: number } {
   return {
-    text: sentences.map((s) => s.text).join(" "),
-    start: sentences[0]!.start,
-    end: sentences[sentences.length - 1]!.end,
+    text: clauses.map((c) => c.text).join(" "),
+    start: clauses[0]!.start,
+    end: clauses[clauses.length - 1]!.end,
   };
 }
 
@@ -162,9 +232,9 @@ export const buildScenesTool: ToolDefinition<BuildScenesInput, BuildScenesOutput
       );
     }
 
-    const sentences = splitIntoSentences(fullText);
-    const alignedSentences = alignSentencesToWords(sentences, words);
-    const grouped = groupIntoScenes(alignedSentences);
+    const clauses = splitIntoClauses(fullText);
+    const alignedClauses = alignClausesToWords(clauses, words);
+    const grouped = groupIntoScenes(alignedClauses);
 
     if (grouped.length === 0) {
       throw new Error("No se pudieron armar escenas a partir de la transcripcion");
