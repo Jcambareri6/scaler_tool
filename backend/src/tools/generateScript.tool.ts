@@ -18,6 +18,14 @@ const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5";
 // streaming para no pegar contra el timeout HTTP de una respuesta no-stream.
 const MAX_OUTPUT_TOKENS = 16000;
 
+// Claude no cuenta caracteres mientras genera -- "quiero 30000 caracteres"
+// es una referencia aproximada, no un limite medible, y el modelo suele
+// parar antes en cuanto "siente" que cubrio el contenido. Si el resultado
+// queda por debajo de este umbral respecto de approx_chars, se le pide que
+// continue el guion (no que lo reescriba) hasta acercarse al objetivo.
+const MIN_ACCEPTABLE_LENGTH_RATIO = 0.9;
+const MAX_CONTINUATION_ATTEMPTS = 3;
+
 const RETURN_SCRIPT_TOOL_NAME = "return_script";
 
 export type ScriptProvider = "openai" | "anthropic";
@@ -159,7 +167,8 @@ function parseGeneratedScript(raw: unknown): GeneratedScriptPayload {
 
 async function generateWithAnthropic(
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  targetChars?: number
 ): Promise<GeneratedScriptPayload> {
   const provider = await getActiveProvider("anthropic");
   if (!provider || !provider.api_key) {
@@ -168,24 +177,65 @@ async function generateWithAnthropic(
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_ANTHROPIC_MODEL;
 
   const client = new Anthropic({ apiKey: provider.api_key });
-  const stream = client.messages.stream({
-    model,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    system: systemPrompt,
-    tools: [returnScriptTool],
-    tool_choice: { type: "tool", name: RETURN_SCRIPT_TOOL_NAME },
-    messages: [{ role: "user", content: userPrompt }],
-  });
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: userPrompt }];
 
-  const response = await stream.finalMessage();
-  const toolUse = response.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-  );
-  if (!toolUse) {
-    throw new Error("Claude no devolvio el guion generado");
+  let title = "";
+  let fullText = "";
+
+  for (let attempt = 0; attempt <= MAX_CONTINUATION_ATTEMPTS; attempt++) {
+    const stream = client.messages.stream({
+      model,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      system: systemPrompt,
+      tools: [returnScriptTool],
+      tool_choice: { type: "tool", name: RETURN_SCRIPT_TOOL_NAME },
+      messages,
+    });
+
+    const response = await stream.finalMessage();
+    const toolUse = response.content.find(
+      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+    );
+    if (!toolUse) {
+      throw new Error("Claude no devolvio el guion generado");
+    }
+
+    const parsed = parseGeneratedScript(toolUse.input);
+    if (attempt === 0) {
+      title = parsed.title;
+      fullText = parsed.full_text;
+    } else {
+      // En las continuaciones "full_text" es solo el fragmento nuevo --
+      // se pego al final del guion acumulado (ver instruccion de continuacion).
+      fullText = `${fullText.trimEnd()}\n\n${parsed.full_text.trimStart()}`;
+    }
+
+    if (!targetChars || fullText.length >= targetChars * MIN_ACCEPTABLE_LENGTH_RATIO) {
+      break;
+    }
+    if (attempt === MAX_CONTINUATION_ATTEMPTS) {
+      break;
+    }
+
+    const missingChars = targetChars - fullText.length;
+    messages.push({ role: "assistant", content: response.content });
+    messages.push({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: "Recibido.",
+        },
+        {
+          type: "text",
+          text: `El guion lleva ${fullText.length} caracteres y el objetivo es ${targetChars}. Continua el guion EXACTAMENTE desde donde termino el texto anterior -- no repitas ni resumas nada de lo ya escrito -- manteniendo el mismo tono y estilo, hasta sumar aproximadamente ${missingChars} caracteres mas. En "full_text" devolve SOLO el fragmento nuevo de continuacion (no el guion completo). Si la historia ya llega a un cierre narrativo natural, priorizalo por sobre forzar mas texto.`,
+        },
+      ],
+    });
   }
 
-  return parseGeneratedScript(toolUse.input);
+  return { title, full_text: fullText };
 }
 
 async function generateWithOpenAI(
@@ -283,6 +333,7 @@ export const generateScriptTool: ToolDefinition<
 
     let systemPrompt = `${BASE_RULES}\n\n${provider === "openai" ? OPENAI_FORMAT_INSTRUCTIONS : ANTHROPIC_FORMAT_INSTRUCTIONS}`;
     let userPrompt = buildUserPrompt(idea, target_duration);
+    let targetChars: number | undefined;
 
     if (script_style_id) {
       const style = await getOwnedScriptStyle(script_style_id, ctx.userId);
@@ -298,13 +349,14 @@ export const generateScriptTool: ToolDefinition<
       const defaultApproxChars = computeDefaultApproxChars(
         (style.reference_scripts as string[] | null) ?? []
       );
+      targetChars = input.approx_chars ?? defaultApproxChars;
       userPrompt = buildStyledUserPrompt(input, defaultApproxChars);
     }
 
     const generated =
       provider === "openai"
         ? await generateWithOpenAI(systemPrompt, userPrompt)
-        : await generateWithAnthropic(systemPrompt, userPrompt);
+        : await generateWithAnthropic(systemPrompt, userPrompt, targetChars);
 
     const content: Record<string, unknown> = {
       title: generated.title,
