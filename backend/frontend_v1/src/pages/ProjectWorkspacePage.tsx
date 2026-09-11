@@ -4,10 +4,11 @@ import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
 import ScriptPanel from "@/features/script/ScriptPanel";
 import ScenesPanel from "@/features/scenes/ScenesPanel";
+import AudioPanel from "@/features/audio/AudioPanel";
 import PreviewPanel from "@/features/preview/PreviewPanel";
 import type { VideoProject } from "@/types";
 
-type Tab = "script" | "scenes" | "preview";
+type Tab = "script" | "scenes" | "audio" | "preview";
 
 const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
   {
@@ -19,6 +20,17 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
         <polyline points="14 2 14 8 20 8" />
         <line x1="16" y1="13" x2="8" y2="13" />
         <line x1="16" y1="17" x2="8" y2="17" />
+      </svg>
+    ),
+  },
+  {
+    id: "audio",
+    label: "Audio",
+    icon: (
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
       </svg>
     ),
   },
@@ -143,6 +155,7 @@ export default function ProjectWorkspacePage() {
       {/* Panel */}
       <div className="flex-1 overflow-hidden">
         {activeTab === "script" && <ScriptPanel projectId={projectId} project={project} />}
+        {activeTab === "audio" && <AudioPanel projectId={projectId} project={project} />}
         {activeTab === "scenes" && <ScenesPanel projectId={projectId} />}
         {activeTab === "preview" && <PreviewPanel projectId={projectId} />}
       </div>

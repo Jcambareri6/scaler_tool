@@ -11,7 +11,7 @@ function sanitizeProvider(provider: Provider) {
 
 export async function createProvider(req: Request, res: Response) {
   try {
-    const { name, slug, api_key, configuration, is_active } = req.body;
+    const { name, slug, type, api_key, configuration, is_active } = req.body;
 
     if (typeof name !== "string" || name.trim() === "") {
       return res.status(400).json({ error: "name is required" });
@@ -25,6 +25,7 @@ export async function createProvider(req: Request, res: Response) {
       .insert({
         name,
         slug,
+        type: type ?? null,
         api_key: api_key ?? null,
         configuration: configuration ?? {},
         ...(is_active !== undefined ? { is_active } : {}),
@@ -85,11 +86,12 @@ export async function getProvider(req: Request, res: Response) {
 export async function updateProvider(req: Request, res: Response) {
   try {
     const { provider_id } = req.params;
-    const { name, slug, api_key, configuration, is_active } = req.body;
+    const { name, slug, type, api_key, configuration, is_active } = req.body;
 
     const update: Record<string, unknown> = {};
     if (name !== undefined) update.name = name;
     if (slug !== undefined) update.slug = slug;
+    if (type !== undefined) update.type = type;
     if (api_key !== undefined) update.api_key = api_key;
     if (configuration !== undefined) update.configuration = configuration;
     if (is_active !== undefined) update.is_active = is_active;

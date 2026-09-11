@@ -8,6 +8,7 @@ interface ProjectRow {
   status: string;
   description: string | null;
   script_style_id: string | null;
+  voice_id: string | null;
   visual_source?: string | null;
   created_at: string;
   updated_at: string;
@@ -33,6 +34,7 @@ export function mapProject(row: ProjectRow): VideoProject {
     status: toProjectStatus(row.status),
     description: row.description ?? undefined,
     scriptStyleId: row.script_style_id ?? undefined,
+    voiceId: row.voice_id ?? undefined,
     visualSource: toVisualSource(row.visual_source),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

@@ -40,6 +40,7 @@ export const projectsService = {
     // explicito, no se omite el campo (a diferencia del resto, donde
     // undefined = "no tocar este campo").
     if (updates.scriptStyleId !== undefined) body.script_style_id = updates.scriptStyleId || null;
+    if (updates.voiceId !== undefined) body.voice_id = updates.voiceId || null;
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
 
     try {
@@ -226,5 +227,47 @@ export const projectsService = {
     const script = await this.getScript(projectId);
     if (!script) throw new Error("generate_script no devolvio un guion");
     return script;
+  },
+
+  // Voces disponibles en el provider TTS activo (ai33.pro). El endpoint
+  // generico de tools envuelve la salida en { output } (ver
+  // tool.service.ts::executeTool) -- no devuelve el resultado de la Tool
+  // directo en la raiz.
+  async listVoices(): Promise<{ voiceId: string; name: string; engine: string }[]> {
+    const { output } = await api.post<{
+      output: { voices: { voice_id: string; name: string; engine: string }[] };
+    }>(`/tools/list_voices/execute`, { input: {} });
+    return output.voices.map((v) => ({ voiceId: v.voice_id, name: v.name, engine: v.engine }));
+  },
+
+  // Clip corto para escuchar como suena una voz antes de comprometerse a
+  // generar la narracion completa (que puede tardar minutos).
+  async previewVoice(
+    voiceId: string,
+    sampleText?: string
+  ): Promise<{ audioUrl: string; durationSeconds: number }> {
+    const { output } = await api.post<{
+      output: { audio_url: string; duration_seconds: number };
+    }>(`/tools/preview_voice/execute`, {
+      input: {
+        voice_id: voiceId,
+        ...(sampleText?.trim() ? { sample_text: sampleText.trim() } : {}),
+      },
+    });
+    return { audioUrl: output.audio_url, durationSeconds: output.duration_seconds };
+  },
+
+  // Narracion completa del guion del proyecto, via la Tool generate_voice
+  // (mismo path que usa el pipeline determinístico) -- despues relee el
+  // Asset AUDIO persistido, mismo patron que generateScript.
+  async generateVoice(projectId: string, voiceId: string): Promise<Asset> {
+    const script = await this.getScript(projectId);
+    if (!script) throw new Error("El proyecto no tiene guion todavia");
+    await api.post(`/tools/generate_voice/execute`, {
+      input: { script_id: script.id, text: script.content, voice_id: voiceId },
+    });
+    const asset = await this.getAudioAsset(projectId);
+    if (!asset) throw new Error("generate_voice no devolvio un audio");
+    return asset;
   },
 };

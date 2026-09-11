@@ -164,6 +164,13 @@ body {
   border-color: rgba(124, 106, 255, 0.5);
   box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.12);
 }
+/* El popup nativo de <select> ignora el fondo glass del control cerrado
+   -- se fuerza fondo/color oscuro en las <option> para que no quede texto
+   claro sobre blanco al abrir la lista. */
+.input-glass option {
+  background: var(--background);
+  color: var(--foreground);
+}
 
 /* Entrada suave para paneles/formularios (ej: LoginPage) */
 @keyframes fadeInUp {

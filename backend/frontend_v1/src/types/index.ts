@@ -15,6 +15,7 @@ export interface VideoProject {
   updatedAt: string;
   thumbnailUrl?: string;
   scriptStyleId?: string;
+  voiceId?: string;
   visualSource: VisualSource;
 }
 

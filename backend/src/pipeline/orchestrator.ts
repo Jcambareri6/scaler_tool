@@ -118,10 +118,15 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
 
-  // 1. Voz
+  // 1. Voz -- respeta la voz elegida en el tab Audio (project.voice_id); si
+  // no hay ninguna elegida, generate_voice cae a su DEFAULT_VOICE_ID.
   const voice = await runTool<GenerateVoiceInput, GenerateVoiceOutput>(
     "generate_voice",
-    { script_id: script.id, text: scriptText },
+    {
+      script_id: script.id,
+      text: scriptText,
+      ...(project.voice_id ? { voice_id: project.voice_id as string } : {}),
+    },
     toolCtx
   );
   const { data: audioAsset, error: audioAssetError } = await supabase

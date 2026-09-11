@@ -38,6 +38,7 @@ export interface Project {
   status: string;
   content_policy: ContentPolicy | null;
   script_style_id: string | null;
+  voice_id: string | null;
   visual_source: VisualSource;
   created_at: string;
   updated_at: string;
