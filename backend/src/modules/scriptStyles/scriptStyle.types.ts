@@ -4,7 +4,8 @@ export type { ScriptStyle };
 
 export interface CreateScriptStyleInput {
   name: string;
-  reference_scripts: string[];
+  reference_scripts?: string[];
+  master_prompt?: string;
 }
 
 export interface UpdateScriptStyleInput {

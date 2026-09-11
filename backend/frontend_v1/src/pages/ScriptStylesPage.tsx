@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { scriptStylesService } from "@/services/scriptStyles.service";
 import { filesService } from "@/services/files.service";
 import type { ScriptStyle } from "@/types";
@@ -79,6 +79,33 @@ function ReferenceScriptSlot({
   );
 }
 
+type CreateMode = "ai" | "manual";
+
+function ModeTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+      style={
+        active
+          ? { background: "var(--primary)", color: "var(--primary-foreground, #fff)" }
+          : { background: "rgba(255,255,255,0.04)", color: "var(--muted-foreground)" }
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
 function CreateStyleModal({
   onCreated,
   onClose,
@@ -86,15 +113,58 @@ function CreateStyleModal({
   onCreated: (style: ScriptStyle) => void;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<CreateMode>("ai");
   const [name, setName] = useState("");
   const [scripts, setScripts] = useState(["", "", ""]);
+  const [masterPrompt, setMasterPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+
+  const handleFileSelected = async (file: File | null) => {
+    if (!file) return;
+    setFileError(null);
+    setExtracting(true);
+    try {
+      const text = await filesService.extractText(file);
+      setMasterPrompt(text);
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "No se pudo leer el archivo");
+    } finally {
+      setExtracting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   const handleCreate = async () => {
+    if (!name.trim()) {
+      setError("Completá el nombre del estilo");
+      return;
+    }
+
+    if (mode === "manual") {
+      if (!masterPrompt.trim()) {
+        setError("Pegá o subí el prompt maestro");
+        return;
+      }
+      setCreating(true);
+      setError(null);
+      try {
+        const created = await scriptStylesService.createWithMasterPrompt(name.trim(), masterPrompt.trim());
+        onCreated(created);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo crear el estilo");
+      } finally {
+        setCreating(false);
+      }
+      return;
+    }
+
     const referenceScripts = scripts.map((s) => s.trim()).filter(Boolean);
-    if (!name.trim() || referenceScripts.length === 0) {
-      setError("Completá el nombre y al menos un guion de referencia");
+    if (referenceScripts.length === 0) {
+      setError("Completá al menos un guion de referencia");
       return;
     }
     setCreating(true);
@@ -130,18 +200,68 @@ function CreateStyleModal({
           placeholder="Nombre del canal/cliente"
           className="input-glass w-full rounded-lg px-3 py-2 text-sm"
         />
-        {scripts.map((s, i) => (
-          <ReferenceScriptSlot
-            key={i}
-            index={i}
-            value={s}
-            onChange={(text) => {
-              const next = [...scripts];
-              next[i] = text;
-              setScripts(next);
-            }}
-          />
-        ))}
+
+        <div className="flex gap-1.5">
+          <ModeTab active={mode === "ai"} onClick={() => setMode("ai")}>
+            Generar con IA desde guiones
+          </ModeTab>
+          <ModeTab active={mode === "manual"} onClick={() => setMode("manual")}>
+            Cargar prompt maestro propio
+          </ModeTab>
+        </div>
+
+        {mode === "ai" ? (
+          scripts.map((s, i) => (
+            <ReferenceScriptSlot
+              key={i}
+              index={i}
+              value={s}
+              onChange={(text) => {
+                const next = [...scripts];
+                next[i] = text;
+                setScripts(next);
+              }}
+            />
+          ))
+        ) : (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+                Prompt maestro
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.docx,.pdf"
+                  className="hidden"
+                  onChange={(e) => handleFileSelected(e.target.files?.[0] ?? null)}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={extracting}
+                  className="text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
+                  style={{ color: "var(--primary)" }}
+                >
+                  {extracting ? "Leyendo archivo..." : "Adjuntar archivo (.txt, .docx, .pdf)"}
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={masterPrompt}
+              onChange={(e) => setMasterPrompt(e.target.value)}
+              placeholder="Pegá el prompt maestro ya escrito, o adjuntá un archivo (.txt, .docx, .pdf)"
+              rows={10}
+              className="input-glass w-full rounded-lg px-3 py-2 text-xs font-mono resize-none"
+            />
+            {fileError && <p className="text-[11px]" style={{ color: "#f87171" }}>{fileError}</p>}
+            <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+              Este estilo queda listo al instante, sin pasar por el análisis de IA.
+            </p>
+          </div>
+        )}
+
         {error && <p className="text-xs" style={{ color: "#f87171" }}>{error}</p>}
         <div className="flex gap-2">
           <button
@@ -152,10 +272,12 @@ function CreateStyleModal({
             {creating ? (
               <>
                 <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Analizando...
+                {mode === "ai" ? "Analizando..." : "Creando..."}
               </>
-            ) : (
+            ) : mode === "ai" ? (
               "Analizar y crear"
+            ) : (
+              "Crear estilo"
             )}
           </button>
           <button
@@ -212,7 +334,9 @@ function StyleCard({ style, onDelete }: { style: ScriptStyle; onDelete: (id: str
         </span>
       </div>
       <p className="text-xs mb-4" style={{ color: "var(--muted-foreground)" }}>
-        {style.referenceScripts.length} guion(es) de referencia analizados
+        {style.referenceScripts.length > 0
+          ? `${style.referenceScripts.length} guion(es) de referencia analizados`
+          : "Prompt maestro cargado manualmente"}
       </p>
       {style.error && (
         <p className="text-xs mb-3" style={{ color: "#f87171" }}>{style.error}</p>

@@ -21,6 +21,17 @@ export const scriptStylesService = {
     return mapScriptStyle(row);
   },
 
+  // Crea el estilo con un prompt maestro ya escrito/pegado por el usuario --
+  // queda READY directo, sin pasar por el analisis por IA de guiones de
+  // referencia (generate_script_style).
+  async createWithMasterPrompt(name: string, masterPrompt: string): Promise<ScriptStyle> {
+    const row = await api.post<Parameters<typeof mapScriptStyle>[0]>("/script-styles", {
+      name,
+      master_prompt: masterPrompt,
+    });
+    return mapScriptStyle(row);
+  },
+
   // Corre el analisis (generate_script_style) y devuelve el estilo con
   // master_prompt/status ya actualizados -- puede tardar unos segundos
   // (llamada real a OpenAI).

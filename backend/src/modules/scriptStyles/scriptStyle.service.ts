@@ -6,25 +6,36 @@ import { runTool } from "../../tools/index.js";
 export async function createScriptStyle(req: Request, res: Response) {
   try {
     const userId = req.user!.id;
-    const { name, reference_scripts } = req.body as {
+    const { name, reference_scripts, master_prompt } = req.body as {
       name?: string;
       reference_scripts?: string[];
+      master_prompt?: string;
     };
 
     if (typeof name !== "string" || name.trim() === "") {
       return res.status(400).json({ error: "name is required" });
     }
-    if (!Array.isArray(reference_scripts) || reference_scripts.length === 0) {
-      return res.status(400).json({ error: "reference_scripts must be a non-empty array" });
+
+    const hasMasterPrompt = typeof master_prompt === "string" && master_prompt.trim() !== "";
+    const scripts = Array.isArray(reference_scripts) ? reference_scripts : [];
+
+    if (!hasMasterPrompt && scripts.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "reference_scripts must be a non-empty array, or provide master_prompt directly" });
     }
 
+    // Si el usuario carga el prompt maestro a mano no hace falta pasar por
+    // generate_script_style (analisis por IA de guiones de referencia): el
+    // estilo queda READY de una.
     const { data, error } = await supabase
       .from("script_styles")
       .insert({
         user_id: userId,
         name,
-        reference_scripts,
-        status: "PENDING",
+        reference_scripts: scripts,
+        master_prompt: hasMasterPrompt ? master_prompt.trim() : null,
+        status: hasMasterPrompt ? "READY" : "PENDING",
       })
       .select()
       .single();
