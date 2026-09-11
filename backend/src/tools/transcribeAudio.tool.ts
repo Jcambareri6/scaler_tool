@@ -1,3 +1,8 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createRequire } from "module";
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
@@ -6,9 +11,18 @@ import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 
+// ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts.
+const require = createRequire(import.meta.url);
+const ffmpegPath = require("ffmpeg-static") as string | null;
+
 // Whisper transcribe un audio completo (varios minutos) en una sola
 // request no-stream -- mas lento que una llamada de chat corta.
 const WHISPER_TIMEOUT_MS = 3 * 60 * 1000;
+
+// Limite real de /v1/audio/transcriptions es 26214400 bytes (25MB) -- se
+// deja margen de seguridad porque el tamaño final tras re-encodear no es
+// exacto.
+const WHISPER_MAX_BYTES = 24 * 1024 * 1024;
 
 export interface TranscribeAudioInput {
   asset_id: string;
@@ -40,6 +54,43 @@ export interface TranscribeAudioOutput {
 
 const OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions";
 
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
+      return;
+    }
+    const proc = spawn(ffmpegPath, args);
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg salio con codigo ${code}: ${stderr.slice(-2000)}`));
+    });
+  });
+}
+
+// Los guiones largos (generate_script con approx_chars alto) producen
+// narraciones que pueden superar el limite de 25MB de Whisper -- ai33.pro
+// no da control sobre el bitrate de salida del TTS, asi que se re-encodea
+// aca a 16kHz mono (la frecuencia interna que usa Whisper igual, sin
+// perdida de calidad de transcripcion) antes de mandarlo, si hace falta.
+async function compressForWhisper(buffer: Buffer): Promise<Buffer> {
+  const workDir = await mkdtemp(path.join(tmpdir(), "skaler-whisper-"));
+  const inputPath = path.join(workDir, "input.mp3");
+  const outputPath = path.join(workDir, "output.mp3");
+  try {
+    await writeFile(inputPath, buffer);
+    await runFfmpeg(["-y", "-i", inputPath, "-ar", "16000", "-ac", "1", "-b:a", "64k", outputPath]);
+    return Buffer.from(await readFile(outputPath));
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
 // Whisper no es un servicio aparte -- es el modelo de transcripcion de
 // OpenAI (endpoint /v1/audio/transcriptions), asi que reusa el mismo
 // Provider "openai" que ya usan generate_script/el Agent en vez de pedir
@@ -52,11 +103,21 @@ async function transcribeWithOpenAI(
   if (!audioResponse.ok) {
     throw new Error(`No se pudo descargar el audio a transcribir (${audioResponse.status})`);
   }
-  const audioBlob = await audioResponse.blob();
-  const filename = storageKey.split("/").pop()?.split("?")[0] || "audio.mp3";
+  let audioBuffer: Buffer = Buffer.from(await audioResponse.arrayBuffer());
+  let filename = storageKey.split("/").pop()?.split("?")[0] || "audio.mp3";
+
+  if (audioBuffer.byteLength > WHISPER_MAX_BYTES) {
+    audioBuffer = await compressForWhisper(audioBuffer);
+    filename = "compressed.mp3";
+    if (audioBuffer.byteLength > WHISPER_MAX_BYTES) {
+      throw new Error(
+        `El audio sigue superando el limite de Whisper (25MB) despues de comprimirlo (${audioBuffer.byteLength} bytes) -- el guion es demasiado largo para transcribirlo en una sola pasada`
+      );
+    }
+  }
 
   const formData = new FormData();
-  formData.append("file", audioBlob, filename);
+  formData.append("file", new Blob([new Uint8Array(audioBuffer)]), filename);
   formData.append("model", "whisper-1");
   formData.append("response_format", "verbose_json");
   formData.append("timestamp_granularities[]", "word");

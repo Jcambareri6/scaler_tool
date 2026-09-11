@@ -29,7 +29,13 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const [selectedStyleId, setSelectedStyleId] = useState(project.scriptStyleId ?? "");
   const [provider, setProvider] = useState<"anthropic" | "openai">("anthropic");
   const [thumbnailDescription, setThumbnailDescription] = useState("");
-  const [approxChars, setApproxChars] = useState("");
+  // Se guarda como numero (no el string tipeado) para no depender de
+  // parsear el formato que haya usado el usuario ("30.000", "30,000",
+  // "30 000" son todos formas validas de escribir treinta mil) -- el input
+  // limpia todo lo que no sea digito en cada tecla y siempre muestra el
+  // numero resultante ya formateado, asi el usuario ve de inmediato si se
+  // equivoco (ver handleApproxCharsChange).
+  const [approxChars, setApproxChars] = useState<number | undefined>(undefined);
   const [referenceScript, setReferenceScript] = useState("");
   const [keyPoints, setKeyPoints] = useState("");
 
@@ -56,6 +62,11 @@ export default function ScriptPanel({ projectId, project }: Props) {
     await projectsService.updateProject(projectId, { scriptStyleId: styleId });
   };
 
+  const handleApproxCharsChange = (raw: string) => {
+    const digits = raw.replace(/\D/g, "");
+    setApproxChars(digits ? Number(digits) : undefined);
+  };
+
   const handleGenerate = async () => {
     setGenerating(true);
     setError(null);
@@ -68,7 +79,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
         scriptStyleId: selectedStyleId || undefined,
         title: project.title,
         thumbnailDescription: thumbnailDescription.trim() || undefined,
-        approxChars: approxChars.trim() ? Number(approxChars) : undefined,
+        approxChars,
         referenceScript: referenceScript.trim() || undefined,
         keyPoints: keyPoints.trim() || undefined,
       });
@@ -202,10 +213,11 @@ export default function ScriptPanel({ projectId, project }: Props) {
               className="input-glass rounded-lg px-3 py-2 text-xs"
             />
             <input
-              type="number"
-              value={approxChars}
-              onChange={(e) => setApproxChars(e.target.value)}
-              placeholder="Cantidad aprox. de caracteres"
+              type="text"
+              inputMode="numeric"
+              value={approxChars !== undefined ? approxChars.toLocaleString("es-AR") : ""}
+              onChange={(e) => handleApproxCharsChange(e.target.value)}
+              placeholder="Cantidad aprox. de caracteres (ej: 30000)"
               className="input-glass rounded-lg px-3 py-2 text-xs"
             />
             <textarea

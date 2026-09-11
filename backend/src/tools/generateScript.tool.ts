@@ -183,24 +183,35 @@ async function generateWithAnthropic(
   let fullText = "";
 
   for (let attempt = 0; attempt <= MAX_CONTINUATION_ATTEMPTS; attempt++) {
-    const stream = client.messages.stream({
-      model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system: systemPrompt,
-      tools: [returnScriptTool],
-      tool_choice: { type: "tool", name: RETURN_SCRIPT_TOOL_NAME },
-      messages,
-    });
+    // Una continuacion fallida (network hiccup, full_text vacio, etc.) no
+    // debe tirar todo el guion generado hasta aca -- solo el intento 0 no
+    // tiene nada previo que rescatar, asi que ese si propaga el error.
+    let response: Anthropic.Message;
+    let toolUse: Anthropic.ToolUseBlock | undefined;
+    let parsed: GeneratedScriptPayload;
+    try {
+      const stream = client.messages.stream({
+        model,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        system: systemPrompt,
+        tools: [returnScriptTool],
+        tool_choice: { type: "tool", name: RETURN_SCRIPT_TOOL_NAME },
+        messages,
+      });
 
-    const response = await stream.finalMessage();
-    const toolUse = response.content.find(
-      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-    );
-    if (!toolUse) {
-      throw new Error("Claude no devolvio el guion generado");
+      response = await stream.finalMessage();
+      toolUse = response.content.find(
+        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+      );
+      if (!toolUse) {
+        throw new Error("Claude no devolvio el guion generado");
+      }
+      parsed = parseGeneratedScript(toolUse.input);
+    } catch (error) {
+      if (attempt === 0) throw error;
+      break;
     }
 
-    const parsed = parseGeneratedScript(toolUse.input);
     if (attempt === 0) {
       title = parsed.title;
       fullText = parsed.full_text;
