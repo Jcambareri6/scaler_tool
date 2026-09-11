@@ -3,6 +3,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { generateWithAi33 } from "../lib/ai33.js";
+import { supabase } from "../lib/supabase.js";
 
 export interface GenerateVoiceInput {
   script_id: string;
@@ -13,6 +14,44 @@ export interface GenerateVoiceInput {
 export interface GenerateVoiceOutput {
   storage_key: string;
   duration_seconds: number;
+  asset_id: string;
+}
+
+// La Tool persiste su propio Asset (mismo criterio que generate_script
+// self-persiste en `scripts`) -- asi el resultado queda disponible tanto
+// si la corre el pipeline (orchestrator.ts) como si la llama directo el
+// tab Audio via POST /tools/generate_voice/execute, que no tiene ningun
+// paso propio de persistencia (ver tool.service.ts::executeTool).
+async function persistAudioAsset(
+  scriptId: string,
+  storageKey: string,
+  durationSeconds: number
+): Promise<string> {
+  const { data: script, error: scriptError } = await supabase
+    .from("scripts")
+    .select("video_project_id")
+    .eq("id", scriptId)
+    .single();
+  if (scriptError || !script) {
+    throw new Error(`No se encontro el script ${scriptId} para asociar el audio`);
+  }
+
+  const { data: asset, error: assetError } = await supabase
+    .from("assets")
+    .insert({
+      video_project_id: script.video_project_id,
+      scene_id: null,
+      type: "AUDIO",
+      storage_key: storageKey,
+      metadata: { duration_seconds: durationSeconds },
+    })
+    .select("id")
+    .single();
+  if (assetError || !asset) {
+    throw new Error(assetError?.message ?? "No se pudo guardar el Asset de audio");
+  }
+
+  return asset.id;
 }
 
 // Voz real confirmada contra GET /v3/voices en la cuenta del proyecto --
@@ -46,10 +85,10 @@ export const generateVoiceTool: ToolDefinition<
     if (!provider?.api_key) {
       if (isMockMode()) {
         const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-        return {
-          storage_key: `mock://audio/${script_id}.mp3`,
-          duration_seconds: Math.max(10, Math.ceil(words / 2.5)),
-        };
+        const storageKey = `mock://audio/${script_id}.mp3`;
+        const durationSeconds = Math.max(10, Math.ceil(words / 2.5));
+        const assetId = await persistAudioAsset(script_id, storageKey, durationSeconds);
+        return { storage_key: storageKey, duration_seconds: durationSeconds, asset_id: assetId };
       }
       throw new ProviderNotConfiguredError("generate_voice");
     }
@@ -57,6 +96,8 @@ export const generateVoiceTool: ToolDefinition<
     const resolvedVoiceId =
       voice_id ?? (provider.configuration?.voice_id as string | undefined) ?? DEFAULT_VOICE_ID;
 
-    return generateWithAi33(script_id, text, provider.api_key, resolvedVoiceId);
+    const result = await generateWithAi33(script_id, text, provider.api_key, resolvedVoiceId);
+    const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+    return { ...result, asset_id: assetId };
   },
 };

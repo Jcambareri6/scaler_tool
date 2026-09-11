@@ -120,6 +120,8 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   // 1. Voz -- respeta la voz elegida en el tab Audio (project.voice_id); si
   // no hay ninguna elegida, generate_voice cae a su DEFAULT_VOICE_ID.
+  // generate_voice ya persiste su propio Asset (ver generateVoice.tool.ts
+  // persistAudioAsset) -- no hace falta insertarlo de nuevo aca.
   const voice = await runTool<GenerateVoiceInput, GenerateVoiceOutput>(
     "generate_voice",
     {
@@ -129,20 +131,6 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     },
     toolCtx
   );
-  const { data: audioAsset, error: audioAssetError } = await supabase
-    .from("assets")
-    .insert({
-      video_project_id: projectId,
-      scene_id: null,
-      type: "AUDIO",
-      storage_key: voice.storage_key,
-      metadata: { duration_seconds: voice.duration_seconds },
-    })
-    .select()
-    .single();
-  if (audioAssetError || !audioAsset) {
-    throw new Error(audioAssetError?.message ?? "Failed to create audio asset");
-  }
 
   await setJobStatus(ctx.jobId, projectId, "AUDIO_DONE", { progress: 15 });
 
@@ -160,7 +148,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // otra Tool para este paso puntual (es solo plumbing de datos).
   const transcription = await runTool<TranscribeAudioInput, TranscribeAudioOutput>(
     "transcribe_audio",
-    { asset_id: audioAsset.id },
+    { asset_id: voice.asset_id },
     toolCtx
   );
   const { data: timelineAfterVoice } = await supabase
