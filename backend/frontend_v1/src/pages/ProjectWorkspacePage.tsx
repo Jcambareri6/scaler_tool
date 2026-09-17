@@ -62,15 +62,35 @@ export default function ProjectWorkspacePage() {
   const [project, setProject] = useState<VideoProject | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("script");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
-    projectsService.getProjectById(projectId).then((p) => {
-      if (!p) navigate("/");
-      setProject(p);
-      setLoading(false);
-    });
+    projectsService
+      .getProjectById(projectId)
+      .then((p) => {
+        if (!p) {
+          navigate("/");
+          return;
+        }
+        setProject(p);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "No se pudo cargar el proyecto");
+        setLoading(false);
+      });
   }, [projectId, navigate]);
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full p-8">
+        <p className="text-sm rounded-xl px-4 py-3" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          {error}
+        </p>
+      </div>
+    );
+  }
 
   if (loading || !project || !projectId) {
     return (

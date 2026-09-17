@@ -44,3 +44,18 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     req.user = user;
     next();
 }
+
+// Stopgap hasta que exista un rol admin real (Etapa 9 del roadmap, ver
+// comentario en provider.route.ts) -- lista de UUIDs de Supabase Auth con
+// permiso para administrar configuracion global del sistema (providers).
+// Debe correr DESPUES de authMiddleware, que es quien setea req.user.
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+    const adminIds = (process.env.ADMIN_USER_IDS ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+    if (!adminIds.includes(req.user!.id)) {
+        return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+}

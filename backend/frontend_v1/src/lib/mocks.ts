@@ -9,6 +9,8 @@ export const mockProjects: VideoProject[] = [
     createdAt: "2026-08-18T10:00:00Z",
     updatedAt: "2026-08-20T08:30:00Z",
     visualSource: "stock",
+    transitionsEnabled: false,
+    subtitlesEnabled: false,
   },
   {
     id: "2",
@@ -18,6 +20,8 @@ export const mockProjects: VideoProject[] = [
     createdAt: "2026-08-15T14:20:00Z",
     updatedAt: "2026-08-19T16:45:00Z",
     visualSource: "stock",
+    transitionsEnabled: false,
+    subtitlesEnabled: false,
   },
   {
     id: "3",
@@ -27,6 +31,8 @@ export const mockProjects: VideoProject[] = [
     createdAt: "2026-08-01T09:00:00Z",
     updatedAt: "2026-08-10T11:00:00Z",
     visualSource: "stock",
+    transitionsEnabled: false,
+    subtitlesEnabled: false,
   },
   {
     id: "4",
@@ -36,6 +42,8 @@ export const mockProjects: VideoProject[] = [
     createdAt: "2026-08-19T08:00:00Z",
     updatedAt: "2026-08-20T09:15:00Z",
     visualSource: "stock",
+    transitionsEnabled: false,
+    subtitlesEnabled: false,
   },
 ];
 

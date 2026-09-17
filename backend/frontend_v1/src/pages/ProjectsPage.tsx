@@ -59,13 +59,20 @@ function EmptyState({ hasFilters, onClear }: { hasFilters: boolean; onClear: () 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<VideoProject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { filters, setFilters, filtered } = useProjectFilters(projects);
 
   useEffect(() => {
-    projectsService.getProjects().then((data) => {
-      setProjects(data);
-      setLoading(false);
-    });
+    projectsService
+      .getProjects()
+      .then((data) => {
+        setProjects(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "No se pudieron cargar los proyectos");
+        setLoading(false);
+      });
   }, []);
 
   const hasActiveFilters = filters.search.trim() !== "" || filters.status !== "ALL";
@@ -121,7 +128,11 @@ export default function ProjectsPage() {
         </select>
       </div>
 
-      {loading ? (
+      {error ? (
+        <p className="text-sm rounded-xl px-4 py-3" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          {error}
+        </p>
+      ) : loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <div

@@ -4,6 +4,7 @@ import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { AI33_BASE_URL } from "../lib/ai33.js";
+import { EDGE_TTS_VOICES, isEdgeTtsEnabled } from "../lib/edgeTts.js";
 
 export interface ListVoicesInput {
   [key: string]: never;
@@ -90,9 +91,15 @@ export const listVoicesTool: ToolDefinition<ListVoicesInput, ListVoicesOutput> =
     required: [],
   },
   async execute() {
+    // Las voces de Edge TTS solo se ofrecen si ENABLE_EDGE_TTS=true (ver
+    // lib/edgeTts.ts) -- en produccion, sin esa variable, esta lista queda
+    // vacia y el comportamiento es identico al de antes de esta integracion.
+    const edgeVoices = isEdgeTtsEnabled() ? EDGE_TTS_VOICES : [];
+
     const provider = await getActiveProvider("ai33");
     if (!provider?.api_key) {
-      if (isMockMode()) return { voices: MOCK_VOICES };
+      if (isMockMode()) return { voices: [...MOCK_VOICES, ...edgeVoices] };
+      if (edgeVoices.length > 0) return { voices: edgeVoices };
       throw new ProviderNotConfiguredError("list_voices");
     }
 
@@ -100,13 +107,18 @@ export const listVoicesTool: ToolDefinition<ListVoicesInput, ListVoicesOutput> =
       AI33_PROVIDERS.map((engine) => fetchVoicesForProvider(engine, provider.api_key!))
     );
 
-    // Si TODOS los motores fallaron (ej. api key invalida), es un problema
-    // real de configuracion -- no un catalogo vacio -- asi que se avisa en
-    // vez de devolver silenciosamente una lista vacia.
+    // Si TODOS los motores de ai33 fallaron (ej. api key invalida), es un
+    // problema real de configuracion -- salvo que Edge TTS este habilitado,
+    // en cuyo caso se avisa en consola y se devuelven al menos esas voces
+    // en vez de tirar todo abajo.
     if (results.every((r) => !r.ok)) {
+      if (edgeVoices.length > 0) {
+        console.warn("[list_voices] ai33.pro no devolvio voces para ningun motor -- revisa la api key del provider");
+        return { voices: edgeVoices };
+      }
       throw new Error("ai33.pro no devolvio voces para ningun motor -- revisa la api key del provider");
     }
 
-    return { voices: results.flatMap((r) => r.voices) };
+    return { voices: [...results.flatMap((r) => r.voices), ...edgeVoices] };
   },
 };

@@ -41,6 +41,50 @@ function formatTime(totalSeconds: number): string {
 // Si el conteo de palabras no matchea (audio real distinto al texto, o
 // transcripcion parcial) las escenas que se quedan sin palabras reales caen
 // al fallback proporcional de mas abajo, no rompen el resto.
+// Cuantas palabras del guion agrupa cada cue de subtitulo -- ~8 palabras es
+// el tamaño tipico de una linea de subtitulo legible (2-3s de habla a ritmo
+// normal), bastante mas corto que los segmentos de Whisper (que pueden durar
+// una frase entera en pantalla).
+const CAPTION_WORDS_PER_CUE = 8;
+
+function buildScriptWords(sceneRows: SceneRow[]): string[] {
+  const words: string[] = [];
+  for (const scene of sceneRows) {
+    const text = ((scene.content as { text?: string } | null)?.text) ?? "";
+    if (text.trim()) words.push(...text.trim().split(/\s+/));
+  }
+  return words;
+}
+
+// Subtitulos (para render_video.tool.ts y el preview del frontend): en vez
+// del texto que Whisper CREYO escuchar (transcription.segments, que se
+// equivoca con nombres propios, numeros, jerga -- reportado en produccion),
+// se arma con el guion real (siempre exacto, ya escrito/validado por el
+// usuario) alineado palabra a palabra con el timing real de Whisper -- mismo
+// criterio posicional que alignScenesToWords de aca abajo: la palabra i del
+// guion se asume que corresponde a la palabra i que transcribio Whisper. El
+// timing de Whisper es confiable (viene del audio real); el RECONOCIMIENTO
+// de texto de Whisper no tiene por que serlo.
+function buildCaptionSegments(
+  sceneRows: SceneRow[],
+  transcribedWords: TranscribedWord[]
+): { text: string; start: number; end: number }[] {
+  const scriptWords = buildScriptWords(sceneRows);
+  const count = Math.min(scriptWords.length, transcribedWords.length);
+  const cues: { text: string; start: number; end: number }[] = [];
+  for (let i = 0; i < count; i += CAPTION_WORDS_PER_CUE) {
+    const chunkScriptWords = scriptWords.slice(i, i + CAPTION_WORDS_PER_CUE);
+    const chunkTimedWords = transcribedWords.slice(i, i + CAPTION_WORDS_PER_CUE);
+    if (chunkTimedWords.length === 0) break;
+    cues.push({
+      text: chunkScriptWords.join(" "),
+      start: chunkTimedWords[0]!.start,
+      end: chunkTimedWords[chunkTimedWords.length - 1]!.end,
+    });
+  }
+  return cues;
+}
+
 function alignScenesToWords(
   sceneRows: SceneRow[],
   words: TranscribedWord[]
@@ -258,6 +302,11 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
       audio: audioAsset
         ? { asset_id: audioAsset.id, storage_key: audioAsset.storage_key, duration_seconds: audioDuration }
         : previousContent.audio ?? null,
+      // Pisa transcription.segments (texto tal cual lo entendio Whisper) con
+      // cues armados desde el guion real -- ver buildCaptionSegments. Solo
+      // cuando ya hay transcripcion real; sin eso se deja lo que hubiera
+      // (timeline "base", ver comentario del Tool mas abajo).
+      ...(transcribedWords.length > 0 ? { segments: buildCaptionSegments(sceneRows, transcribedWords) } : {}),
     };
 
     if (existingTimeline) {

@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { supabase } from "../../lib/supabase.js";
 import type { Provider } from "../../types/shared/typeShared.js";
 
@@ -9,16 +10,24 @@ function sanitizeProvider(provider: Provider) {
   return { ...rest, has_api_key: Boolean(api_key) };
 }
 
+const createProviderSchema = z.object({
+  name: z.string().trim().min(1),
+  slug: z.string().trim().min(1),
+  type: z.string().trim().min(1).optional(),
+  api_key: z.string().min(1).optional(),
+  configuration: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+});
+
+const updateProviderSchema = createProviderSchema.partial();
+
 export async function createProvider(req: Request, res: Response) {
   try {
-    const { name, slug, type, api_key, configuration, is_active } = req.body;
-
-    if (typeof name !== "string" || name.trim() === "") {
-      return res.status(400).json({ error: "name is required" });
+    const parsed = createProviderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid provider payload" });
     }
-    if (typeof slug !== "string" || slug.trim() === "") {
-      return res.status(400).json({ error: "slug is required" });
-    }
+    const { name, slug, type, api_key, configuration, is_active } = parsed.data;
 
     const { data, error } = await supabase
       .from("providers")
@@ -37,11 +46,13 @@ export async function createProvider(req: Request, res: Response) {
       if (error.code === "23505") {
         return res.status(409).json({ error: "A provider with this slug already exists" });
       }
-      return res.status(400).json({ error: error.message });
+      console.error("createProvider failed:", error);
+      return res.status(500).json({ error: "Could not create provider" });
     }
 
     return res.status(201).json(sanitizeProvider(data));
   } catch (error) {
+    console.error("createProvider failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -54,11 +65,13 @@ export async function listProviders(_req: Request, res: Response) {
       .order("created_at", { ascending: false });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      console.error("listProviders failed:", error);
+      return res.status(500).json({ error: "Could not list providers" });
     }
 
     return res.status(200).json((data ?? []).map(sanitizeProvider));
   } catch (error) {
+    console.error("listProviders failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -86,7 +99,11 @@ export async function getProvider(req: Request, res: Response) {
 export async function updateProvider(req: Request, res: Response) {
   try {
     const { provider_id } = req.params;
-    const { name, slug, type, api_key, configuration, is_active } = req.body;
+    const parsed = updateProviderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid provider payload" });
+    }
+    const { name, slug, type, api_key, configuration, is_active } = parsed.data;
 
     const update: Record<string, unknown> = {};
     if (name !== undefined) update.name = name;
@@ -110,11 +127,13 @@ export async function updateProvider(req: Request, res: Response) {
       if (error.code === "23505") {
         return res.status(409).json({ error: "A provider with this slug already exists" });
       }
-      return res.status(400).json({ error: error.message });
+      console.error("updateProvider failed:", error);
+      return res.status(500).json({ error: "Could not update provider" });
     }
 
     return res.status(200).json(sanitizeProvider(data));
   } catch (error) {
+    console.error("updateProvider failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -126,11 +145,13 @@ export async function deleteProvider(req: Request, res: Response) {
     const { error } = await supabase.from("providers").delete().eq("id", provider_id);
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      console.error("deleteProvider failed:", error);
+      return res.status(500).json({ error: "Could not delete provider" });
     }
 
     return res.status(204).send();
   } catch (error) {
+    console.error("deleteProvider failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }

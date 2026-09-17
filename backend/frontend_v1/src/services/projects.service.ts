@@ -42,6 +42,8 @@ export const projectsService = {
     if (updates.scriptStyleId !== undefined) body.script_style_id = updates.scriptStyleId || null;
     if (updates.voiceId !== undefined) body.voice_id = updates.voiceId || null;
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
+    if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
+    if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
 
     try {
       const row = await api.patch<Parameters<typeof mapProject>[0]>(`/projects/${id}`, body);
@@ -145,6 +147,17 @@ export const projectsService = {
       .map(mapAsset)
       .find((asset) => asset.type === "VIDEO" && asset.sceneId === null && asset.metadata?.kind === "final_render");
     return render ?? null;
+  },
+
+  // Segmentos con timing del transcript de Whisper (ver
+  // transcribe_audio.tool.ts / orchestrator.ts, fusionados en
+  // timelines.content.segments) -- usados para armar los subtitulos del
+  // preview (PreviewPanel arma un WebVTT client-side a partir de esto).
+  async getTimelineSegments(projectId: string): Promise<{ text: string; start: number; end: number }[]> {
+    const detail = await api.get<{
+      timeline: { content?: { segments?: { text: string; start: number; end: number }[] } } | null;
+    }>(`/projects/${projectId}/details`);
+    return detail.timeline?.content?.segments ?? [];
   },
 
   // El backend reemplaza TODO `content` de una en el UPDATE (ver

@@ -52,12 +52,19 @@ function StatCard({ label, value }: { label: string; value: number }) {
 export default function DashboardPage() {
   const [projects, setProjects] = useState<VideoProject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    projectsService.getProjects().then((data) => {
-      setProjects(data);
-      setLoading(false);
-    });
+    projectsService
+      .getProjects()
+      .then((data) => {
+        setProjects(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "No se pudieron cargar los proyectos");
+        setLoading(false);
+      });
   }, []);
 
   const stats = {
@@ -109,7 +116,11 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {loading ? (
+        {error ? (
+          <p className="text-sm rounded-xl px-4 py-3" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
+            {error}
+          </p>
+        ) : loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
               <div

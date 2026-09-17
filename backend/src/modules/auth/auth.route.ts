@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { z } from "zod";
 import { AuthService } from "./auth.services.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
+import { authRateLimiter } from "../../middleware/rateLimit.middleware.js";
 
 const authRouter = Router();
 
@@ -9,57 +11,47 @@ const authService = new AuthService();
 const OAUTH_PROVIDERS = ["google", "github"] as const;
 type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
 
+const credentialsSchema = z.object({
+    email: z.string().trim().email(),
+    password: z.string().min(8),
+});
 
 authRouter.post("/test", (req, res) => {
-    
+
     res.json({ ok: true });
 });
 
-authRouter.post("/register", async (req, res) => {
-   
+authRouter.post("/register", authRateLimiter, async (req, res) => {
+    const parsed = credentialsSchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ message: "Email o contraseña inválidos (mínimo 8 caracteres)" });
+    }
 
     try {
-
-        const { email, password } = req.body;
-
-        const data = await authService.register({
-            email,
-            password
-        });
+        const data = await authService.register(parsed.data);
 
         return res.status(201).json(data);
 
     } catch (error) {
-        
-        const message =
-            error instanceof Error
-                ? error.message
-                : "registration failed";
-
-        return res.status(500).json({ message });
+        console.error("register failed:", error);
+        return res.status(500).json({ message: "No se pudo completar el registro. Intentá de nuevo." });
     }
 });
 
-authRouter.post("/login", async (req, res) => {
-
+authRouter.post("/login", authRateLimiter, async (req, res) => {
+    const parsed = credentialsSchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ message: "Email o contraseña inválidos" });
+    }
 
     try {
-        const { email, password } = req.body;
-
-        const data = await authService.Login({
-            email,
-            password
-        });
+        const data = await authService.Login(parsed.data);
 
         return res.status(200).json(data);
 
     } catch (error) {
-        const message =
-            error instanceof Error
-                ? error.message
-                : "login failed";
-
-        return res.status(500).json({ message });
+        console.error("login failed:", error);
+        return res.status(401).json({ message: "Email o contraseña incorrectos" });
     }
 });
 

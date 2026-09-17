@@ -4,6 +4,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { generateWithAi33 } from "../lib/ai33.js";
+import { generateWithEdgeTts, isEdgeTtsEnabled, EDGE_TTS_VOICE_PREFIX } from "../lib/edgeTts.js";
 
 export interface PreviewVoiceInput {
   voice_id: string;
@@ -39,6 +40,18 @@ export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOut
     required: ["voice_id"],
   },
   async execute({ voice_id, sample_text }) {
+    const text = sample_text?.trim() || DEFAULT_SAMPLE_TEXT;
+
+    if (voice_id.startsWith(EDGE_TTS_VOICE_PREFIX)) {
+      if (!isEdgeTtsEnabled()) {
+        throw new Error("Edge TTS no esta habilitado en este entorno (falta ENABLE_EDGE_TTS=true)");
+      }
+      const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
+      const storageKey = `previews/${voice_id}-${hashText(text)}`;
+      const result = await generateWithEdgeTts(storageKey, text, edgeVoiceId);
+      return { audio_url: result.storage_key, duration_seconds: result.duration_seconds };
+    }
+
     const provider = await getActiveProvider("ai33");
     if (!provider?.api_key) {
       if (isMockMode()) {
@@ -47,7 +60,6 @@ export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOut
       throw new ProviderNotConfiguredError("preview_voice");
     }
 
-    const text = sample_text?.trim() || DEFAULT_SAMPLE_TEXT;
     // Key estable por (voice_id + texto), con upsert:true en el storage --
     // escuchar la misma voz con el mismo texto de nuevo no vuelve a pegarle
     // a ai33.pro, reusa el mp3 ya generado.

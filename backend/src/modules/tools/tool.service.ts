@@ -1,6 +1,25 @@
 import type { Request, Response } from "express";
-import { listTools, runTool } from "../../tools/index.js";
+import { listTools, runTool, ProviderNotConfiguredError } from "../../tools/index.js";
 import { getOwnedJob } from "../../lib/ownership.js";
+
+// Mensajes que las propias tools lanzan a proposito y son seguros de
+// mostrar tal cual (no filtran detalles de Postgres ni de proveedores
+// externos) -- cualquier otro error se loguea server-side y se devuelve
+// generico, para no repetir el leak de "OpenAI API error (...): <body>" o
+// similares directo al cliente.
+const SAFE_ERROR_MESSAGES = new Set([
+  "Project not found",
+  "Script not found",
+  "Asset not found",
+  "Job not found",
+]);
+
+function isSafeToolError(error: unknown): error is Error {
+  return (
+    error instanceof ProviderNotConfiguredError ||
+    (error instanceof Error && SAFE_ERROR_MESSAGES.has(error.message))
+  );
+}
 
 export async function listAvailableTools(_req: Request, res: Response) {
   return res.status(200).json(listTools());
@@ -29,10 +48,13 @@ export async function executeTool(req: Request, res: Response) {
     });
     return res.status(200).json({ output });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Tool execution failed";
-    if (message.includes("is not registered")) {
-      return res.status(404).json({ error: message });
+    if (error instanceof Error && error.message.includes("is not registered")) {
+      return res.status(404).json({ error: error.message });
     }
-    return res.status(400).json({ error: message });
+    if (isSafeToolError(error)) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error(`Tool "${req.params.tool_name}" execution failed:`, error);
+    return res.status(400).json({ error: "No se pudo ejecutar la herramienta, intentá de nuevo." });
   }
 }

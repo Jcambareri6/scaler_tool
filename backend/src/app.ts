@@ -17,6 +17,13 @@ import pipelineRouter from './modules/pipeline/pipeline.route.js';
 import scriptStyleRouter from './modules/scriptStyles/scriptStyle.route.js';
 import fileRouter from './modules/files/file.route.js';
 
+// DISABLE_AUTH bypasea el login por completo (ver auth.middleware.ts) -- es
+// solo para desarrollo local. Si esta env var quedara seteada por error en
+// un deploy de produccion, dejaria la app entera accesible sin login.
+if (process.env.NODE_ENV === "production" && process.env.DISABLE_AUTH === "true") {
+  throw new Error("DISABLE_AUTH=true no puede estar activo en producción (NODE_ENV=production)");
+}
+
 const app = express();
 
 // Frontend/vite.config.ts corre en 8443 por default (o el $PORT que le

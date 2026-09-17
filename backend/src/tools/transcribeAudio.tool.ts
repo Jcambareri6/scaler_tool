@@ -10,6 +10,7 @@ import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
+import { getOwnedAsset } from "../lib/ownership.js";
 
 // ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts.
 const require = createRequire(import.meta.url);
@@ -91,33 +92,30 @@ async function compressForWhisper(buffer: Buffer): Promise<Buffer> {
   }
 }
 
-// Whisper no es un servicio aparte -- es el modelo de transcripcion de
-// OpenAI (endpoint /v1/audio/transcriptions), asi que reusa el mismo
-// Provider "openai" que ya usan generate_script/el Agent en vez de pedir
-// una key propia.
-async function transcribeWithOpenAI(
-  storageKey: string,
+// Llamada cruda a Whisper a partir de un buffer de audio ya en memoria --
+// extraida de transcribeWithOpenAI para que transcribeVideoClip.tool.ts (el
+// audio ahi sale de un ffmpeg local, no de una URL de Storage) la reuse sin
+// duplicar el chunking/retry/formData.
+export async function transcribeBuffer(
+  audioBuffer: Buffer,
+  filename: string,
   apiKey: string
 ): Promise<TranscribeAudioOutput> {
-  const audioResponse = await fetchWithTimeout(storageKey);
-  if (!audioResponse.ok) {
-    throw new Error(`No se pudo descargar el audio a transcribir (${audioResponse.status})`);
-  }
-  let audioBuffer: Buffer = Buffer.from(await audioResponse.arrayBuffer());
-  let filename = storageKey.split("/").pop()?.split("?")[0] || "audio.mp3";
+  let buffer = audioBuffer;
+  let name = filename;
 
-  if (audioBuffer.byteLength > WHISPER_MAX_BYTES) {
-    audioBuffer = await compressForWhisper(audioBuffer);
-    filename = "compressed.mp3";
-    if (audioBuffer.byteLength > WHISPER_MAX_BYTES) {
+  if (buffer.byteLength > WHISPER_MAX_BYTES) {
+    buffer = await compressForWhisper(buffer);
+    name = "compressed.mp3";
+    if (buffer.byteLength > WHISPER_MAX_BYTES) {
       throw new Error(
-        `El audio sigue superando el limite de Whisper (25MB) despues de comprimirlo (${audioBuffer.byteLength} bytes) -- el guion es demasiado largo para transcribirlo en una sola pasada`
+        `El audio sigue superando el limite de Whisper (25MB) despues de comprimirlo (${buffer.byteLength} bytes) -- es demasiado largo para transcribirlo en una sola pasada`
       );
     }
   }
 
   const formData = new FormData();
-  formData.append("file", new Blob([new Uint8Array(audioBuffer)]), filename);
+  formData.append("file", new Blob([new Uint8Array(buffer)]), name);
   formData.append("model", "whisper-1");
   formData.append("response_format", "verbose_json");
   formData.append("timestamp_granularities[]", "word");
@@ -151,6 +149,24 @@ async function transcribeWithOpenAI(
     segments: (data.segments ?? []).map((s) => ({ text: s.text.trim(), start: s.start, end: s.end })),
     ...(data.duration !== undefined ? { duration_seconds: data.duration } : {}),
   };
+}
+
+// Whisper no es un servicio aparte -- es el modelo de transcripcion de
+// OpenAI (endpoint /v1/audio/transcriptions), asi que reusa el mismo
+// Provider "openai" que ya usan generate_script/el Agent en vez de pedir
+// una key propia.
+async function transcribeWithOpenAI(
+  storageKey: string,
+  apiKey: string
+): Promise<TranscribeAudioOutput> {
+  const audioResponse = await fetchWithTimeout(storageKey);
+  if (!audioResponse.ok) {
+    throw new Error(`No se pudo descargar el audio a transcribir (${audioResponse.status})`);
+  }
+  const audioBuffer: Buffer = Buffer.from(await audioResponse.arrayBuffer());
+  const filename = storageKey.split("/").pop()?.split("?")[0] || "audio.mp3";
+
+  return transcribeBuffer(audioBuffer, filename, apiKey);
 }
 
 async function mockTranscribe(assetId: string): Promise<TranscribeAudioOutput> {
@@ -214,13 +230,9 @@ export const transcribeAudioTool: ToolDefinition<
     },
     required: ["asset_id"],
   },
-  async execute({ asset_id }) {
-    const { data: asset, error: assetError } = await supabase
-      .from("assets")
-      .select("storage_key")
-      .eq("id", asset_id)
-      .single();
-    if (assetError || !asset) {
+  async execute({ asset_id }, ctx) {
+    const asset = await getOwnedAsset(asset_id, ctx.userId);
+    if (!asset) {
       throw new Error("Asset not found");
     }
 

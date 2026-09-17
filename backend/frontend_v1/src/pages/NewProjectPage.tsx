@@ -18,22 +18,29 @@ export default function NewProjectPage() {
   const [content, setContent] = useState("");
   const [activeStarter, setActiveStarter] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [styles, setStyles] = useState<ScriptStyle[]>([]);
   const [scriptStyleId, setScriptStyleId] = useState("");
 
   useEffect(() => {
-    scriptStylesService.list().then(setStyles);
+    scriptStylesService.list().then(setStyles).catch(() => setStyles([]));
   }, []);
 
   const handleCreate = async () => {
     if (!title.trim()) return;
     setCreating(true);
-    const project = await projectsService.createProject(
-      title.trim(),
-      content.trim() || undefined,
-      scriptStyleId || undefined
-    );
-    navigate(`/projects/${project.id}`);
+    setError(null);
+    try {
+      const project = await projectsService.createProject(
+        title.trim(),
+        content.trim() || undefined,
+        scriptStyleId || undefined
+      );
+      navigate(`/projects/${project.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo crear el proyecto");
+      setCreating(false);
+    }
   };
 
   return (
@@ -153,6 +160,12 @@ export default function NewProjectPage() {
               </>
             )}
           </button>
+
+          {error && (
+            <p className="text-xs text-center" style={{ color: "#f87171" }}>
+              {error}
+            </p>
+          )}
         </div>
       </div>
     </div>

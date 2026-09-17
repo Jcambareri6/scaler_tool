@@ -378,25 +378,31 @@ export default function ScenesPanel({ projectId }: Props) {
   const [assetsByScene, setAssetsByScene] = useState<Record<string, Asset[]>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
       projectsService.getScenes(projectId),
       projectsService.getSceneVideoAssets(projectId),
-    ]).then(([s, assets]) => {
-      setScenes(s);
-      const map: Record<string, Asset[]> = {};
-      for (const asset of assets) {
-        if (!asset.sceneId) continue;
-        (map[asset.sceneId] ??= []).push(asset);
-      }
-      for (const sceneAssets of Object.values(map)) {
-        sceneAssets.sort((a, b) => sequenceOf(a) - sequenceOf(b));
-      }
-      setAssetsByScene(map);
-      if (s.length > 0) setSelectedId(s[0].id);
-      setLoading(false);
-    });
+    ])
+      .then(([s, assets]) => {
+        setScenes(s);
+        const map: Record<string, Asset[]> = {};
+        for (const asset of assets) {
+          if (!asset.sceneId) continue;
+          (map[asset.sceneId] ??= []).push(asset);
+        }
+        for (const sceneAssets of Object.values(map)) {
+          sceneAssets.sort((a, b) => sequenceOf(a) - sequenceOf(b));
+        }
+        setAssetsByScene(map);
+        if (s.length > 0) setSelectedId(s[0].id);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "No se pudieron cargar las escenas");
+        setLoading(false);
+      });
   }, [projectId]);
 
   const selectedScene = scenes.find((s) => s.id === selectedId) ?? null;
@@ -412,6 +418,16 @@ export default function ScenesPanel({ projectId }: Props) {
   const handleSceneSaved = (updated: Scene) => {
     setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   };
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full p-8">
+        <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          {error}
+        </p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

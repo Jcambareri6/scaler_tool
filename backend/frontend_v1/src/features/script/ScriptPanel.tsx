@@ -40,26 +40,45 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const [keyPoints, setKeyPoints] = useState("");
 
   useEffect(() => {
-    projectsService.getScript(projectId).then((s) => {
-      setScript(s);
-      setContent(s?.content ?? "");
-      setLoading(false);
-    });
-    scriptStylesService.list().then(setStyles);
+    projectsService
+      .getScript(projectId)
+      .then((s) => {
+        setScript(s);
+        setContent(s?.content ?? "");
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "No se pudo cargar el guion");
+        setLoading(false);
+      });
+    scriptStylesService.list().then(setStyles).catch(() => setStyles([]));
   }, [projectId]);
 
   const handleSave = async () => {
     setSaving(true);
-    const s = await projectsService.saveScript(projectId, content);
-    setScript(s);
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setError(null);
+    try {
+      const s = await projectsService.saveScript(projectId, content);
+      setScript(s);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el guion");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSelectStyle = async (styleId: string) => {
+    const previousStyleId = selectedStyleId;
     setSelectedStyleId(styleId);
-    await projectsService.updateProject(projectId, { scriptStyleId: styleId });
+    setError(null);
+    try {
+      await projectsService.updateProject(projectId, { scriptStyleId: styleId });
+    } catch (err) {
+      setSelectedStyleId(previousStyleId);
+      setError(err instanceof Error ? err.message : "No se pudo cambiar el estilo de guion");
+    }
   };
 
   const handleApproxCharsChange = (raw: string) => {

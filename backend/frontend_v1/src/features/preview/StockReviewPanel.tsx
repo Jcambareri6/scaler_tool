@@ -17,6 +17,7 @@ interface Props {
 }
 
 const WAVEFORM_BAR_COUNT = 160;
+const PLAYBACK_RATES = [0.5, 1, 1.25, 1.5, 2];
 
 function parseTimeToSeconds(time: string): number {
   const [mm, ss] = time.split(":").map((n) => Number(n) || 0);
@@ -71,6 +72,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [audioAsset, setAudioAsset] = useState<Asset | null>(null);
+  // Cues de subtitulo (timelines.content.segments, ver build_timeline.tool.ts)
+  // -- mismos datos que usa el render final (render_video) y el preview post-
+  // render, mostrados aca sincronizados con el mismo audio-clock (currentTime)
+  // que ya maneja este componente, para que la revision del gate humano se
+  // vea lo mas parecido posible al resultado final.
+  const [captionSegments, setCaptionSegments] = useState<{ text: string; start: number; end: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +91,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showRateMenu, setShowRateMenu] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -94,10 +103,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       projectsService.getScenes(projectId),
       projectsService.getSceneVideoAssets(projectId),
       projectsService.getAudioAsset(projectId),
-    ]).then(([sceneRows, stockRows, audio]) => {
+      projectsService.getTimelineSegments(projectId),
+    ]).then(([sceneRows, stockRows, audio, segments]) => {
       setScenes(sceneRows.sort((a, b) => a.order - b.order));
       setAssets(stockRows);
       setAudioAsset(audio);
+      setCaptionSegments(segments);
       setLoading(false);
     });
   }, [projectId]);
@@ -152,6 +163,11 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
   const activeSegment = segments[activeSegmentIndex] ?? null;
 
+  const activeCaption = useMemo(
+    () => captionSegments.find((c) => currentTime >= c.start && currentTime < c.end) ?? null,
+    [captionSegments, currentTime]
+  );
+
   // El <video> sigue al segmento activo: cambia de fuente cuando el
   // playhead cruza a otro clip (sea de la misma escena completandola, o de
   // la escena siguiente), y arranca desde su propio inicio (no tiene forma
@@ -168,15 +184,27 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       video.src = activeSegment.asset.storageKey;
       video.currentTime = 0;
     }
+    video.playbackRate = playbackRate;
     if (isPlaying) video.play().catch(() => {});
     else video.pause();
-  }, [activeSegment, isPlaying]);
+  }, [activeSegment, isPlaying, playbackRate]);
 
   const handleTogglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
     if (isPlaying) audio.pause();
     else audio.play().catch(() => {});
+  };
+
+  // El audio narrado es el reloj maestro (ver comentario de arriba del
+  // componente) -- cambiar su rate alcanza para que currentTime/el resto del
+  // scrubbing sigan funcionando igual, solo mas rapido/lento. El <video>
+  // activo se sincroniza en el efecto de arriba (dependency `playbackRate`).
+  const handleChangeRate = (rate: number) => {
+    const audio = audioRef.current;
+    if (audio) audio.playbackRate = rate;
+    setPlaybackRate(rate);
+    setShowRateMenu(false);
   };
 
   const handleSeek = (seconds: number) => {
@@ -260,6 +288,44 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               ) : (
                 <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>Sin clip para esta escena</p>
               )}
+
+              {/* Preview de los subtitulos que van a quedar quemados en el
+                  render final (ver render_video.tool.ts) -- mismo texto y
+                  timing, solo que acá es una capa HTML en vez de pixeles. */}
+              {activeCaption && (
+                <div
+                  className="absolute left-0 right-0 flex justify-center px-6 pointer-events-none"
+                  style={{ bottom: "8%" }}
+                >
+                  <span
+                    className="text-center text-sm font-semibold px-3 py-1.5 rounded-md"
+                    style={{ color: "#fff", background: "rgba(0,0,0,0.6)", textShadow: "0 1px 3px rgba(0,0,0,0.8)" }}
+                  >
+                    {activeCaption.text}
+                  </span>
+                </div>
+              )}
+
+              {/* Boton de play grande centrado -- mismo patron que el
+                  reproductor del video final (PreviewPanel), solo visible en
+                  pausa. */}
+              {audioAsset && !isPlaying && (
+                <button
+                  onClick={handleTogglePlay}
+                  className="absolute inset-0 flex items-center justify-center"
+                  style={{ background: "rgba(0,0,0,0.2)" }}
+                  aria-label="Reproducir"
+                >
+                  <span
+                    className="w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-110"
+                    style={{ background: "rgba(124,106,255,0.9)", boxShadow: "0 8px 32px rgba(124,106,255,0.5)" }}
+                  >
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: 3 }}>
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -293,6 +359,33 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
                 {formatSeconds(currentTime)} / {formatSeconds(totalDuration)}
               </span>
+
+              <div className="relative">
+                <button
+                  onClick={() => setShowRateMenu((v) => !v)}
+                  className="text-xs font-medium px-2.5 py-1.5 rounded-lg"
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--foreground)" }}
+                >
+                  {playbackRate}x
+                </button>
+                {showRateMenu && (
+                  <div
+                    className="absolute bottom-full left-0 mb-1.5 rounded-lg overflow-hidden py-1 z-10"
+                    style={{ background: "rgba(18,18,28,0.97)", border: "1px solid rgba(255,255,255,0.1)" }}
+                  >
+                    {PLAYBACK_RATES.map((rate) => (
+                      <button
+                        key={rate}
+                        onClick={() => handleChangeRate(rate)}
+                        className="block w-full text-xs px-4 py-1.5 text-left whitespace-nowrap"
+                        style={{ color: rate === playbackRate ? "#a78bfa" : "rgba(255,255,255,0.85)" }}
+                      >
+                        {rate}x
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-2">

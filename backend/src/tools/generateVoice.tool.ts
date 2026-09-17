@@ -3,7 +3,9 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { generateWithAi33 } from "../lib/ai33.js";
+import { generateWithEdgeTts, isEdgeTtsEnabled, EDGE_TTS_VOICE_PREFIX, DEFAULT_EDGE_TTS_VOICE } from "../lib/edgeTts.js";
 import { supabase } from "../lib/supabase.js";
+import { getOwnedScript } from "../lib/ownership.js";
 
 export interface GenerateVoiceInput {
   script_id: string;
@@ -80,7 +82,25 @@ export const generateVoiceTool: ToolDefinition<
     },
     required: ["script_id", "text"],
   },
-  async execute({ script_id, text, voice_id }) {
+  async execute({ script_id, text, voice_id }, ctx) {
+    const script = await getOwnedScript(script_id, ctx.userId);
+    if (!script) {
+      throw new Error("Script not found");
+    }
+
+    // Voz de Edge TTS pedida explicitamente (gratis, sin api key) -- solo
+    // disponible si ENABLE_EDGE_TTS=true (ver lib/edgeTts.ts), para no
+    // depender en produccion de un protocolo no oficial sin SLA.
+    if (voice_id?.startsWith(EDGE_TTS_VOICE_PREFIX)) {
+      if (!isEdgeTtsEnabled()) {
+        throw new Error("Edge TTS no esta habilitado en este entorno (falta ENABLE_EDGE_TTS=true)");
+      }
+      const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
+      const result = await generateWithEdgeTts(script_id, text, edgeVoiceId);
+      const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+      return { ...result, asset_id: assetId };
+    }
+
     const provider = await getActiveProvider("ai33");
     if (!provider?.api_key) {
       if (isMockMode()) {
@@ -89,6 +109,14 @@ export const generateVoiceTool: ToolDefinition<
         const durationSeconds = Math.max(10, Math.ceil(words / 2.5));
         const assetId = await persistAudioAsset(script_id, storageKey, durationSeconds);
         return { storage_key: storageKey, duration_seconds: durationSeconds, asset_id: assetId };
+      }
+      // Sin ai33 configurado (y sin pedir una voz suya puntual): solo se
+      // cae a Edge TTS si esta habilitado explicitamente -- si no, mismo
+      // error que antes de agregar esta integracion.
+      if (isEdgeTtsEnabled()) {
+        const result = await generateWithEdgeTts(script_id, text, DEFAULT_EDGE_TTS_VOICE);
+        const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+        return { ...result, asset_id: assetId };
       }
       throw new ProviderNotConfiguredError("generate_voice");
     }

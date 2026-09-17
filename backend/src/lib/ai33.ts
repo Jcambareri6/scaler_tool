@@ -1,6 +1,10 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { supabase } from "./supabase.js";
 import { withRetry } from "./retry.js";
 import { fetchWithTimeout } from "./http.js";
+import { getAudioDurationSeconds } from "./audioDuration.js";
 
 export const AI33_BASE_URL = "https://api.ai33.pro";
 export const AUDIO_BUCKET = "audio";
@@ -124,11 +128,31 @@ export async function generateWithAi33(
     data: { publicUrl },
   } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(path);
 
-  // ai33.pro no confirma en su doc que la tarea de TTS traiga duracion en
-  // metadata -- si no viene, se estima por cantidad de palabras (mismo
-  // fallback que usa build_timeline mientras no hay transcripcion real).
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  const durationSeconds = task.metadata?.duration ?? Math.max(10, Math.ceil(words / 2.5));
+  // Duracion REAL del archivo descargado (ffmpeg) -- lo que ai33.pro "dice"
+  // que dura (task.metadata.duration) es un reporte propio del proveedor
+  // que puede no coincidir con el mp3 real (visto en produccion: el
+  // timeline se armaba con esa duracion reportada, mas larga que el audio
+  // real, y el render final quedaba mas corto que lo que mostraba la UI).
+  let durationSeconds: number | null = null;
+  const probeDir = await mkdtemp(nodePath.join(tmpdir(), "skaler-ai33-probe-"));
+  try {
+    const probePath = nodePath.join(probeDir, "probe.mp3");
+    await writeFile(probePath, audioBuffer);
+    durationSeconds = await getAudioDurationSeconds(probePath);
+  } finally {
+    try {
+      await rm(probeDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn(`[ai33] no se pudo limpiar ${probeDir}:`, cleanupError);
+    }
+  }
+  if (!durationSeconds) {
+    // No se pudo medir el archivo (ffmpeg-static ausente, etc.) -- fallback
+    // a lo que reporta ai33.pro, y si tampoco viene, estimacion por
+    // cantidad de palabras.
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    durationSeconds = task.metadata?.duration ?? Math.max(10, Math.ceil(words / 2.5));
+  }
 
   return { storage_key: publicUrl, duration_seconds: Math.round(durationSeconds) };
 }

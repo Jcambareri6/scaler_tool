@@ -5,7 +5,7 @@ import type { ProjectDetail } from "./projects.types.js"
 
 export async function createProject(req: Request, res: Response) {
   try {
-    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source } = req.body;
+    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled } = req.body;
 
     const userId = req.user!.id;
 
@@ -21,6 +21,8 @@ export async function createProject(req: Request, res: Response) {
         script_style_id,
         voice_id,
         ...(visual_source ? { visual_source } : {}),
+        ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
+        ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
       })
       .select()
       .single();
@@ -238,7 +240,7 @@ export async function updateProject(req: Request, res: Response) {
     console.log("PROJECT ID:", project_id);
     console.log("USER ID:", userId);
 
-    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source } = req.body;
+    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled } = req.body;
 
     const { data, error } = await supabase
       .from("video_projects")
@@ -251,6 +253,8 @@ export async function updateProject(req: Request, res: Response) {
         script_style_id,
         voice_id,
         ...(visual_source ? { visual_source } : {}),
+        ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
+        ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
       })
       .eq("id", project_id)
       .eq("user_id", userId)

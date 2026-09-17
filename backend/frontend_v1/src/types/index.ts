@@ -17,6 +17,8 @@ export interface VideoProject {
   scriptStyleId?: string;
   voiceId?: string;
   visualSource: VisualSource;
+  transitionsEnabled: boolean;
+  subtitlesEnabled: boolean;
 }
 
 export interface Script {
