@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
@@ -27,7 +28,9 @@ export interface GenerateVoiceOutput {
 async function persistAudioAsset(
   scriptId: string,
   storageKey: string,
-  durationSeconds: number
+  durationSeconds: number,
+  voiceKey: string,
+  textHash: string
 ): Promise<string> {
   const { data: script, error: scriptError } = await supabase
     .from("scripts")
@@ -45,7 +48,7 @@ async function persistAudioAsset(
       scene_id: null,
       type: "AUDIO",
       storage_key: storageKey,
-      metadata: { duration_seconds: durationSeconds },
+      metadata: { duration_seconds: durationSeconds, voice_key: voiceKey, text_hash: textHash },
     })
     .select("id")
     .single();
@@ -54,6 +57,45 @@ async function persistAudioAsset(
   }
 
   return asset.id;
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text.trim()).digest("hex");
+}
+
+// Evita pagar TTS de nuevo por el mismo guion+voz -- antes de este chequeo,
+// probar una voz en el tab Audio ("Guardar audio para guion") y despues
+// correr el pipeline completo desde Preview ("Generar video") generaba (y
+// facturaba) la narracion DOS veces: el pipeline llama a generate_voice sin
+// saber que ya existe un audio guardado (ver orchestrator.ts paso 1). Si el
+// texto o la voz cambiaron, el hash no matchea y se regenera normal.
+async function findReusableAudioAsset(
+  videoProjectId: string,
+  voiceKey: string,
+  textHash: string
+): Promise<GenerateVoiceOutput | null> {
+  const { data, error } = await supabase
+    .from("assets")
+    .select("id, storage_key, metadata")
+    .eq("video_project_id", videoProjectId)
+    .eq("type", "AUDIO")
+    .is("scene_id", null)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  if (error || !data) return null;
+
+  const match = data.find((row) => {
+    const metadata = row.metadata as { voice_key?: string; text_hash?: string } | null;
+    return metadata?.voice_key === voiceKey && metadata?.text_hash === textHash;
+  });
+  if (!match) return null;
+
+  const metadata = match.metadata as { duration_seconds?: number } | null;
+  return {
+    storage_key: match.storage_key,
+    duration_seconds: metadata?.duration_seconds ?? 0,
+    asset_id: match.id,
+  };
 }
 
 // Voz real confirmada contra GET /v3/voices en la cuenta del proyecto --
@@ -88,6 +130,13 @@ export const generateVoiceTool: ToolDefinition<
       throw new Error("Script not found");
     }
 
+    const voiceKey = voice_id ?? "__default__";
+    const textHash = hashText(text);
+    const reusable = await findReusableAudioAsset(script.video_project_id, voiceKey, textHash);
+    if (reusable) {
+      return reusable;
+    }
+
     // Voz de Edge TTS pedida explicitamente (gratis, sin api key) -- solo
     // disponible si ENABLE_EDGE_TTS=true (ver lib/edgeTts.ts), para no
     // depender en produccion de un protocolo no oficial sin SLA.
@@ -97,7 +146,7 @@ export const generateVoiceTool: ToolDefinition<
       }
       const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
       const result = await generateWithEdgeTts(script_id, text, edgeVoiceId);
-      const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+      const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
       return { ...result, asset_id: assetId };
     }
 
@@ -107,7 +156,7 @@ export const generateVoiceTool: ToolDefinition<
         const words = text.trim() ? text.trim().split(/\s+/).length : 0;
         const storageKey = `mock://audio/${script_id}.mp3`;
         const durationSeconds = Math.max(10, Math.ceil(words / 2.5));
-        const assetId = await persistAudioAsset(script_id, storageKey, durationSeconds);
+        const assetId = await persistAudioAsset(script_id, storageKey, durationSeconds, voiceKey, textHash);
         return { storage_key: storageKey, duration_seconds: durationSeconds, asset_id: assetId };
       }
       // Sin ai33 configurado (y sin pedir una voz suya puntual): solo se
@@ -115,7 +164,7 @@ export const generateVoiceTool: ToolDefinition<
       // error que antes de agregar esta integracion.
       if (isEdgeTtsEnabled()) {
         const result = await generateWithEdgeTts(script_id, text, DEFAULT_EDGE_TTS_VOICE);
-        const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+        const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
         return { ...result, asset_id: assetId };
       }
       throw new ProviderNotConfiguredError("generate_voice");
@@ -125,7 +174,7 @@ export const generateVoiceTool: ToolDefinition<
       voice_id ?? (provider.configuration?.voice_id as string | undefined) ?? DEFAULT_VOICE_ID;
 
     const result = await generateWithAi33(script_id, text, provider.api_key, resolvedVoiceId);
-    const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds);
+    const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
     return { ...result, asset_id: assetId };
   },
 };
