@@ -31,6 +31,10 @@ export const projectsService = {
     return mapProject(row);
   },
 
+  async deleteProject(id: string): Promise<void> {
+    await api.delete<void>(`/projects/${id}`);
+  },
+
   async updateProject(id: string, updates: Partial<VideoProject>): Promise<VideoProject | null> {
     const body: Record<string, unknown> = {};
     if (updates.title !== undefined) body.title = updates.title;

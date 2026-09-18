@@ -294,7 +294,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
             <div>
               <p className="text-sm font-medium mb-1" style={{ color: "var(--foreground)" }}>Sin guion todavía</p>
               <p className="text-xs max-w-xs leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
-                Conversá con el agente en Chat para generar el guion, o escribilo vos mismo.
+                Generá el guion con IA a partir de la descripción del proyecto, o escribilo vos mismo.
               </p>
             </div>
             <button

@@ -99,6 +99,9 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [forgotNotice, setForgotNotice] = useState(false);
+  const [pendingConfirmEmail, setPendingConfirmEmail] = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);
 
   const emailId = useId();
   const passwordId = useId();
@@ -131,6 +134,8 @@ export default function LoginPage() {
         const { requiresLogin } = await register(email.trim(), password);
         if (requiresLogin) {
           setInfo("Cuenta creada. Revisa tu email para confirmar antes de iniciar sesion.");
+          setPendingConfirmEmail(email.trim());
+          setResent(false);
           setMode("login");
         } else {
           navigate("/");
@@ -148,6 +153,19 @@ export default function LoginPage() {
   // en vez de un link roto, muestra un aviso in-place. Cuando exista el
   // endpoint real, esto pasa a llamar authService.resetPassword(email).
   const handleForgotPassword = () => setForgotNotice(true);
+
+  const handleResendConfirmation = async () => {
+    if (!pendingConfirmEmail) return;
+    setResending(true);
+    try {
+      await authService.resendConfirmation(pendingConfirmEmail);
+      setResent(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo reenviar el email");
+    } finally {
+      setResending(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex" style={{ background: "var(--background)" }}>
@@ -283,9 +301,28 @@ export default function LoginPage() {
               )}
 
               {info && (
-                <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(16,185,129,0.08)", color: "rgba(52,211,153,0.95)", border: "1px solid rgba(52,211,153,0.18)" }}>
-                  {info}
-                </p>
+                <div className="rounded-lg px-3 py-2 space-y-1.5" style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(52,211,153,0.18)" }}>
+                  <p className="text-xs" style={{ color: "rgba(52,211,153,0.95)" }}>
+                    {info}
+                  </p>
+                  {pendingConfirmEmail && (
+                    resent ? (
+                      <p className="text-[11px]" style={{ color: "rgba(52,211,153,0.8)" }}>
+                        Email reenviado a {pendingConfirmEmail}.
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResendConfirmation}
+                        disabled={resending}
+                        className="text-[11px] font-medium underline transition-opacity hover:opacity-80 disabled:opacity-50"
+                        style={{ color: "rgba(52,211,153,0.95)" }}
+                      >
+                        {resending ? "Reenviando..." : "¿No te llegó? Reenviar email de confirmación"}
+                      </button>
+                    )
+                  )}
+                </div>
               )}
 
               <button
@@ -316,6 +353,8 @@ export default function LoginPage() {
                 setError(null);
                 setInfo(null);
                 setForgotNotice(false);
+                setPendingConfirmEmail(null);
+                setResent(false);
               }}
               className="font-medium transition-opacity hover:opacity-80"
               style={{ color: "var(--primary)" }}

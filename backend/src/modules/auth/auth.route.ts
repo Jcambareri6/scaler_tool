@@ -38,6 +38,26 @@ authRouter.post("/register", authRateLimiter, async (req, res) => {
     }
 });
 
+const resendSchema = z.object({
+    email: z.string().trim().email(),
+});
+
+authRouter.post("/resend-confirmation", authRateLimiter, async (req, res) => {
+    const parsed = resendSchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ message: "Email inválido" });
+    }
+
+    try {
+        await authService.resendConfirmation(parsed.data.email);
+        return res.status(200).json({ ok: true });
+    } catch (error) {
+        console.error("resend confirmation failed:", error);
+        // Mensaje generico: no confirmar/negar si el email existe.
+        return res.status(200).json({ ok: true });
+    }
+});
+
 authRouter.post("/login", authRateLimiter, async (req, res) => {
     const parsed = credentialsSchema.safeParse(req.body);
     if (!parsed.success) {

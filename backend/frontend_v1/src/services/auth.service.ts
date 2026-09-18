@@ -32,6 +32,10 @@ export const authService = {
     return { requiresLogin: true };
   },
 
+  async resendConfirmation(email: string): Promise<void> {
+    await api.post("/auth/resend-confirmation", { email });
+  },
+
   logout(): void {
     clearToken();
   },

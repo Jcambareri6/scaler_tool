@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
+import ConfirmModal from "@/components/ConfirmModal";
 import ScriptPanel from "@/features/script/ScriptPanel";
 import ScenesPanel from "@/features/scenes/ScenesPanel";
 import AudioPanel from "@/features/audio/AudioPanel";
 import PreviewPanel from "@/features/preview/PreviewPanel";
+import { useToast } from "@/lib/toastContext";
 import type { VideoProject } from "@/types";
 
 type Tab = "script" | "scenes" | "audio" | "preview";
@@ -59,10 +61,30 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
 export default function ProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [project, setProject] = useState<VideoProject | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("script");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleShare = () => {
+    showToast("info", "Compartir proyectos todavía no está disponible — próximamente");
+  };
+
+  const handleDeleteProject = async () => {
+    if (!projectId) return;
+    setDeleting(true);
+    try {
+      await projectsService.deleteProject(projectId);
+      showToast("success", "Proyecto eliminado");
+      navigate("/");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "No se pudo eliminar el proyecto");
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     if (!projectId) return;
@@ -159,6 +181,7 @@ export default function ProjectWorkspacePage() {
         <div style={{ width: 1, height: 20, background: "var(--border)" }} />
 
         <button
+          onClick={handleShare}
           className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -170,7 +193,39 @@ export default function ProjectWorkspacePage() {
           </svg>
           Compartir
         </button>
+
+        <button
+          onClick={() => setConfirmingDelete(true)}
+          title="Eliminar proyecto"
+          className="flex items-center justify-center w-8 h-8 rounded-lg transition-colors"
+          style={{ color: "var(--muted-foreground)" }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.color = "rgba(252,165,165,0.95)";
+            (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.09)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.color = "var(--muted-foreground)";
+            (e.currentTarget as HTMLElement).style.background = "transparent";
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
       </header>
+
+      {confirmingDelete && (
+        <ConfirmModal
+          title="Eliminar proyecto"
+          message={`¿Eliminar "${project.title}"? Esta acción no se puede deshacer.`}
+          confirmLabel={deleting ? "Eliminando..." : "Eliminar"}
+          danger
+          loading={deleting}
+          onConfirm={handleDeleteProject}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
 
       {/* Panel */}
       <div className="flex-1 overflow-hidden">

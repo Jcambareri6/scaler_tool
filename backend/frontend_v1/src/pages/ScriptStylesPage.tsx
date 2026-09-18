@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { scriptStylesService } from "@/services/scriptStyles.service";
 import { filesService } from "@/services/files.service";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/lib/toastContext";
 import type { ScriptStyle } from "@/types";
 
 // Movido tal cual desde src/features/script/ScriptPanel.tsx -- antes vivia
@@ -306,15 +308,18 @@ function statusText(status: ScriptStyle["status"]): string {
 }
 
 function StyleCard({ style, onDelete }: { style: ScriptStyle; onDelete: (id: string) => void }) {
+  const { showToast } = useToast();
+  const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (!confirm(`¿Eliminar el estilo "${style.name}"? Esto no afecta los proyectos que ya lo usaron.`)) return;
     setDeleting(true);
     try {
       await scriptStylesService.delete(style.id);
       onDelete(style.id);
-    } catch {
+      showToast("success", `Estilo "${style.name}" eliminado`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "No se pudo eliminar el estilo");
       setDeleting(false);
     }
   };
@@ -342,13 +347,25 @@ function StyleCard({ style, onDelete }: { style: ScriptStyle; onDelete: (id: str
         <p className="text-xs mb-3" style={{ color: "#f87171" }}>{style.error}</p>
       )}
       <button
-        onClick={handleDelete}
+        onClick={() => setConfirming(true)}
         disabled={deleting}
         className="text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-50"
         style={{ color: "#f87171" }}
       >
         {deleting ? "Eliminando..." : "Eliminar"}
       </button>
+
+      {confirming && (
+        <ConfirmModal
+          title="Eliminar estilo de narración"
+          message={`¿Eliminar el estilo "${style.name}"? Esto no afecta los proyectos que ya lo usaron.`}
+          confirmLabel={deleting ? "Eliminando..." : "Eliminar"}
+          danger
+          loading={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
     </div>
   );
 }

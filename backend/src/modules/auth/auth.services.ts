@@ -23,6 +23,19 @@ import type {LoginInput, RegisterInput} from './auth.types.js';
         return data ;
     }
 
+    // Reenvia el mail de confirmacion de signup -- para el usuario que no
+    // recibio el primer mail o lo dejo expirar, sin tener que crear la
+    // cuenta de nuevo.
+    async resendConfirmation(email: string) {
+        const { error } = await supabase.auth.resend({
+            type: "signup",
+            email,
+        });
+        if (error) {
+            throw new Error(error.message);
+        }
+    }
+
     async refresh(refreshToken: string) {
         const { data, error } = await supabase.auth.refreshSession({
             refresh_token: refreshToken,

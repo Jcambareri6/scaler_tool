@@ -119,6 +119,11 @@ export default function NewProjectPage() {
               rows={6}
               className="input-glass w-full rounded-xl px-4 py-3 text-sm resize-none"
             />
+            {!content.trim() && (
+              <p className="text-[11px] mt-1.5" style={{ color: "rgba(251,191,36,0.85)" }}>
+                Si lo dejás vacío, el guion se genera solo a partir del título — va a salir más genérico.
+              </p>
+            )}
           </div>
 
           {styles.length > 0 && (
