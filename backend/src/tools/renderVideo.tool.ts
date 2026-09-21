@@ -337,15 +337,33 @@ function buildFfmpegArgsForBatch(
       // 30fps son 90 frames de input, y zoompan aplica d=90 POR CADA UNO,
       // dando 8100 frames = 4:30 en vez de 3s) -- `d` solo controla cuantos
       // frames salen de esta rama.
+      // `zoompan` hace su PROPIO reescalado interno cuadro a cuadro (recorta
+      // la region con zoom y la agranda al tamaño de `s`) y ese reescalado
+      // NO tiene forma de pedirle lanczos -- usa siempre su algoritmo
+      // default, mas blando. Antes `s` apuntaba directo a OUTPUT_WIDTH x
+      // OUTPUT_HEIGHT, asi que TODO el efecto Ken Burns (los 100% de los
+      // frames de una escena de imagen) quedaba pasado por ese resize de
+      // baja calidad. Ahora `s` se deja en la resolucion ya escalada con
+      // lanczos (upscaledWidth x upscaledHeight) -- zoompan sigue haciendo
+      // su reescalado interno, pero a mayor resolucion (menos perdida
+      // relativa), y el downscale real al tamaño final de salida se hace
+      // aparte con lanczos justo despues (ver `scale=...lanczos` mas abajo).
       filterParts.push(
-        `[${i}:v]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase,` +
+        `[${i}:v]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=lanczos,` +
           `crop=${upscaledWidth}:${upscaledHeight},` +
-          `zoompan=z='min(zoom+0.0015,1.3)':d=${totalFrames}:s=${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}:fps=${OUTPUT_FPS},setsar=1[v${i}]`
+          `zoompan=z='min(zoom+0.0015,1.3)':d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
+          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v${i}]`
       );
     } else {
       inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(2), "-i", batchClipPaths[i]!);
+      // flags=lanczos (en vez del default bilineal de ffmpeg): sin esto, un
+      // clip de stock con resolucion nativa menor a 1280x720 sale
+      // notoriamente mas blando que sus escenas vecinas al escalarlo hacia
+      // arriba -- confirmado como la causa de la inconsistencia de nitidez
+      // entre escenas de un mismo video (algunas vienen de clips de menor
+      // resolucion que otras).
       filterParts.push(
-        `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,` +
+        `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
           `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}[v${i}]`
       );
     }
@@ -391,7 +409,8 @@ async function assembleBatchesWithTransitions(
   batchOutputPaths: string[],
   batchDurations: number[],
   targetVideoBitrateBps: number | null,
-  outputPath: string
+  outputPath: string,
+  quality: "intermediate" | "final"
 ): Promise<void> {
   const inputArgs = batchOutputPaths.flatMap((p) => ["-i", p]);
   const filterParts: string[] = [];
@@ -413,7 +432,7 @@ async function assembleBatchesWithTransitions(
     filterParts.join(";"),
     "-map",
     "[outv]",
-    ...videoCodecArgs(targetVideoBitrateBps),
+    ...videoCodecArgs(targetVideoBitrateBps, quality),
     "-y",
     outputPath,
   ]);
@@ -441,20 +460,51 @@ const COLOR_ARGS = [
   "tv",
 ];
 
-// Args de codec de video para pasarle a ffmpeg en cada tanda. Sin bitrate
-// objetivo (null) se deja el CRF por defecto de libx264 -- mejor calidad,
-// usado cuando el destino final no tiene limite de tamano (Supabase
-// Storage). Con bitrate objetivo, se fuerza para que la suma de tandas de
-// como resultado un archivo final de un tamano predecible.
-function videoCodecArgs(targetVideoBitrateBps: number | null): string[] {
+// CRF para las pasadas que NO son la ultima (batches cuando hay
+// transiciones y/o subtitulos, y el ensamblado con transiciones cuando hay
+// subtitulos despues). Cada reencode de H.264 vuelve a comprimir
+// macrobloques que ya vienen comprimidos de la pasada anterior (perdida
+// generacional) -- confirmado como la causa de que "algunos" videos
+// (los que tienen transitions_enabled y/o subtitles_enabled, que suman 2 o
+// 3 pasadas en vez de 1) se vean visiblemente peor que uno simple con la
+// misma fuente. Un CRF bajo en las pasadas intermedias las deja
+// practicamente sin perdida, asi que solo la ULTIMA pasada real determina
+// la calidad/tamano percibido, igual que en el caso sin transiciones ni
+// subtitulos (una sola pasada).
+const INTERMEDIATE_CRF = 17;
+
+// Args de codec de video para pasarle a ffmpeg en cada tanda. `quality:
+// "intermediate"` fuerza el CRF casi-sin-perdida de arriba e ignora
+// targetVideoBitrateBps (se aplica recien en la pasada final). En modo
+// "final" (default): sin bitrate objetivo (null) se deja el CRF por
+// defecto de libx264 -- mejor calidad, usado cuando el destino final no
+// tiene limite de tamano (Supabase Storage/R2). Con bitrate objetivo, se
+// fuerza para que la suma de tandas de como resultado un archivo final de
+// un tamano predecible.
+function videoCodecArgs(
+  targetVideoBitrateBps: number | null,
+  quality: "intermediate" | "final" = "final"
+): string[] {
+  if (quality === "intermediate") {
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", `${INTERMEDIATE_CRF}`, ...COLOR_ARGS];
+  }
+  // Pasada final: ahora es la UNICA que determina la calidad percibida (las
+  // intermedias ya salen casi sin perdida, ver INTERMEDIATE_CRF), asi que se
+  // justifica pagar un preset mas lento aca -- "veryfast" simplifica
+  // bastante la estimacion de movimiento/particion de x264, lo que se nota
+  // como falta de detalle en escenas con movimiento incluso a un CRF bajo.
+  // "medium" (default de x264) da bastante mas nitidez a cambio de un
+  // encode mas lento, y esto corre UNA sola vez por render (no por tanda).
   if (targetVideoBitrateBps === null) {
-    return ["-c:v", "libx264", "-preset", "veryfast", ...COLOR_ARGS];
+    // CRF por defecto de libx264 es 23 -- bajado a 20 (mas nitido) ya que
+    // R2/Supabase Storage no tienen limite de tamano que cuidar aca.
+    return ["-c:v", "libx264", "-preset", "medium", "-crf", "20", ...COLOR_ARGS];
   }
   return [
     "-c:v",
     "libx264",
     "-preset",
-    "veryfast",
+    "medium",
     "-b:v",
     `${targetVideoBitrateBps}`,
     "-maxrate",
@@ -617,6 +667,12 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       return clipPath;
     });
 
+    // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
+    // de codificacion real (se vuelve a reencodear al unir con xfade y/o al
+    // quemar subtitulos) -- se codifica casi sin perdida para no sumar
+    // artefactos de compresion que despues la pasada final no puede
+    // recuperar (ver INTERMEDIATE_CRF).
+    const batchQuality = !transitionsEnabled && !subtitlesEnabled ? "final" : "intermediate";
     const totalBatches = Math.ceil(segments.length / BATCH_SIZE);
     const batchOutputPaths: string[] = [];
     const batchDurations: number[] = [];
@@ -634,7 +690,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         filterComplex,
         "-map",
         "[outv]",
-        ...videoCodecArgs(targetVideoBitrateBps),
+        ...videoCodecArgs(targetVideoBitrateBps, batchQuality),
         "-y",
         batchOutputPath,
       ]);
@@ -687,11 +743,15 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       // que el video queda mas corto que el audio narrado; se compensa
       // sosteniendo el ultimo frame (tpad) el tiempo exacto perdido, para
       // que no se corte la narracion antes de tiempo.
+      // Si ademas hay subtitulos, esta union con audio TAMPOCO es la pasada
+      // final (burnSubtitles reencodea una vez mas sobre outputPath) -- ver
+      // mismo razonamiento que batchQuality.
+      const assembleQuality = subtitlesEnabled ? "intermediate" : "final";
       const assembledPath =
         totalBatches === 1 ? batchOutputPaths[0]! : path.join(workDir, "assembled.mp4");
       if (totalBatches > 1) {
         console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones...`);
-        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, assembledPath);
+        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, assembledPath, assembleQuality);
       }
 
       const totalShrinkage = (segments.length - 1) * TRANSITION_DURATION_SECONDS;
@@ -707,7 +767,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         "[padded]",
         "-map",
         "1:a",
-        ...videoCodecArgs(targetVideoBitrateBps),
+        ...videoCodecArgs(targetVideoBitrateBps, assembleQuality),
         "-c:a",
         "aac",
         "-b:a",

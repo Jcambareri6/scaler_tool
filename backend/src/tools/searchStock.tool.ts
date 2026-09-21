@@ -78,6 +78,21 @@ interface PexelsVideoFile {
   width: number;
 }
 
+// El output final se escala a 1280x720 (OUTPUT_WIDTH en renderVideo.tool.ts)
+// -- pedir mas resolucion que eso solo suma tiempo de descarga sin mejorar
+// nada, pero pedir MENOS es lo que estaba pasando antes (bug real, ver
+// comentario abajo): se bajaba el archivo mas chico de Pexels y se
+// up-escalaba, perdiendo nitidez sin remedio. Se busca el mas chico que
+// YA alcance o supere el ancho de salida, y si ninguno llega (raro, pero
+// posible en clips viejos de baja resolucion), se cae al mas grande
+// disponible en vez de al mas chico.
+const TARGET_MIN_WIDTH = 1280;
+
+function selectPexelsVideoFile(files: PexelsVideoFile[]): PexelsVideoFile | undefined {
+  const sortedByWidth = [...files].sort((a, b) => a.width - b.width);
+  return sortedByWidth.find((f) => f.width >= TARGET_MIN_WIDTH) ?? sortedByWidth[sortedByWidth.length - 1];
+}
+
 interface PexelsVideo {
   id: number;
   url: string;
@@ -104,7 +119,14 @@ async function searchPexels(apiKey: string, keyword: string): Promise<StockCandi
     provider: "pexels" as const,
     external_id: String(video.id),
     url: video.url,
-    preview_url: [...video.video_files].sort((a, b) => a.width - b.width)[0]?.link ?? video.image,
+    // OJO: antes se ordenaba por ancho ASCENDENTE y se tomaba el primero
+    // (el archivo mas chico -- practicamente un thumbnail) para lo que
+    // termina siendo el video real del render final, no una preview de UI
+    // de verdad. Confirmado como la causa principal de que clips de stock
+    // salieran visiblemente peor que el resto del video (esta era la unica
+    // fuente de video real en produccion, sin imagenes/Ken Burns de por
+    // medio).
+    preview_url: selectPexelsVideoFile(video.video_files)?.link ?? video.image,
     duration_seconds: video.duration,
   }));
 }
@@ -114,7 +136,11 @@ interface PixabayHit {
   pageURL: string;
   tags: string;
   duration: number;
+  // La API tambien devuelve un tier "large" (falta declararlo era el bug:
+  // nunca se lo pedia, asi que como mucho se usaba "medium" aunque hubiera
+  // algo mejor disponible para la misma key).
   videos: {
+    large?: { url: string };
     medium?: { url: string };
     small?: { url: string };
     tiny?: { url: string };
@@ -150,7 +176,7 @@ async function searchPixabay(
       external_id: String(hit.id),
       url: hit.pageURL,
       preview_url:
-        hit.videos.medium?.url ?? hit.videos.small?.url ?? hit.videos.tiny?.url ?? hit.pageURL,
+        hit.videos.large?.url ?? hit.videos.medium?.url ?? hit.videos.small?.url ?? hit.videos.tiny?.url ?? hit.pageURL,
       duration_seconds: hit.duration,
     }));
 }
