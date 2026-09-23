@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
 import ScenePanel from "./ScenePanel";
-import SceneReplaceModal from "./SceneReplaceModal";
+import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
 import type { Asset, Job, Scene } from "@/types";
 
 interface Props {
@@ -71,6 +71,10 @@ function sequenceOf(asset: Asset): number {
 export default function StockReviewPanel({ projectId, jobId, onApproved, onRegenerate, regenerating }: Props) {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
+  // Escenas cuyo reemplazo esta corriendo en segundo plano (ver
+  // handleReplaceSubmit) -- el modal ya se cerro apenas el usuario confirma,
+  // este set es lo unico que le muestra que ese clip todavia esta en vuelo.
+  const [replacingSceneIds, setReplacingSceneIds] = useState<Set<string>>(new Set());
   const [audioAsset, setAudioAsset] = useState<Asset | null>(null);
   // Cues de subtitulo (timelines.content.segments, ver build_timeline.tool.ts)
   // -- mismos datos que usa el render final (render_video) y el preview post-
@@ -235,8 +239,32 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     if (scene) setReplacingScene(scene);
   };
 
-  const handleReplaced = (sceneId: string, newAssets: Asset[]) => {
-    setAssets((prev) => [...prev.filter((a) => a.sceneId !== sceneId), ...newAssets]);
+  // El modal ya se cerro cuando esto se llama -- el reemplazo real corre
+  // aca, en segundo plano, para que el usuario pueda seguir viendo/tocando
+  // otras escenas mientras tanto en vez de quedar bloqueado por un modal.
+  const handleReplaceSubmit = (sceneId: string, params: ReplaceParams) => {
+    setReplacingSceneIds((prev) => new Set(prev).add(sceneId));
+    setError(null);
+
+    (async () => {
+      try {
+        const newAssets =
+          params.tab === "upload"
+            ? await projectsService.uploadSceneVisual(sceneId, params.file)
+            : params.tab === "ai"
+              ? await projectsService.regenerateSceneVisual(sceneId, { source: params.aiKind, aiPrompt: params.aiPrompt })
+              : await projectsService.regenerateSceneVisual(sceneId, { source: "stock", prompt: params.prompt });
+        setAssets((prev) => [...prev.filter((a) => a.sceneId !== sceneId), ...newAssets]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo reemplazar el clip");
+      } finally {
+        setReplacingSceneIds((prev) => {
+          const next = new Set(prev);
+          next.delete(sceneId);
+          return next;
+        });
+      }
+    })();
   };
 
   const handleApprove = async () => {
@@ -475,6 +503,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
           assets={assets}
           selectedSceneId={selectedSceneId}
           playingSceneId={activeSegment?.scene.id ?? null}
+          replacingSceneIds={replacingSceneIds}
           onSelectScene={handleSelectScene}
           onReplace={handleOpenReplace}
         />
@@ -485,7 +514,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
           scene={replacingScene}
           currentAssets={assets.filter((a) => a.sceneId === replacingScene.id)}
           onClose={() => setReplacingScene(null)}
-          onReplaced={handleReplaced}
+          onSubmit={handleReplaceSubmit}
         />
       )}
     </div>

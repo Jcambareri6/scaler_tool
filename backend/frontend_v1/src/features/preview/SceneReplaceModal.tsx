@@ -1,5 +1,4 @@
 import { useRef, useState } from "react";
-import { projectsService } from "@/services/projects.service";
 import type { Asset, Scene } from "@/types";
 
 interface Props {
@@ -9,58 +8,49 @@ interface Props {
   // replaceStockSegmentsForScene), no para editarlos aca.
   currentAssets: Asset[];
   onClose: () => void;
-  onReplaced: (sceneId: string, assets: Asset[]) => void;
+  // El modal ya NO espera la red -- junta los datos del tab elegido, se los
+  // pasa al padre (StockReviewPanel) y se cierra al toque. El pedido real
+  // (que puede tardar) corre ahi en segundo plano, para que el usuario pueda
+  // seguir mirando/reemplazando otras escenas mientras tanto en vez de
+  // quedar con el modal bloqueado tapando el resto de los clips.
+  onSubmit: (sceneId: string, params: ReplaceParams) => void;
 }
 
 type Tab = "stock" | "upload" | "ai";
 
+export type ReplaceParams =
+  | { tab: "stock"; prompt: string }
+  | { tab: "ai"; aiKind: "ai" | "ai_image"; aiPrompt: string }
+  | { tab: "upload"; file: File };
+
 // Modal de reemplazo puntual de una escena (click en "Reemplazar clip" desde
 // el panel de escenas de StockReviewPanel) -- las tres vias que describe
 // mejoras-interfaz-preview-scalertool.md: buscar stock, subir propio, o
-// generar con IA. Las dos primeras pegan contra scene.service.ts via
-// projectsService (mismo endpoint que ya usa ScenesPanel/SceneDetail para
-// "Regenerar visual" fuera de este gate), la tercera es nueva
-// (upload-visual, multipart).
-export default function SceneReplaceModal({ scene, currentAssets, onClose, onReplaced }: Props) {
+// generar con IA. La llamada real a scene.service.ts (via projectsService)
+// la hace el padre en segundo plano (ver onSubmit arriba), no este modal.
+export default function SceneReplaceModal({ scene, currentAssets, onClose, onSubmit }: Props) {
   const [tab, setTab] = useState<Tab>("stock");
   const [stockPrompt, setStockPrompt] = useState(scene.visualPrompt ?? "");
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiKind, setAiKind] = useState<"ai" | "ai_image">("ai");
   const [file, setFile] = useState<File | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSubmit = async () => {
-    setSubmitting(true);
+  const handleSubmit = () => {
     setError(null);
-    try {
-      let assets: Asset[];
-      if (tab === "upload") {
-        if (!file) {
-          setError("Elegí un archivo primero");
-          setSubmitting(false);
-          return;
-        }
-        assets = await projectsService.uploadSceneVisual(scene.id, file);
-      } else if (tab === "ai") {
-        assets = await projectsService.regenerateSceneVisual(scene.id, {
-          source: aiKind,
-          aiPrompt: aiPrompt.trim(),
-        });
-      } else {
-        assets = await projectsService.regenerateSceneVisual(scene.id, {
-          source: "stock",
-          prompt: stockPrompt.trim(),
-        });
+    if (tab === "upload") {
+      if (!file) {
+        setError("Elegí un archivo primero");
+        return;
       }
-      onReplaced(scene.id, assets);
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo reemplazar el clip");
-    } finally {
-      setSubmitting(false);
+      onSubmit(scene.id, { tab: "upload", file });
+    } else if (tab === "ai") {
+      onSubmit(scene.id, { tab: "ai", aiKind, aiPrompt: aiPrompt.trim() });
+    } else {
+      onSubmit(scene.id, { tab: "stock", prompt: stockPrompt.trim() });
     }
+    onClose();
   };
 
   return (
@@ -228,26 +218,14 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onRep
         )}
 
         <div className="flex gap-2">
-          <button
-            onClick={onClose}
-            disabled={submitting}
-            className="btn-secondary flex-1 py-2.5 text-sm font-medium rounded-xl disabled:opacity-50"
-          >
+          <button onClick={onClose} className="btn-secondary flex-1 py-2.5 text-sm font-medium rounded-xl">
             Cancelar
           </button>
           <button
             onClick={handleSubmit}
-            disabled={submitting}
-            className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-xl disabled:opacity-50"
+            className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-xl"
           >
-            {submitting ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Reemplazando...
-              </>
-            ) : (
-              "Reemplazar"
-            )}
+            Reemplazar
           </button>
         </div>
       </div>

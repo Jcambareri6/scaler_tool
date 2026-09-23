@@ -419,43 +419,99 @@ function batchDuration(batchSegments: RenderSegment[], transitionsEnabled: boole
   return sum - (batchSegments.length - 1) * TRANSITION_DURATION_SECONDS;
 }
 
-// Encadena las tandas ya codificadas (batch-*.mp4) con fundidos en vez del
-// demuxer "concat" -- necesario solo cuando hay mas de una tanda Y
-// transitions_enabled esta prendido. A diferencia del concat+`-c:v copy` de
-// siempre, esto reencodea (xfade lo exige), pero opera sobre archivos ya
-// comprimidos y chicos (no sobre los clips originales), asi que el costo de
-// memoria es el mismo tipo de operacion liviana que unir tandas siempre fue.
-async function assembleBatchesWithTransitions(
-  batchOutputPaths: string[],
-  batchDurations: number[],
+// Fusiona DOS tandas ya codificadas con un fundido -- bloque minimo que usa
+// assembleBatchesWithTransitions para armar el arbol binario de abajo.
+async function mergePairWithTransition(
+  pathA: string,
+  durationA: number,
+  pathB: string,
+  durationB: number,
   targetVideoBitrateBps: number | null,
   outputPath: string,
   quality: "intermediate" | "final"
-): Promise<void> {
-  const inputArgs = batchOutputPaths.flatMap((p) => ["-i", p]);
-  const filterParts: string[] = [];
-  let currentLabel = "0:v";
-  let running = batchDurations[0]!;
-  for (let i = 1; i < batchOutputPaths.length; i++) {
-    const isLast = i === batchOutputPaths.length - 1;
-    const outLabel = isLast ? "outv" : `bx${i}`;
-    const offset = Math.max(0, running - TRANSITION_DURATION_SECONDS);
-    filterParts.push(
-      `[${currentLabel}][${i}:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[${outLabel}]`
-    );
-    currentLabel = outLabel;
-    running = running + batchDurations[i]! - TRANSITION_DURATION_SECONDS;
-  }
+): Promise<number> {
+  const offset = Math.max(0, durationA - TRANSITION_DURATION_SECONDS);
   await runFfmpeg([
-    ...inputArgs,
+    "-i",
+    pathA,
+    "-i",
+    pathB,
     "-filter_complex",
-    filterParts.join(";"),
+    `[0:v][1:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[outv]`,
     "-map",
     "[outv]",
     ...videoCodecArgs(targetVideoBitrateBps, quality),
     "-y",
     outputPath,
   ]);
+  return durationA + durationB - TRANSITION_DURATION_SECONDS;
+}
+
+// Encadena las tandas ya codificadas (batch-*.mp4) con fundidos -- necesario
+// solo cuando hay mas de una tanda Y transitions_enabled esta prendido.
+// Fusiona de a PARES en niveles (arbol binario: 49 tandas -> 25 -> 13 -> 7 ->
+// 4 -> 2 -> 1) en vez de un unico comando ffmpeg con las 49 tandas abiertas
+// a la vez -- cada input abierto en ffmpeg reserva su propio decoder +
+// buffers de frames de referencia AUNQUE todavia no le toque el turno en la
+// cadena de xfade, asi que un solo comando con N inputs mantiene ese costo
+// residente en memoria las N tandas juntas, no una por vez (visto en
+// produccion: "Ran out of memory (used over 4GB)" con 49 tandas). Con el
+// arbol, cada comando individual tiene como maximo 2 inputs abiertos --el
+// pico de esta etapa deja de crecer con la cantidad de tandas.
+// Los niveles intermedios se codifican casi sin perdida (CRF de
+// "intermediate") -- son varias generaciones de re-encode en cadena (log2(N)
+// niveles en vez de 1 sola fusion), y perder calidad en cada una se notaria;
+// solo la ULTIMA fusion (la que produce assembledPath) usa `quality`, mismo
+// criterio que ya usaban las tandas individuales (ver batchQuality en
+// render_video).
+async function assembleBatchesWithTransitions(
+  batchOutputPaths: string[],
+  batchDurations: number[],
+  targetVideoBitrateBps: number | null,
+  workDir: string,
+  assembledPath: string,
+  quality: "intermediate" | "final"
+): Promise<void> {
+  let paths = batchOutputPaths;
+  let durations = batchDurations;
+  let level = 0;
+
+  while (paths.length > 1) {
+    const isLastLevel = paths.length === 2;
+    const nextPaths: string[] = [];
+    const nextDurations: number[] = [];
+
+    for (let i = 0; i < paths.length; i += 2) {
+      if (i + 1 >= paths.length) {
+        // Cantidad impar de tandas en este nivel -- la ultima pasa sola al
+        // siguiente nivel, no hay con quien fusionarla todavia.
+        nextPaths.push(paths[i]!);
+        nextDurations.push(durations[i]!);
+        continue;
+      }
+
+      const outPath = isLastLevel ? assembledPath : path.join(workDir, `merge-L${level}-${i / 2}.mp4`);
+      const mergedDuration = await mergePairWithTransition(
+        paths[i]!,
+        durations[i]!,
+        paths[i + 1]!,
+        durations[i + 1]!,
+        targetVideoBitrateBps,
+        outPath,
+        isLastLevel ? quality : "intermediate"
+      );
+      // Ya estan fusionadas en outPath -- las dos tandas de origen de este
+      // par no hacen mas falta.
+      await cleanupFiles([paths[i]!, paths[i + 1]!]);
+
+      nextPaths.push(outPath);
+      nextDurations.push(mergedDuration);
+    }
+
+    paths = nextPaths;
+    durations = nextDurations;
+    level++;
+  }
 }
 
 // Tags de espacio de color explicitos -- sin esto, el mp4 no lleva
@@ -780,11 +836,8 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       const assembledPath =
         totalBatches === 1 ? batchOutputPaths[0]! : path.join(workDir, "assembled.mp4");
       if (totalBatches > 1) {
-        console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones...`);
-        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, assembledPath, assembleQuality);
-        // Ya estan fusionadas en assembledPath -- las tandas sueltas no
-        // hacen mas falta.
-        await cleanupFiles(batchOutputPaths);
+        console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones (arbol binario)...`);
+        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, workDir, assembledPath, assembleQuality);
       }
 
       const totalShrinkage = (segments.length - 1) * TRANSITION_DURATION_SECONDS;

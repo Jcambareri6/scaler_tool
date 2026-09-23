@@ -11,6 +11,10 @@ interface Props {
   // nada.
   selectedSceneId: string | null;
   playingSceneId: string | null;
+  // Escenas con un reemplazo corriendo en segundo plano (ver
+  // StockReviewPanel::handleReplaceSubmit) -- el modal ya se cerro, esto es
+  // lo unico que le muestra al usuario que todavia falta terminar.
+  replacingSceneIds: Set<string>;
   onSelectScene: (scene: Scene) => void;
   onReplace: () => void;
 }
@@ -51,12 +55,14 @@ function SceneRow({
   asset,
   selected,
   playing,
+  replacing,
   onSelect,
 }: {
   scene: Scene;
   asset: Asset | null;
   selected: boolean;
   playing: boolean;
+  replacing: boolean;
   onSelect: () => void;
 }) {
   const rowRef = useRef<HTMLButtonElement>(null);
@@ -93,6 +99,18 @@ function SceneRow({
         >
           {scene.order}
         </span>
+        {replacing && (
+          <div
+            className="absolute inset-0 flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.55)" }}
+            title="Reemplazando en segundo plano..."
+          >
+            <span
+              className="w-4 h-4 border-2 rounded-full animate-spin"
+              style={{ borderColor: "rgba(255,255,255,0.25)", borderTopColor: "#a78bfa" }}
+            />
+          </div>
+        )}
       </div>
 
       <div className="min-w-0 flex-1">
@@ -116,7 +134,7 @@ function SceneRow({
   );
 }
 
-export default function ScenePanel({ scenes, assets, selectedSceneId, playingSceneId, onSelectScene, onReplace }: Props) {
+export default function ScenePanel({ scenes, assets, selectedSceneId, playingSceneId, replacingSceneIds, onSelectScene, onReplace }: Props) {
   const assetsByScene = new Map<string, Asset[]>();
   for (const asset of assets) {
     if (!asset.sceneId) continue;
@@ -160,6 +178,7 @@ export default function ScenePanel({ scenes, assets, selectedSceneId, playingSce
             asset={assetsByScene.get(scene.id)?.[0] ?? null}
             selected={scene.id === selectedSceneId}
             playing={scene.id === playingSceneId}
+            replacing={replacingSceneIds.has(scene.id)}
             onSelect={() => onSelectScene(scene)}
           />
         ))}
