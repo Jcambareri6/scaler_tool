@@ -54,6 +54,33 @@ function parseDurationSeconds(value: unknown): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+// Audio que el usuario subio a mano (POST /projects/:id/script/audio, ver
+// script.service.ts::uploadScriptAudio) en vez de pagar el TTS de ai33.pro --
+// si existe, el paso 1 lo usa tal cual y saltea generate_voice por completo
+// (ai33.pro puede tardar minutos con guiones largos y factura el credito
+// igual aunque el polling se corte antes de terminar).
+async function findUploadedAudioAsset(projectId: string): Promise<GenerateVoiceOutput | null> {
+  const { data, error } = await supabase
+    .from("assets")
+    .select("id, storage_key, metadata")
+    .eq("video_project_id", projectId)
+    .eq("type", "AUDIO")
+    .is("scene_id", null)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  if (error || !data) return null;
+
+  const match = data.find((row) => (row.metadata as { kind?: string } | null)?.kind === "user_upload");
+  if (!match) return null;
+
+  const metadata = match.metadata as { duration_seconds?: number } | null;
+  return {
+    storage_key: match.storage_key,
+    duration_seconds: metadata?.duration_seconds ?? 0,
+    asset_id: match.id,
+  };
+}
+
 async function getProjectOrThrow(projectId: string, userId: string) {
   const { data: project, error } = await supabase
     .from("video_projects")
@@ -118,19 +145,24 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
 
-  // 1. Voz -- respeta la voz elegida en el tab Audio (project.voice_id); si
-  // no hay ninguna elegida, generate_voice cae a su DEFAULT_VOICE_ID.
+  // 1. Voz -- si el usuario subio su propio audio para este proyecto, se usa
+  // tal cual (ver findUploadedAudioAsset arriba) y se saltea el TTS entero.
+  // Si no, respeta la voz elegida en el tab Audio (project.voice_id); si no
+  // hay ninguna elegida, generate_voice cae a su DEFAULT_VOICE_ID.
   // generate_voice ya persiste su propio Asset (ver generateVoice.tool.ts
   // persistAudioAsset) -- no hace falta insertarlo de nuevo aca.
-  const voice = await runTool<GenerateVoiceInput, GenerateVoiceOutput>(
-    "generate_voice",
-    {
-      script_id: script.id,
-      text: scriptText,
-      ...(project.voice_id ? { voice_id: project.voice_id as string } : {}),
-    },
-    toolCtx
-  );
+  const uploadedAudio = await findUploadedAudioAsset(projectId);
+  const voice =
+    uploadedAudio ??
+    (await runTool<GenerateVoiceInput, GenerateVoiceOutput>(
+      "generate_voice",
+      {
+        script_id: script.id,
+        text: scriptText,
+        ...(project.voice_id ? { voice_id: project.voice_id as string } : {}),
+      },
+      toolCtx
+    ));
 
   await setJobStatus(ctx.jobId, projectId, "AUDIO_DONE", { progress: 15 });
 

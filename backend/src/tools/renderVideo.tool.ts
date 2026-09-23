@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 // ffmpeg-static es CJS puro (`module.exports = <path>`) con un .d.ts en
@@ -255,6 +255,26 @@ function runFfmpeg(args: string[]): Promise<void> {
       else reject(new Error(`ffmpeg salio con codigo ${code}: ${stderr.slice(-2000)}`));
     });
   });
+}
+
+// Borra archivos intermedios apenas dejan de hacer falta en vez de esperar
+// al cleanup final del workDir -- con 190+ escenas, tener los clips
+// descargados + las 60+ tandas codificadas + assembled.mp4 + final.mp4 todos
+// coexistiendo en disco al mismo tiempo se va facil arriba de 1-2GB, y en
+// hosting con /tmp efimero y limitado (ej: Render, tope de 2GB) eso tira la
+// instancia entera ("Size of temporary storage volume /tmp exceeded the
+// limit", visto en produccion). Best-effort: si el borrado falla no vale la
+// pena tirar el render por eso, mismo criterio que el cleanup del workDir.
+async function cleanupFiles(paths: string[]): Promise<void> {
+  await Promise.all(
+    paths.map(async (p) => {
+      try {
+        await unlink(p);
+      } catch (cleanupError) {
+        console.warn(`[render_video] no se pudo borrar ${p}:`, cleanupError);
+      }
+    })
+  );
 }
 
 const OUTPUT_FPS = 30;
@@ -655,18 +675,6 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     const audioPath = path.join(workDir, "narration.mp3");
     await downloadTo(content.audio.storage_key, audioPath);
 
-    console.log(`[render_video] descargando ${segments.length} clips/imagenes...`);
-    const clipPaths = await mapWithConcurrency(segments, 5, async (segment, i) => {
-      // La extension real importa: el demuxer "image2" (usado con -loop 1
-      // para las imagenes generadas) espera un patron de secuencia tipo
-      // %03d cuando el archivo no tiene extension, y falla con "does not
-      // contain an image sequence pattern" -- .png/.mp4 alcanza para que
-      // ffmpeg detecte el formato solo, sin forzar -f explicito.
-      const clipPath = path.join(workDir, segment.isImage ? `segment-${i}.png` : `segment-${i}.mp4`);
-      await downloadTo(segment.storageKey, clipPath);
-      return clipPath;
-    });
-
     // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
     // de codificacion real (se vuelve a reencodear al unir con xfade y/o al
     // quemar subtitulos) -- se codifica casi sin perdida para no sumar
@@ -679,7 +687,24 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     for (let b = 0; b < totalBatches; b++) {
       const batchStart = b * BATCH_SIZE;
       const batchSegments = segments.slice(batchStart, batchStart + BATCH_SIZE);
-      const batchClipPaths = clipPaths.slice(batchStart, batchStart + BATCH_SIZE);
+
+      // Descarga solo los clips de ESTA tanda (no todos los del video de
+      // entrada) -- con 190+ escenas, bajar todos los clips de una antes de
+      // codificar el primer frame es el pico real de uso de disco (peor
+      // incluso que las tandas ya codificadas), y en hosting con /tmp chico
+      // (ver cleanupFiles arriba) alcanza solo para tirar la instancia.
+      const batchClipPaths = await mapWithConcurrency(batchSegments, 5, async (segment, j) => {
+        const i = batchStart + j;
+        // La extension real importa: el demuxer "image2" (usado con -loop 1
+        // para las imagenes generadas) espera un patron de secuencia tipo
+        // %03d cuando el archivo no tiene extension, y falla con "does not
+        // contain an image sequence pattern" -- .png/.mp4 alcanza para que
+        // ffmpeg detecte el formato solo, sin forzar -f explicito.
+        const clipPath = path.join(workDir, segment.isImage ? `segment-${i}.png` : `segment-${i}.mp4`);
+        await downloadTo(segment.storageKey, clipPath);
+        return clipPath;
+      });
+
       const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled);
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 
@@ -696,6 +721,10 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       ]);
       batchOutputPaths.push(batchOutputPath);
       batchDurations.push(batchDuration(batchSegments, transitionsEnabled));
+
+      // Los clips de origen de esta tanda ya quedaron adentro de
+      // batchOutputPath -- no hace falta conservarlos en disco.
+      await cleanupFiles(batchClipPaths);
     }
 
     const outputPath = path.join(workDir, "final.mp4");
@@ -734,6 +763,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         "-y",
         outputPath,
       ]);
+      await cleanupFiles([...batchOutputPaths, concatListPath]);
     } else {
       // Union final CON transiciones: las tandas se encadenan con fundidos
       // en vez de un corte directo (assembleBatchesWithTransitions) cuando
@@ -752,6 +782,9 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       if (totalBatches > 1) {
         console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones...`);
         await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, assembledPath, assembleQuality);
+        // Ya estan fusionadas en assembledPath -- las tandas sueltas no
+        // hacen mas falta.
+        await cleanupFiles(batchOutputPaths);
       }
 
       const totalShrinkage = (segments.length - 1) * TRANSITION_DURATION_SECONDS;
@@ -776,6 +809,10 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         "-y",
         outputPath,
       ]);
+      // assembledPath ya esta mezclado con audio en outputPath -- no hace
+      // falta conservarlo (incluye el caso totalBatches===1, donde
+      // assembledPath era la unica tanda).
+      await cleanupFiles([assembledPath]);
     }
 
     let finalOutputPath = outputPath;
@@ -785,6 +822,8 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
       finalOutputPath = path.join(workDir, "final-subtitled.mp4");
       await burnSubtitles(outputPath, srtPath, targetVideoBitrateBps, finalOutputPath);
+      // outputPath (sin subtitulos) ya quedo quemado en finalOutputPath.
+      await cleanupFiles([outputPath, srtPath]);
     }
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);

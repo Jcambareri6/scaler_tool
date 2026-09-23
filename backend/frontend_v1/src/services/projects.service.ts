@@ -287,4 +287,18 @@ export const projectsService = {
     if (!asset) throw new Error("generate_voice no devolvio un audio");
     return asset;
   },
+
+  // Alternativa a generateVoice: el usuario sube su propio audio en vez de
+  // pagar el TTS (ai33.pro puede tardar minutos con guiones largos). El
+  // pipeline (orchestrator.ts::findUploadedAudioAsset) lo detecta y saltea
+  // generate_voice por completo la proxima vez que corra.
+  async uploadAudio(projectId: string, file: File): Promise<Asset> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const row = await api.postForm<Parameters<typeof mapAsset>[0]>(
+      `/projects/${projectId}/script/audio`,
+      formData
+    );
+    return mapAsset(row);
+  },
 };

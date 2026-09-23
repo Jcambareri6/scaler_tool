@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject } from "../../lib/ownership.js";
+import { uploadUserAudio } from "../../lib/ai33.js";
 import type { ScriptDetail } from "./script.types.js";
 
 export async function createScript(req: Request, res: Response) {
@@ -124,5 +125,58 @@ export async function updateScript(req: Request, res: Response) {
     return res.status(200).json(data);
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// Reemplaza la narracion de generate_voice (ai33.pro TTS, puede tardar
+// minutos y facturar igual aunque el polling se corte antes) por un audio
+// que el usuario ya tiene grabado -- se sube tal cual, y runPreRenderPipeline
+// (orchestrator.ts paso 1) lo detecta y saltea el TTS por completo.
+export async function uploadScriptAudio(req: Request, res: Response) {
+  try {
+    const { project_id } = req.params;
+    const userId = req.user!.id;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: "file is required" });
+    }
+    if (!file.mimetype.startsWith("audio/")) {
+      return res.status(400).json({ error: "El archivo debe ser un audio" });
+    }
+
+    const project = await getOwnedProject(project_id, userId);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    const { data: script, error: scriptError } = await supabase
+      .from("scripts")
+      .select("id")
+      .eq("video_project_id", project_id)
+      .single();
+    if (scriptError || !script) {
+      return res.status(404).json({ error: "El proyecto no tiene guion todavia" });
+    }
+
+    const extension = (file.originalname.split(".").pop() || "audio").toLowerCase();
+    const result = await uploadUserAudio(script.id, file.buffer, extension);
+
+    const { data: asset, error: assetError } = await supabase
+      .from("assets")
+      .insert({
+        video_project_id: project_id,
+        scene_id: null,
+        type: "AUDIO",
+        storage_key: result.storage_key,
+        metadata: { kind: "user_upload", duration_seconds: result.duration_seconds },
+      })
+      .select()
+      .single();
+    if (assetError) return res.status(400).json({ error: assetError.message });
+
+    return res.status(200).json(asset);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 }

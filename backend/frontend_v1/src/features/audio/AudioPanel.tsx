@@ -28,6 +28,7 @@ export default function AudioPanel({ projectId, project }: Props) {
 
   const [audioAsset, setAudioAsset] = useState<Asset | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     Promise.all([projectsService.listVoices(), projectsService.getAudioAsset(projectId)])
@@ -75,6 +76,19 @@ export default function AudioPanel({ projectId, project }: Props) {
       setError(err instanceof Error ? err.message : "No se pudo generar la narracion");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleUploadAudio = async (file: File) => {
+    setUploading(true);
+    setError(null);
+    try {
+      const asset = await projectsService.uploadAudio(projectId, file);
+      setAudioAsset(asset);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo subir el audio");
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -137,6 +151,29 @@ export default function AudioPanel({ projectId, project }: Props) {
             "Guardar audio para guion"
           )}
           </button>
+          <label
+            className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer disabled:opacity-50"
+            style={uploading ? { opacity: 0.5, pointerEvents: "none" } : undefined}
+          >
+            {uploading ? (
+              <>
+                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Subiendo...
+              </>
+            ) : (
+              "Subir mi propio audio"
+            )}
+            <input
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handleUploadAudio(file);
+              }}
+            />
+          </label>
         </div>
       </div>
 
@@ -149,7 +186,7 @@ export default function AudioPanel({ projectId, project }: Props) {
       {audioAsset && (
         <div className="px-6 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
           <label className="text-[11px] font-medium uppercase tracking-widest block mb-2" style={{ color: "var(--muted-foreground)" }}>
-            Narracion generada
+            {audioAsset.metadata?.kind === "user_upload" ? "Audio propio (se usa en vez del TTS)" : "Narracion generada"}
           </label>
           <audio controls src={audioAsset.storageKey} className="w-full" style={{ height: 36 }} />
         </div>

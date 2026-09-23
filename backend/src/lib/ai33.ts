@@ -1,15 +1,24 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
+import { createRequire } from "module";
 import { supabase } from "./supabase.js";
 import { withRetry } from "./retry.js";
 import { fetchWithTimeout } from "./http.js";
 import { getAudioDurationSeconds } from "./audioDuration.js";
+import { getActiveProvider } from "./providers.js";
+import { resolveR2Config, uploadFileToR2 } from "./r2.js";
+
+// ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts /
+// transcribeAudio.tool.ts.
+const require = createRequire(import.meta.url);
+const ffmpegPath = require("ffmpeg-static") as string | null;
 
 export const AI33_BASE_URL = "https://api.ai33.pro";
 export const AUDIO_BUCKET = "audio";
 const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface Ai33TaskResponse {
   id: string;
@@ -31,6 +40,35 @@ export async function ensureAudioBucket(): Promise<void> {
   if (error && !/already exists/i.test(error.message)) {
     throw new Error(error.message);
   }
+}
+
+// Mismo criterio de prioridad que render_video (ver renderVideo.tool.ts):
+// R2 sube en streaming y no tiene techo practico de tamaño -- Supabase
+// Storage si tiene un limite de proyecto, y una narracion de un guion largo
+// puede pasarlo ("The object exceeded the maximum allowed size"). Sin
+// provider "r2" configurado (Settings > Providers, mismas credenciales que
+// ya usa el render final) cae a Supabase Storage como antes.
+async function uploadAudioFile(localPath: string, storageKey: string): Promise<string> {
+  const r2Provider = await getActiveProvider("r2");
+  const r2Config = resolveR2Config(r2Provider);
+  if (r2Config && r2Provider?.api_key) {
+    return uploadFileToR2(localPath, `skaler-audio/${storageKey}.mp3`, "audio/mpeg", r2Config, r2Provider.api_key);
+  }
+
+  await ensureAudioBucket();
+  const buffer = await readFile(localPath);
+  const path = `${storageKey}.mp3`;
+  const { error: uploadError } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .upload(path, buffer, { contentType: "audio/mpeg", upsert: true });
+  if (uploadError) {
+    throw new Error(uploadError.message);
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(path);
+  return publicUrl;
 }
 
 // v3/text-to-speech de ai33.pro es asincronico -- devuelve un task_id y hay
@@ -115,30 +153,23 @@ export async function generateWithAi33(
     return Buffer.from(await audioResponse.arrayBuffer());
   });
 
-  await ensureAudioBucket();
-  const path = `${storageKey}.mp3`;
-  const { error: uploadError } = await supabase.storage
-    .from(AUDIO_BUCKET)
-    .upload(path, audioBuffer, { contentType: "audio/mpeg", upsert: true });
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
-
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(path);
-
-  // Duracion REAL del archivo descargado (ffmpeg) -- lo que ai33.pro "dice"
-  // que dura (task.metadata.duration) es un reporte propio del proveedor
-  // que puede no coincidir con el mp3 real (visto en produccion: el
-  // timeline se armaba con esa duracion reportada, mas larga que el audio
-  // real, y el render final quedaba mas corto que lo que mostraba la UI).
+  // El archivo tal cual lo entrega ai33.pro (mismo bitrate/calidad que
+  // siempre) se escribe una sola vez a disco -- sirve tanto para medir la
+  // duracion real con ffmpeg como para subirlo (a R2 o a Supabase Storage,
+  // ver uploadAudioFile), sin tocar la calidad del TTS en absoluto.
   let durationSeconds: number | null = null;
   const probeDir = await mkdtemp(nodePath.join(tmpdir(), "skaler-ai33-probe-"));
+  let publicUrl: string;
   try {
     const probePath = nodePath.join(probeDir, "probe.mp3");
     await writeFile(probePath, audioBuffer);
+    // Duracion REAL del archivo descargado (ffmpeg) -- lo que ai33.pro "dice"
+    // que dura (task.metadata.duration) es un reporte propio del proveedor
+    // que puede no coincidir con el mp3 real (visto en produccion: el
+    // timeline se armaba con esa duracion reportada, mas larga que el audio
+    // real, y el render final quedaba mas corto que lo que mostraba la UI).
     durationSeconds = await getAudioDurationSeconds(probePath);
+    publicUrl = await uploadAudioFile(probePath, storageKey);
   } finally {
     try {
       await rm(probeDir, { recursive: true, force: true });
@@ -155,4 +186,62 @@ export async function generateWithAi33(
   }
 
   return { storage_key: publicUrl, duration_seconds: Math.round(durationSeconds) };
+}
+
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
+      return;
+    }
+    const proc = spawn(ffmpegPath, args);
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg salio con codigo ${code}: ${stderr.slice(-2000)}`));
+    });
+  });
+}
+
+// Contraparte de generateWithAi33 para audio que el usuario sube a mano
+// (en vez de pagarle a ai33.pro por un guion largo que puede tardar mas de
+// lo que aguanta el polling) -- se re-encodea a mp3 real (el nombre del
+// archivo importa: Whisper decide el formato por la extension, no por el
+// contenido) y se sube a la MISMA key que usa el TTS (`${storageKey}.mp3`),
+// asi el resto del pipeline (transcribe_audio, render_video) no necesita
+// saber de donde salio el audio.
+export async function uploadUserAudio(
+  storageKey: string,
+  buffer: Buffer,
+  originalExtension: string
+): Promise<Ai33VoiceResult> {
+  const workDir = await mkdtemp(nodePath.join(tmpdir(), "skaler-audio-upload-"));
+  try {
+    const inputPath = nodePath.join(workDir, `input.${originalExtension || "bin"}`);
+    const outputPath = nodePath.join(workDir, "output.mp3");
+    await writeFile(inputPath, buffer);
+    // Mono 128k alcanza de sobra para narracion hablada -- con guiones largos
+    // (30-90 min) un 192k estereo se iba arriba del limite de tamaño del
+    // bucket de Storage ("The object exceeded the maximum allowed size").
+    await runFfmpeg(["-y", "-i", inputPath, "-ar", "44100", "-ac", "1", "-b:a", "128k", outputPath]);
+
+    const durationSeconds = await getAudioDurationSeconds(outputPath);
+    if (!durationSeconds) {
+      throw new Error("No se pudo medir la duracion del audio subido");
+    }
+
+    const publicUrl = await uploadAudioFile(outputPath, storageKey);
+
+    return { storage_key: publicUrl, duration_seconds: Math.round(durationSeconds) };
+  } finally {
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn(`[ai33] no se pudo limpiar ${workDir}:`, cleanupError);
+    }
+  }
 }
