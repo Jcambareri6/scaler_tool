@@ -4,6 +4,7 @@ import { getOwnedProject, getOwnedJob } from "../../lib/ownership.js";
 import { runRenderPipeline } from "../../pipeline/orchestrator.js";
 import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
+import { renderQueue } from "../../lib/renderQueue.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
 
 // Orden del pipeline (ver CLAUDE.md, gap #1 del LEEME): AWAITING_STOCK_REVIEW
@@ -62,7 +63,7 @@ export async function listJobs(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
 
-    const project = await getOwnedProject(project_id, userId);
+    const project = await getOwnedProject(project_id, userId, "viewer");
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
@@ -88,7 +89,7 @@ export async function getJob(req: Request, res: Response) {
     const { job_id } = req.params;
     const userId = req.user!.id;
 
-    const job = await getOwnedJob(job_id, userId);
+    const job = await getOwnedJob(job_id, userId, "viewer");
     if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
@@ -173,9 +174,14 @@ export async function approveStockReview(req: Request, res: Response) {
       });
     }
 
+    // progress:1 marca "en cola, todavia no arranco a renderizar de verdad"
+    // -- runRenderPipeline pisa esto con progress:10 recien cuando el
+    // semaforo de renderQueue lo deja correr (ver abajo). Sin esto, un
+    // render que queda esperando turno se ve identico en la UI a uno que ya
+    // esta procesando FFmpeg.
     const { data, error } = await supabase
       .from("jobs")
-      .update({ status: "RENDERING" satisfies JobStatus })
+      .update({ status: "RENDERING" satisfies JobStatus, progress: 1 })
       .eq("id", job_id)
       .select()
       .single();
@@ -189,14 +195,21 @@ export async function approveStockReview(req: Request, res: Response) {
     // corre en background, la request responde ya con el Job en RENDERING.
     res.status(202).json(data);
 
-    runRenderPipeline(job.video_project_id, { userId, jobId: job.id }).catch(async (pipelineError) => {
-      const message = errorMessage(pipelineError, "Render failed");
-      await supabase
-        .from("jobs")
-        .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
-        .eq("id", job_id);
-      await syncProjectStatus(job.video_project_id, "FAILED");
-    });
+    // renderQueue serializa los renders pesados (ffmpeg) -- un solo render
+    // ya puede pasar los 4GB de RAM y llenar /tmp por si solo (ver
+    // renderVideo.tool.ts), asi que dos al mismo tiempo tiraban abajo la
+    // instancia entera. Si ya hay uno corriendo, este queda esperando su
+    // turno en vez de arrancar en paralelo.
+    renderQueue
+      .run(() => runRenderPipeline(job.video_project_id, { userId, jobId: job.id }))
+      .catch(async (pipelineError) => {
+        const message = errorMessage(pipelineError, "Render failed");
+        await supabase
+          .from("jobs")
+          .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
+          .eq("id", job_id);
+        await syncProjectStatus(job.video_project_id, "FAILED");
+      });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }
