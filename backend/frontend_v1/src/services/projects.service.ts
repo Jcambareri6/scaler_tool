@@ -7,8 +7,10 @@ function isNotFound(err: unknown): boolean {
 }
 
 export const projectsService = {
-  async getProjects(): Promise<VideoProject[]> {
-    const rows = await api.get<Parameters<typeof mapProject>[0][]>("/projects");
+  // Sin workspaceId trae todo lo accesible (propios + workspaces compartidos).
+  async getProjects(workspaceId?: string): Promise<VideoProject[]> {
+    const query = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+    const rows = await api.get<Parameters<typeof mapProject>[0][]>(`/projects${query}`);
     return rows.map(mapProject);
   },
 
@@ -22,11 +24,12 @@ export const projectsService = {
     }
   },
 
-  async createProject(title: string, description?: string, scriptStyleId?: string): Promise<VideoProject> {
+  async createProject(title: string, description?: string, scriptStyleId?: string, workspaceId?: string): Promise<VideoProject> {
     const row = await api.post<Parameters<typeof mapProject>[0]>("/projects", {
       title,
       description,
       ...(scriptStyleId ? { script_style_id: scriptStyleId } : {}),
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
     });
     return mapProject(row);
   },
@@ -48,6 +51,7 @@ export const projectsService = {
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
     if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
     if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
+    if (updates.workspaceId !== undefined) body.workspace_id = updates.workspaceId;
 
     try {
       const row = await api.patch<Parameters<typeof mapProject>[0]>(`/projects/${id}`, body);

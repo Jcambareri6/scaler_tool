@@ -4,7 +4,8 @@ import { projectsService } from "@/services/projects.service";
 import ProjectCard from "@/components/ProjectCard";
 import { statusLabel } from "@/components/StatusBadge";
 import { useProjectFilters } from "@/features/projects/useProjectFilters";
-import type { ProjectStatus, VideoProject } from "@/types";
+import { workspacesService } from "@/services/workspaces.service";
+import type { ProjectStatus, VideoProject, Workspace } from "@/types";
 
 const STATUS_OPTIONS: ProjectStatus[] = ["DRAFT", "IN_PROGRESS", "GENERATING", "DONE", "ERROR"];
 
@@ -61,10 +62,17 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { filters, setFilters, filtered } = useProjectFilters(projects);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceId, setWorkspaceId] = useState("");
 
   useEffect(() => {
+    workspacesService.list().then(setWorkspaces).catch(() => setWorkspaces([]));
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
     projectsService
-      .getProjects()
+      .getProjects(workspaceId || undefined)
       .then((data) => {
         setProjects(data);
         setLoading(false);
@@ -73,7 +81,7 @@ export default function ProjectsPage() {
         setError(err instanceof Error ? err.message : "No se pudieron cargar los proyectos");
         setLoading(false);
       });
-  }, []);
+  }, [workspaceId]);
 
   const hasActiveFilters = filters.search.trim() !== "" || filters.status !== "ALL";
 
@@ -114,6 +122,20 @@ export default function ProjectsPage() {
             className="input-glass w-full rounded-xl pl-9 pr-3 py-2.5 text-sm"
           />
         </div>
+        {workspaces.length > 1 && (
+          <select
+            value={workspaceId}
+            onChange={(e) => setWorkspaceId(e.target.value)}
+            className="input-glass rounded-xl px-3 py-2.5 text-sm"
+          >
+            <option value="">Todos los workspaces</option>
+            {workspaces.map((ws) => (
+              <option key={ws.id} value={ws.id}>
+                {ws.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           value={filters.status}
           onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value as ProjectStatus | "ALL" }))}

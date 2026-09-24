@@ -1,3 +1,4 @@
+import { consumePostLoginRedirect } from "@/components/RequireAuth";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/authContext";
@@ -34,7 +35,7 @@ export default function AuthCallbackPage() {
       .get<AuthUser>("/auth/me")
       .then((user) => {
         setSession(accessToken, user);
-        navigate("/", { replace: true });
+        navigate(consumePostLoginRedirect(), { replace: true });
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : "No se pudo completar el login");

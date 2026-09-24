@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
-import type { ScriptStyle } from "@/types";
+import { workspacesService } from "@/services/workspaces.service";
+import type { ScriptStyle, Workspace } from "@/types";
 
 const starters = [
   { label: "Una idea", icon: "💡", placeholder: "Quiero crear un video sobre..." },
@@ -21,9 +22,16 @@ export default function NewProjectPage() {
   const [error, setError] = useState<string | null>(null);
   const [styles, setStyles] = useState<ScriptStyle[]>([]);
   const [scriptStyleId, setScriptStyleId] = useState("");
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceId, setWorkspaceId] = useState("");
 
   useEffect(() => {
     scriptStylesService.list().then(setStyles).catch(() => setStyles([]));
+    // Solo workspaces donde puedo crear (editor o mas); el personal va primero.
+    workspacesService
+      .list()
+      .then((all) => setWorkspaces(all.filter((ws) => ws.myRole !== "viewer")))
+      .catch(() => setWorkspaces([]));
   }, []);
 
   const handleCreate = async () => {
@@ -34,7 +42,8 @@ export default function NewProjectPage() {
       const project = await projectsService.createProject(
         title.trim(),
         content.trim() || undefined,
-        scriptStyleId || undefined
+        scriptStyleId || undefined,
+        workspaceId || undefined
       );
       navigate(`/projects/${project.id}`);
     } catch (err) {
@@ -125,6 +134,25 @@ export default function NewProjectPage() {
               </p>
             )}
           </div>
+
+          {workspaces.length > 1 && (
+            <div>
+              <label className="block text-[11px] font-medium uppercase tracking-widest mb-1.5" style={{ color: "var(--muted-foreground)" }}>
+                Workspace
+              </label>
+              <select
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+                className="input-glass w-full rounded-xl px-4 py-3 text-sm"
+              >
+                {workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.isPersonal ? "" : ws.id}>
+                    {ws.name}{ws.isPersonal ? " (personal)" : ` · ${ws.memberCount} miembros`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {styles.length > 0 && (
             <div>

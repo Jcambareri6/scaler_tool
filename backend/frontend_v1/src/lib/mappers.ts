@@ -12,6 +12,8 @@ interface ProjectRow {
   visual_source?: string | null;
   transitions_enabled?: boolean | null;
   subtitles_enabled?: boolean | null;
+  workspace_id?: string | null;
+  my_role?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +42,8 @@ export function mapProject(row: ProjectRow): VideoProject {
     visualSource: toVisualSource(row.visual_source),
     transitionsEnabled: Boolean(row.transitions_enabled),
     subtitlesEnabled: Boolean(row.subtitles_enabled),
+    workspaceId: row.workspace_id ?? undefined,
+    myRole: (row.my_role as VideoProject["myRole"]) ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

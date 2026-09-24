@@ -1,3 +1,4 @@
+import { consumePostLoginRedirect } from "@/components/RequireAuth";
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/authContext";
@@ -129,7 +130,7 @@ export default function LoginPage() {
     try {
       if (mode === "login") {
         await login(email.trim(), password);
-        navigate("/");
+        navigate(consumePostLoginRedirect());
       } else {
         const { requiresLogin } = await register(email.trim(), password);
         if (requiresLogin) {
@@ -138,7 +139,7 @@ export default function LoginPage() {
           setResent(false);
           setMode("login");
         } else {
-          navigate("/");
+          navigate(consumePostLoginRedirect());
         }
       }
     } catch (err) {

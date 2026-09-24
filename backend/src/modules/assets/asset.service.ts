@@ -58,7 +58,7 @@ export async function listAssets(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
 
-    const project = await getOwnedProject(project_id, userId);
+    const project = await getOwnedProject(project_id, userId, "viewer");
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
@@ -84,7 +84,7 @@ export async function getAsset(req: Request, res: Response) {
     const { asset_id } = req.params;
     const userId = req.user!.id;
 
-    const asset = await getOwnedAsset(asset_id, userId);
+    const asset = await getOwnedAsset(asset_id, userId, "viewer");
     if (!asset) {
       return res.status(404).json({ error: "Asset not found" });
     }

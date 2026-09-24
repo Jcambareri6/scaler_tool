@@ -65,7 +65,7 @@ export async function listScenes(req: Request, res: Response) {
     const { script_id } = req.params;
     const userId = req.user!.id;
 
-    const script = await getOwnedScript(script_id, userId);
+    const script = await getOwnedScript(script_id, userId, "viewer");
     if (!script) {
       return res.status(404).json({ error: "Script not found" });
     }
@@ -101,7 +101,7 @@ export async function getScene(req: Request, res: Response) {
       return res.status(404).json({ error: "Scene not found" });
     }
 
-    const script = await getOwnedScript(scene.script_id, userId);
+    const script = await getOwnedScript(scene.script_id, userId, "viewer");
     if (!script) {
       return res.status(404).json({ error: "Scene not found" });
     }

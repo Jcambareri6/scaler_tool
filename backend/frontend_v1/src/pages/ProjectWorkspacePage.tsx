@@ -3,11 +3,13 @@ import { useParams, useNavigate } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
 import ConfirmModal from "@/components/ConfirmModal";
+import ShareProjectModal from "@/components/ShareProjectModal";
 import ScriptPanel from "@/features/script/ScriptPanel";
 import ScenesPanel from "@/features/scenes/ScenesPanel";
 import AudioPanel from "@/features/audio/AudioPanel";
 import PreviewPanel from "@/features/preview/PreviewPanel";
 import { useToast } from "@/lib/toastContext";
+import { ROLE_LABELS } from "@/services/workspaces.service";
 import type { VideoProject } from "@/types";
 
 type Tab = "script" | "scenes" | "audio" | "preview";
@@ -69,9 +71,10 @@ export default function ProjectWorkspacePage() {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const handleShare = () => {
-    showToast("info", "Compartir proyectos todavía no está disponible — próximamente");
-  };
+  const [sharing, setSharing] = useState(false);
+  // Compartir (mover de workspace) y borrar: solo creador o admin. Los
+  // proyectos viejos sin my_role se tratan como propios.
+  const canAdmin = !project?.myRole || project.myRole === "owner" || project.myRole === "admin";
 
   const handleDeleteProject = async () => {
     if (!projectId) return;
@@ -150,6 +153,15 @@ export default function ProjectWorkspacePage() {
             {project.title}
           </h1>
           <StatusBadge status={project.status} />
+          {project.myRole && project.myRole !== "owner" && (
+            <span
+              className="text-[10px] font-medium uppercase tracking-widest px-2 py-0.5 rounded-md"
+              style={{ background: "rgba(124,106,255,0.12)", color: "rgba(196,188,255,0.95)", border: "1px solid rgba(124,106,255,0.25)" }}
+              title={project.myRole === "viewer" ? "Podés ver el proyecto y sus previews, pero no editarlo" : undefined}
+            >
+              {project.myRole === "viewer" ? "Solo lectura" : ROLE_LABELS[project.myRole]}
+            </span>
+          )}
         </div>
 
         {/* Tab nav */}
@@ -180,8 +192,9 @@ export default function ProjectWorkspacePage() {
 
         <div style={{ width: 1, height: 20, background: "var(--border)" }} />
 
+        {canAdmin && (<>
         <button
-          onClick={handleShare}
+          onClick={() => setSharing(true)}
           className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -213,7 +226,19 @@ export default function ProjectWorkspacePage() {
             <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
           </svg>
         </button>
+        </>)}
       </header>
+
+      {sharing && (
+        <ShareProjectModal
+          project={project}
+          onClose={() => setSharing(false)}
+          onMoved={(p) => {
+            setProject(p);
+            showToast("success", "Proyecto compartido");
+          }}
+        />
+      )}
 
       {confirmingDelete && (
         <ConfirmModal
