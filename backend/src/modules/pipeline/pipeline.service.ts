@@ -29,6 +29,7 @@ export async function runPipeline(req: Request, res: Response) {
               type: "FULL_PIPELINE",
               status: "QUEUED",
               progress: 0,
+              progress_message: "En cola, esperando al servidor de procesamiento...",
               ...pendingQueueFields("pre_render", userId),
             }
           : {

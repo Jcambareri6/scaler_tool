@@ -30,7 +30,11 @@ alter table public.jobs
   add column if not exists attempts integer not null default 0,
   add column if not exists max_attempts integer not null default 1,
   -- Reintentos con espera (backoff): el job no se puede tomar antes de esto.
-  add column if not exists run_after timestamptz not null default now();
+  add column if not exists run_after timestamptz not null default now(),
+  -- Texto legible de en que anda el Job ("Procesando tanda 3/12",
+  -- "Reintentando (2/3)...") -- acompaña a `progress` para quien consulta
+  -- el Job mientras corre (ver lib/jobProgress.ts).
+  add column if not exists progress_message text;
 
 create index if not exists jobs_queue_pending_idx
   on public.jobs (queue, created_at)
@@ -81,7 +85,15 @@ $$;
 -- quedan intentos vuelve a 'pending'; si no, queda FAILED con un mensaje
 -- visible en la UI. Devuelve que hizo con cada uno para que el worker
 -- sincronice video_projects.status (ver lib/projectStatus.ts).
-create or replace function public.requeue_stale_jobs(p_stale_seconds integer, p_retry_delay_seconds integer)
+-- p_exclude_ids: los jobs que el worker que llama tiene corriendo AHORA en su
+-- proceso. Si sus heartbeats no llegaron (corte de red hacia Supabase) el
+-- job parece huerfano, pero ffmpeg sigue vivo: re-encolarlo arrancaria un
+-- segundo render del mismo proyecto en paralelo.
+create or replace function public.requeue_stale_jobs(
+  p_stale_seconds integer,
+  p_retry_delay_seconds integer,
+  p_exclude_ids uuid[] default '{}'
+)
 returns table (job_id uuid, video_project_id uuid, outcome text)
 language plpgsql
 set search_path = public
@@ -93,13 +105,15 @@ begin
     from public.jobs s
     where s.queue_state = 'claimed'
       and s.heartbeat_at < now() - make_interval(secs => p_stale_seconds)
+      and not (s.id = any(p_exclude_ids))
     for update skip locked
   ),
   requeued as (
     update public.jobs j
     set queue_state = 'pending',
         claimed_by = null,
-        run_after = now() + make_interval(secs => p_retry_delay_seconds)
+        run_after = now() + make_interval(secs => p_retry_delay_seconds),
+        progress_message = 'El servidor de render se detuvo: reintentando en breve...'
     from stale
     where j.id = stale.id and stale.can_retry
     returning j.id, j.video_project_id, 'requeued'::text
@@ -126,6 +140,6 @@ $$;
 -- tirar jobs. El worker usa el service-role key, que no depende de estos
 -- grants.
 revoke all on function public.claim_next_job(text, text) from public, anon, authenticated;
-revoke all on function public.requeue_stale_jobs(integer, integer) from public, anon, authenticated;
+revoke all on function public.requeue_stale_jobs(integer, integer, uuid[]) from public, anon, authenticated;
 grant execute on function public.claim_next_job(text, text) to service_role;
-grant execute on function public.requeue_stale_jobs(integer, integer) to service_role;
+grant execute on function public.requeue_stale_jobs(integer, integer, uuid[]) to service_role;

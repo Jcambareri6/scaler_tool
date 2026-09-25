@@ -190,6 +190,7 @@ export async function approveStockReview(req: Request, res: Response) {
       .update({
         status: "RENDERING" satisfies JobStatus,
         progress: 1,
+        progress_message: queued ? "En cola, esperando al servidor de render..." : "Preparando el render...",
         ...(queued ? { ...pendingQueueFields("render", userId), error: null } : {}),
       })
       .eq("id", job_id)

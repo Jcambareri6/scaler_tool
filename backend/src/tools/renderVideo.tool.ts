@@ -23,6 +23,7 @@ import { resolveR2Config, uploadFileToR2 } from "../lib/r2.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
+import { reportJobProgress } from "../lib/jobProgress.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -252,7 +253,15 @@ async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buff
   return publicUrl;
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
+// ffmpeg reporta por stderr "time=HH:MM:SS.ss" a medida que codifica --
+// `onTime` recibe esos segundos, para convertirlos en progreso del Job en
+// las pasadas largas (encode final del video entero).
+const FFMPEG_TIME_RE = /time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/g;
+// Solo se conserva la cola del stderr (para el mensaje de error): en una
+// pasada de varios minutos ffmpeg escribe MB de lineas de progreso.
+const STDERR_TAIL_CHARS = 8000;
+
+function runFfmpeg(args: string[], onTime?: (seconds: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
       reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
@@ -261,7 +270,13 @@ function runFfmpeg(args: string[]): Promise<void> {
     const proc = spawn(ffmpegPath, args);
     let stderr = "";
     proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr = (stderr + text).slice(-STDERR_TAIL_CHARS);
+      if (onTime) {
+        let last: RegExpExecArray | null = null;
+        for (const match of text.matchAll(FFMPEG_TIME_RE)) last = match;
+        if (last) onTime(Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]));
+      }
     });
     proc.on("error", reject);
     proc.on("close", (code) => {
@@ -693,19 +708,23 @@ async function burnSubtitles(
   inputPath: string,
   srtPath: string,
   targetVideoBitrateBps: number | null,
-  outputPath: string
+  outputPath: string,
+  onTime?: (seconds: number) => void
 ): Promise<void> {
-  await runFfmpeg([
-    "-i",
-    inputPath,
-    "-vf",
-    subtitlesFilter(srtPath),
-    ...videoCodecArgs(targetVideoBitrateBps),
-    "-c:a",
-    "copy",
-    "-y",
-    outputPath,
-  ]);
+  await runFfmpeg(
+    [
+      "-i",
+      inputPath,
+      "-vf",
+      subtitlesFilter(srtPath),
+      ...videoCodecArgs(targetVideoBitrateBps),
+      "-c:a",
+      "copy",
+      "-y",
+      outputPath,
+    ],
+    onTime
+  );
 }
 
 // Composicion real: descarga cada clip de stock y el audio narrado, procesa
@@ -713,7 +732,28 @@ async function burnSubtitles(
 // memoria de cada ffmpeg sin importar cuantos segmentos tenga el video, y
 // al final pega las tandas ya codificadas sin recomprimir (`-c copy`, cero
 // perdida de calidad) junto con el audio narrado completo.
-async function realRender(videoProjectId: string, timelineId: string): Promise<RenderVideoOutput> {
+// Reparto del progreso del Job durante el render (runRenderPipeline ya lo
+// dejo en 10): la mayor parte es el procesamiento por tandas, despues la
+// union/encode final (con progreso real de ffmpeg) y la subida.
+const PROGRESS_BATCHES_START = 12;
+const PROGRESS_BATCHES_END = 75;
+const PROGRESS_FINAL_START = 78;
+const PROGRESS_FINAL_END = 94;
+const PROGRESS_UPLOAD = 96;
+
+async function realRender(
+  videoProjectId: string,
+  timelineId: string,
+  jobId: string | undefined
+): Promise<RenderVideoOutput> {
+  const progress = (value: number, message: string, force = false) =>
+    reportJobProgress(jobId, value, message, { force });
+  // Progreso continuo de una pasada de ffmpeg sobre el video entero,
+  // repartido entre `from` y `to`.
+  const encodeProgress = (from: number, to: number, message: string) => (seconds: number) => {
+    const fraction = totalDuration > 0 ? Math.min(1, seconds / totalDuration) : 0;
+    void progress(from + fraction * (to - from), `${message} (${Math.round(fraction * 100)}%)`);
+  };
   const { data: timeline, error } = await supabase
     .from("timelines")
     .select("content")
@@ -784,6 +824,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
   const workDir = await makeWorkDir("skaler-render-");
   try {
     const audioPath = path.join(workDir, "narration.mp3");
+    await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
 
     // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
@@ -798,6 +839,11 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     for (let b = 0; b < totalBatches; b++) {
       const batchStart = b * BATCH_SIZE;
       const batchSegments = segments.slice(batchStart, batchStart + BATCH_SIZE);
+      await progress(
+        PROGRESS_BATCHES_START + (b / totalBatches) * (PROGRESS_BATCHES_END - PROGRESS_BATCHES_START),
+        `Procesando escenas: tanda ${b + 1} de ${totalBatches}...`,
+        b === 0
+      );
 
       // Descarga solo los clips de ESTA tanda (no todos los del video de
       // entrada) -- con 190+ escenas, bajar todos los clips de una antes de
@@ -866,6 +912,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       await writeFile(concatListPath, concatListContent);
 
       console.log(`[render_video] uniendo ${totalBatches} tandas + audio...`);
+      await progress(PROGRESS_FINAL_START, "Uniendo las escenas con el audio...", true);
       await runFfmpeg([
         "-f",
         "concat",
@@ -908,6 +955,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         totalBatches === 1 ? batchOutputPaths[0]! : path.join(workDir, "assembled.mp4");
       if (totalBatches > 1) {
         console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones (arbol, fan-in ${MERGE_FANIN})...`);
+        await progress(PROGRESS_BATCHES_END, "Uniendo las escenas con transiciones...", true);
         await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, workDir, assembledPath, "intermediate");
       }
 
@@ -923,6 +971,8 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         `[render_video] agregando audio (compensando ${totalShrinkage.toFixed(2)}s de solape de transiciones)` +
           `${subtitlesBurned ? " + subtitulos" : ""}...`
       );
+      const finalMessage = subtitlesBurned ? "Codificando el video final con subtitulos" : "Codificando el video final";
+      await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
       await runFfmpeg([
         "-i",
         assembledPath,
@@ -942,7 +992,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         "-shortest",
         "-y",
         outputPath,
-      ]);
+      ], encodeProgress(PROGRESS_FINAL_START, PROGRESS_FINAL_END, finalMessage));
       // assembledPath ya esta mezclado con audio en outputPath -- no hace
       // falta conservarlo (incluye el caso totalBatches===1, donde
       // assembledPath era la unica tanda).
@@ -954,12 +1004,20 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       console.log(`[render_video] quemando subtitulos (${content.segments!.length} segmentos)...`);
       await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
       finalOutputPath = path.join(workDir, "final-subtitled.mp4");
-      await burnSubtitles(outputPath, srtPath, targetVideoBitrateBps, finalOutputPath);
+      await progress(PROGRESS_FINAL_START + 2, "Agregando subtitulos...", true);
+      await burnSubtitles(
+        outputPath,
+        srtPath,
+        targetVideoBitrateBps,
+        finalOutputPath,
+        encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, "Agregando subtitulos")
+      );
       // outputPath (sin subtitulos) ya quedo quemado en finalOutputPath.
       await cleanupFiles([outputPath, srtPath]);
     }
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);
+    await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
     if (usingR2 && r2Config && r2Provider?.api_key) {
       publicUrl = await uploadFileToR2(
@@ -1020,6 +1078,6 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
       }
       throw new ProviderNotConfiguredError("render_video");
     }
-    return realRender(video_project_id, timeline_id);
+    return realRender(video_project_id, timeline_id, ctx.jobId);
   },
 };

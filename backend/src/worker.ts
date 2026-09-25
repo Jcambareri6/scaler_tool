@@ -7,6 +7,7 @@ import { runPreRenderPipeline, runRenderPipeline } from "./pipeline/orchestrator
 import { syncProjectStatus } from "./lib/projectStatus.js";
 import { errorMessage } from "./lib/errors.js";
 import { envInt } from "./lib/env.js";
+import { forgetJobProgress, reportJobProgress } from "./lib/jobProgress.js";
 import type { JobQueueName } from "./lib/jobQueue.js";
 import type { Job } from "./types/shared/typeShared.js";
 
@@ -37,7 +38,9 @@ const POLL_INTERVAL_MS = envInt("WORKER_POLL_INTERVAL_MS", 3000);
 const HEARTBEAT_INTERVAL_MS = envInt("WORKER_HEARTBEAT_INTERVAL_MS", 30_000);
 // Sin heartbeat durante este tiempo, el job se considera huerfano (worker
 // muerto). Tiene que ser bastante mayor que HEARTBEAT_INTERVAL_MS.
-const STALE_JOB_SECONDS = envInt("WORKER_STALE_JOB_SECONDS", 180);
+// Los jobs que este mismo worker tiene corriendo nunca se re-encolan por
+// esto (ver recoverStaleJobs) -- aplica a jobs de OTROS workers caidos.
+const STALE_JOB_SECONDS = envInt("WORKER_STALE_JOB_SECONDS", 300);
 const STALE_CHECK_INTERVAL_MS = envInt("WORKER_STALE_CHECK_INTERVAL_MS", 60_000);
 // Espera antes de reintentar un job fallido: attempts * este valor.
 const RETRY_DELAY_SECONDS = envInt("WORKER_RETRY_DELAY_SECONDS", 30);
@@ -111,6 +114,9 @@ async function handleFailure(job: Job, failure: unknown) {
         queue_state: "pending",
         claimed_by: null,
         run_after: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+        // Sin esto el Job quedaba en RENDERING con el progreso viejo y sin
+        // ninguna señal de que habia fallado y se iba a reintentar.
+        progress_message: `Fallo el intento ${attempts}/${maxAttempts} (${message.slice(0, 200)}). Reintentando en ${delaySeconds}s...`,
       })
       .eq("id", job.id)
       .eq("claimed_by", WORKER_ID);
@@ -145,14 +151,26 @@ async function runJob(job: Job, queue: JobQueueName) {
       .update({ heartbeat_at: new Date().toISOString() })
       .eq("id", job.id)
       .eq("claimed_by", WORKER_ID)
-      .then(({ error }) => {
+      .select("id")
+      .then(({ data, error }) => {
         if (error) log(`heartbeat fallo para ${job.id}: ${error.message}`);
+        // 0 filas: otro worker lo re-tomo (este quedo sin red mas de
+        // STALE_JOB_SECONDS). Las escrituras de cola de este worker ya no
+        // pisan nada (filtran por claimed_by), pero queda registrado.
+        else if (!data?.length) log(`ATENCION: job ${job.id} ya no esta tomado por este worker`);
       });
   }, HEARTBEAT_INTERVAL_MS);
 
   try {
     const userId = await resolveUserId(job);
     const ctx = { userId, jobId: job.id };
+    const attemptLabel = (job.max_attempts ?? 1) > 1 ? ` (intento ${job.attempts}/${job.max_attempts})` : "";
+    await reportJobProgress(
+      job.id,
+      queue === "render" ? 5 : 0,
+      queue === "render" ? `Iniciando render${attemptLabel}...` : `Iniciando generacion${attemptLabel}...`,
+      { force: true }
+    );
     if (queue === "pre_render") {
       // claim_next_job ya lo paso de QUEUED a RUNNING; se sincroniza el
       // proyecto igual que hacia la API al lanzar el pipeline inline.
@@ -167,6 +185,7 @@ async function runJob(job: Job, queue: JobQueueName) {
     await handleFailure(job, failure);
   } finally {
     clearInterval(heartbeat);
+    forgetJobProgress(job.id);
   }
 }
 
@@ -227,6 +246,9 @@ async function recoverStaleJobs() {
   const { data, error } = await supabase.rpc("requeue_stale_jobs", {
     p_stale_seconds: STALE_JOB_SECONDS,
     p_retry_delay_seconds: RETRY_DELAY_SECONDS,
+    // Si los heartbeats de un job propio no llegaron (corte de red), sigue
+    // corriendo aca: re-encolarlo arrancaria un segundo render en paralelo.
+    p_exclude_ids: [...activeJobs.keys()],
   });
   if (error) {
     log(`requeue_stale_jobs fallo: ${error.message}`);

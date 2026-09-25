@@ -239,7 +239,7 @@ where queue_state = 'failed' order by finished_at desc limit 20;
 | Un render falla (descarga caída, error temporal) | Se reintenta solo, hasta `RENDER_MAX_ATTEMPTS` (3), con espera creciente. Si falla las 3 veces: `FAILED` con el error visible en la UI |
 | Un pre-render falla | `FAILED` sin reintento automático (repetirlo cobra de nuevo TTS, Whisper y video IA). El usuario lo relanza desde la UI |
 | El worker o el servidor se reinician a mitad de un render | Al volver, el worker retoma sus jobs a medias y borra los temporales viejos |
-| El servidor muere del todo | Los jobs quedan en la cola. Si hay otro worker, los toma a los ~3 min. Si no, se procesan cuando vuelva |
+| El servidor muere del todo | Los jobs quedan en la cola. Si hay otro worker, los toma a los ~5 min. Si no, se procesan cuando vuelva |
 
 ---
 

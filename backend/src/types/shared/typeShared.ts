@@ -77,6 +77,8 @@ export interface Job {
   attempts?: number;
   max_attempts?: number;
   run_after?: string;
+  // Texto legible de en que anda el Job (ver lib/jobProgress.ts).
+  progress_message?: string | null;
 }
 
 // Gap #2 (LEEME): reemplaza bad_stock_ids.json / stock_overrides.json.

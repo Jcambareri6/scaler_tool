@@ -7,6 +7,7 @@ import {
   type AiVideoSegment,
 } from "../lib/stockSegments.js";
 import { syncProjectStatus } from "../lib/projectStatus.js";
+import { reportJobProgress } from "../lib/jobProgress.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import type { ContentPolicy, VisualSource, JobStatus } from "../types/shared/typeShared.js";
@@ -111,14 +112,6 @@ async function setJobStatus(
   await syncProjectStatus(videoProjectId, status);
 }
 
-// El pipeline ahora corre en background (ver pipeline.service.ts) -- estos
-// updates de progreso son lo que el polling del frontend (PreviewPanel)
-// termina mostrando de verdad, en vez de quedar mudos hasta el final.
-async function bumpProgress(jobId: string, progress: number) {
-  const { error } = await supabase.from("jobs").update({ progress }).eq("id", jobId);
-  if (error) throw new Error(error.message);
-}
-
 // Concurrencia limitada para el loop por escena: cada escena es
 // independiente (keywords -> stock -> overlay), asi que procesar varias a
 // la vez baja mucho el tiempo total sin cambiar el resultado. El limite
@@ -147,7 +140,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     throw new Error("El guion del proyecto esta vacio");
   }
 
-  await setJobStatus(ctx.jobId, projectId, "SCRIPT_DONE", { progress: 5 });
+  await setJobStatus(ctx.jobId, projectId, "SCRIPT_DONE", { progress: 5, progress_message: "Generando la voz..." });
 
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
 
@@ -170,7 +163,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       toolCtx
     ));
 
-  await setJobStatus(ctx.jobId, projectId, "AUDIO_DONE", { progress: 15 });
+  await setJobStatus(ctx.jobId, projectId, "AUDIO_DONE", { progress: 15, progress_message: "Transcribiendo el audio..." });
 
   // 2. Timeline base -- todavia no hay escenas (se arman recien en el paso
   // 4), asi que esta pasada solo deja creado el registro de timeline con
@@ -212,6 +205,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // 4. Armar las escenas (LEEME seccion 5: recien ahora, con audio real +
   // transcripcion, no antes) -- reemplaza cualquier escena vieja del
   // guion anterior.
+  await reportJobProgress(ctx.jobId, 25, "Armando las escenas...", { force: true });
   await runTool<BuildScenesInput, BuildScenesOutput>(
     "build_scenes",
     { video_project_id: projectId },
@@ -401,11 +395,16 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     completedScenes += 1;
     if (sceneRows.length > 0) {
       const progress = 30 + Math.round((completedScenes / sceneRows.length) * 60);
-      await bumpProgress(ctx.jobId, progress);
+      await reportJobProgress(
+        ctx.jobId,
+        progress,
+        `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
+        { force: completedScenes === sceneRows.length }
+      );
     }
   });
 
-  await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90 });
+  await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
 
   // 7. Timeline resuelto (vuelve a leer la DB, ahora con escenas + assets +
   // overlays)
@@ -416,7 +415,10 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   );
 
   // 8. Gate humano
-  await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", { progress: 100 });
+  await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
+    progress: 100,
+    progress_message: "Listo para revisar el stock",
+  });
 }
 
 export async function runRenderPipeline(projectId: string, ctx: PipelineContext) {
@@ -434,7 +436,7 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
   // approveStockReview ya puso el Job en RENDERING con el progreso previo
   // (100 de la fase anterior) -- se resetea para que el polling del
   // frontend no muestre "100%" mientras FFmpeg todavia esta trabajando.
-  await bumpProgress(ctx.jobId, 10);
+  await reportJobProgress(ctx.jobId, 10, "Preparando el render...", { force: true });
 
   const render = await runTool<RenderVideoInput, RenderVideoOutput>(
     "render_video",
@@ -453,6 +455,7 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
 
   await setJobStatus(ctx.jobId, projectId, "COMPLETED", {
     progress: 100,
+    progress_message: "Video listo",
     finished_at: new Date().toISOString(),
   });
 }
