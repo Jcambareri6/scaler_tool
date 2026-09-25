@@ -1,5 +1,7 @@
 import "dotenv/config";
+import { readdir, rm } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { supabase } from "./lib/supabase.js";
 import { runPreRenderPipeline, runRenderPipeline } from "./pipeline/orchestrator.js";
 import { syncProjectStatus } from "./lib/projectStatus.js";
@@ -248,6 +250,30 @@ async function staleLoop() {
   }
 }
 
+// Directorios de trabajo (skaler-*) que quedaron de renders cortados de
+// golpe (contenedor matado, corte de luz): nadie los va a borrar y con
+// clips + tandas intermedias pesan GB. Solo con WORK_DIR explicito (el
+// volumen propio del worker) -- nunca se barre el /tmp compartido del
+// sistema. Corre antes de tomar trabajos, asi que ningun job propio esta
+// usandolos.
+async function cleanLeftoverWorkDirs() {
+  const base = process.env.WORK_DIR?.trim();
+  if (!base) return;
+  let entries: string[];
+  try {
+    entries = await readdir(base);
+  } catch {
+    return;
+  }
+  const leftovers = entries.filter((name) => name.startsWith("skaler-"));
+  for (const name of leftovers) {
+    await rm(path.join(base, name), { recursive: true, force: true }).catch((cleanupError) =>
+      log(`no se pudo borrar ${name}:`, cleanupError)
+    );
+  }
+  if (leftovers.length > 0) log(`borrados ${leftovers.length} directorio(s) temporales de renders anteriores`);
+}
+
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -276,6 +302,7 @@ async function main() {
   // tampoco: tirar el worker cortaria todos los renders en curso.
   process.on("unhandledRejection", (reason) => log("unhandledRejection:", reason));
 
+  await cleanLeftoverWorkDirs();
   await recoverOwnJobs();
   await Promise.all([pollQueue("render"), pollQueue("pre_render"), staleLoop()]);
 }

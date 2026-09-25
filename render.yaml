@@ -32,3 +32,11 @@ services:
         value: "false"
       - key: FRONTEND_ORIGIN
         sync: false
+      # "inline" (o vacio): la API corre pre-render y render en su propio
+      # proceso, como siempre. "queue": solo los encola y los ejecuta el
+      # worker del servidor de render (backend/src/worker.ts, ver
+      # backend/WORKER_DEPLOY.md). sync: false a proposito -- se cambia a
+      # mano en el dashboard DESPUES de tener el worker andando, y volver a
+      # "inline" es el plan de vuelta atras (sin redeploy de codigo).
+      - key: EXECUTION_MODE
+        sync: false

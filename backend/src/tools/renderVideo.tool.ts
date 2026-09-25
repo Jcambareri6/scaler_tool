@@ -804,6 +804,12 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       // codificar el primer frame es el pico real de uso de disco (peor
       // incluso que las tandas ya codificadas), y en hosting con /tmp chico
       // (ver cleanupFiles arriba) alcanza solo para tirar la instancia.
+      // Si falla una descarga, se espera a que terminen las demas de la
+      // tanda antes de tirar el error: mapWithConcurrency rechaza con el
+      // primer error y las descargas restantes seguian escribiendo en el
+      // workDir mientras el `finally` de abajo lo borraba (ENOTEMPTY y
+      // archivos huerfanos en disco).
+      let downloadError: unknown = null;
       const batchClipPaths = await mapWithConcurrency(batchSegments, DOWNLOAD_CONCURRENCY, async (segment, j) => {
         const i = batchStart + j;
         // La extension real importa: el demuxer "image2" (usado con -loop 1
@@ -812,9 +818,14 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         // contain an image sequence pattern" -- .png/.mp4 alcanza para que
         // ffmpeg detecte el formato solo, sin forzar -f explicito.
         const clipPath = path.join(workDir, segment.isImage ? `segment-${i}.png` : `segment-${i}.mp4`);
-        await downloadTo(segment.storageKey, clipPath);
+        try {
+          await downloadTo(segment.storageKey, clipPath);
+        } catch (clipError) {
+          downloadError ??= clipError;
+        }
         return clipPath;
       });
+      if (downloadError) throw downloadError;
 
       const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled);
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);

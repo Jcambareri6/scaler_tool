@@ -1,6 +1,8 @@
 # Migración: worker de render separado (Render API + Hetzner AX42)
 
-Estudio de la migración sobre el código actual (`backend/src`). **Todavía no hay cambios de código**: este documento explica la arquitectura destino y las etapas para llegar a ella.
+Estudio de la migración sobre el código actual (`backend/src`): la arquitectura destino y las etapas para llegar a ella.
+
+> **Estado:** implementado en la rama `migracion_worker_render`. La guía paso a paso para instalarlo está en [`backend/WORKER_DEPLOY.md`](backend/WORKER_DEPLOY.md). Las diferencias entre este plan y lo implementado están marcadas con **(implementado: …)**.
 
 ---
 
@@ -188,8 +190,10 @@ mientras no me pidan apagarme:
 | Descargar clips **por stream a disco** en vez de `Buffer.from(await response.arrayBuffer())` | `renderVideo.tool.ts` `downloadTo` (~línea 162) | No carga cada clip entero en RAM |
 | Subida a Supabase por stream en vez de `readFile(finalOutputPath)` | `renderVideo.tool.ts:895` | No carga el video final (cientos de MB) en RAM. R2 ya hace streaming (`r2.ts:54`) |
 | Directorio temporal configurable (`WORK_DIR`) en vez de `os.tmpdir()` | `renderVideo.tool.ts:729`, `transcribeAudio.tool.ts:83`, `ai33.ts`, `edgeTts.ts` | Apunta al NVMe grande del servidor |
-| Pre-escalar cada clip a 720p al descargarlo | etapa de descarga | Decodificar 4K es carísimo; se hace una sola vez |
-| Transiciones en una sola pasada en vez del árbol binario que re-encodea el video completo en cada nivel | `assembleBatchesWithTransitions` | Se deja de re-encodear el video 5-6 veces |
+| ~~Pre-escalar cada clip a 720p al descargarlo~~ | — | **(implementado: descartado)** cada clip ya se decodifica una sola vez, en su tanda; pre-escalarlo sumaba una pasada más sin ahorrar nada |
+| Transiciones con menos niveles de re-encode | `assembleBatchesWithTransitions` | **(implementado: `RENDER_MERGE_FANIN`)** fusiona de a N tandas por nivel en vez de 2. Con 8, ~60 tandas pasan de 6 niveles a 2. Una sola pasada con todas las tandas abiertas vuelve a disparar el OOM que motivó el árbol |
+| Subtítulos en la misma pasada que el audio | `realRender` | **(implementado)** con transiciones, los subtítulos se queman en la pasada de audio + tpad: un re-encode completo menos |
+| **Bug:** escenas de imagen con `-loop 1` | `buildFfmpegArgsForBatch` | **(implementado: corregido)** zoompan generaba video infinito y la tanda no terminaba nunca (terminaba en OOM o `/tmp` lleno) |
 | Preset final `medium` → `fast`, configurable | `videoCodecArgs` | Encode final ~2× más rápido, sin diferencia visible a 720p |
 | `BATCH_SIZE` y concurrencia de descarga configurables por env | constantes actuales | Ajustar al hardware sin tocar código |
 
