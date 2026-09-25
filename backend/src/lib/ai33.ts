@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import nodePath from "node:path";
 import { createRequire } from "module";
 import { supabase } from "./supabase.js";
@@ -9,6 +8,7 @@ import { fetchWithTimeout } from "./http.js";
 import { getAudioDurationSeconds } from "./audioDuration.js";
 import { getActiveProvider } from "./providers.js";
 import { resolveR2Config, uploadFileToR2 } from "./r2.js";
+import { makeWorkDir } from "./workDir.js";
 
 // ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts /
 // transcribeAudio.tool.ts.
@@ -158,7 +158,7 @@ export async function generateWithAi33(
   // duracion real con ffmpeg como para subirlo (a R2 o a Supabase Storage,
   // ver uploadAudioFile), sin tocar la calidad del TTS en absoluto.
   let durationSeconds: number | null = null;
-  const probeDir = await mkdtemp(nodePath.join(tmpdir(), "skaler-ai33-probe-"));
+  const probeDir = await makeWorkDir("skaler-ai33-probe-");
   let publicUrl: string;
   try {
     const probePath = nodePath.join(probeDir, "probe.mp3");
@@ -219,7 +219,7 @@ export async function uploadUserAudio(
   buffer: Buffer,
   originalExtension: string
 ): Promise<Ai33VoiceResult> {
-  const workDir = await mkdtemp(nodePath.join(tmpdir(), "skaler-audio-upload-"));
+  const workDir = await makeWorkDir("skaler-audio-upload-");
   try {
     const inputPath = nodePath.join(workDir, `input.${originalExtension || "bin"}`);
     const outputPath = nodePath.join(workDir, "output.mp3");

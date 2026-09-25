@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createWriteStream } from "node:fs";
+import { readFile, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 // ffmpeg-static es CJS puro (`module.exports = <path>`) con un .d.ts en
 // sintaxis "export default" que no interopera bien bajo module: nodenext
 // -- mismo patron que pdf-parse en transcribeAudio.tool.ts, se importa con
@@ -18,6 +21,9 @@ import { fetchWithTimeout } from "../lib/http.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { resolveR2Config, uploadFileToR2 } from "../lib/r2.js";
 import { getOwnedProject } from "../lib/ownership.js";
+import { makeWorkDir } from "../lib/workDir.js";
+import { envInt } from "../lib/env.js";
+import { reportJobProgress } from "../lib/jobProgress.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -157,17 +163,26 @@ function flattenSegments(scenes: TimelineSceneEntry[]): RenderSegment[] {
   return segments;
 }
 
-const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
+// Tope por descarga (clip o audio narrado), incluyendo el cuerpo entero --
+// configurable porque en un servidor con buena red se puede bajar, y clips
+// de stock pesados (4K) pueden necesitar mas.
+const DOWNLOAD_TIMEOUT_MS = envInt("RENDER_DOWNLOAD_TIMEOUT_MS", 60 * 1000);
+// Cuantos clips de una misma tanda se descargan en paralelo.
+const DOWNLOAD_CONCURRENCY = envInt("RENDER_DOWNLOAD_CONCURRENCY", 5);
 
+// Escribe la respuesta directo a disco a medida que llega, en vez de
+// juntarla entera en un Buffer (`arrayBuffer()`) -- con clips de stock de
+// cientos de MB y varias descargas en paralelo, eso sumaba varios GB de RAM
+// de Node aparte de lo que usa ffmpeg (parte del "Ran out of memory (used
+// over 4GB)" visto en produccion).
 async function downloadTo(url: string, destPath: string): Promise<void> {
-  const buffer = await withRetry(async () => {
+  await withRetry(async () => {
     const response = await fetchWithTimeout(url, {}, DOWNLOAD_TIMEOUT_MS);
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       throw new Error(`No se pudo descargar ${url} (${response.status})`);
     }
-    return Buffer.from(await response.arrayBuffer());
+    await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), createWriteStream(destPath));
   });
-  await writeFile(destPath, buffer);
 }
 
 // Cloudinary sirve el render final por CDN (reproduce bien en un <video> del
@@ -238,7 +253,15 @@ async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buff
   return publicUrl;
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
+// ffmpeg reporta por stderr "time=HH:MM:SS.ss" a medida que codifica --
+// `onTime` recibe esos segundos, para convertirlos en progreso del Job en
+// las pasadas largas (encode final del video entero).
+const FFMPEG_TIME_RE = /time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/g;
+// Solo se conserva la cola del stderr (para el mensaje de error): en una
+// pasada de varios minutos ffmpeg escribe MB de lineas de progreso.
+const STDERR_TAIL_CHARS = 8000;
+
+function runFfmpeg(args: string[], onTime?: (seconds: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
       reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
@@ -247,7 +270,13 @@ function runFfmpeg(args: string[]): Promise<void> {
     const proc = spawn(ffmpegPath, args);
     let stderr = "";
     proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr = (stderr + text).slice(-STDERR_TAIL_CHARS);
+      if (onTime) {
+        let last: RegExpExecArray | null = null;
+        for (const match of text.matchAll(FFMPEG_TIME_RE)) last = match;
+        if (last) onTime(Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]));
+      }
     });
     proc.on("error", reject);
     proc.on("close", (code) => {
@@ -292,7 +321,10 @@ const KEN_BURNS_UPSCALE = 1.4;
 // quedaron sin memoria tanto en un plan de 512MB como en uno de 4GB. Con
 // tandas chicas, la memoria de cada ffmpeg queda acotada al tamaño de la
 // tanda, sin importar cuantos segmentos tenga el video en total.
-const BATCH_SIZE = 4;
+// Configurable (RENDER_BATCH_SIZE): el default 4 es para el plan de 4GB de
+// Render; en el servidor del worker (64GB) se puede subir -- menos tandas =
+// menos archivos intermedios y menos fusiones.
+const BATCH_SIZE = envInt("RENDER_BATCH_SIZE", 4);
 
 // Cloudinary rechaza subidas de mas de 100MB en la cuenta actual (visto en
 // produccion: "File size too large. Got 107751893. Maximum is 104857600").
@@ -351,12 +383,16 @@ function buildFfmpegArgsForBatch(
       const totalFrames = Math.max(1, Math.round(duration * OUTPUT_FPS));
       const upscaledWidth = Math.round(OUTPUT_WIDTH * KEN_BURNS_UPSCALE);
       const upscaledHeight = Math.round(OUTPUT_HEIGHT * KEN_BURNS_UPSCALE);
-      inputArgs.push("-loop", "1", "-i", batchClipPaths[i]!);
-      // OJO: `-framerate`/`-t` en el input MULTIPLICA la duracion en vez de
-      // fijarla junto con `d` de zoompan (validado localmente: con -t 3 a
-      // 30fps son 90 frames de input, y zoompan aplica d=90 POR CADA UNO,
-      // dando 8100 frames = 4:30 en vez de 3s) -- `d` solo controla cuantos
-      // frames salen de esta rama.
+      // SIN `-loop 1`: zoompan genera `d` frames POR CADA frame de entrada.
+      // Con la imagen como UN solo frame, la rama sale exactamente con d
+      // frames (la duracion de la escena). Con `-loop 1` la entrada es
+      // infinita y zoompan emite d frames por cada una, para siempre: el
+      // ffmpeg de la tanda no terminaba nunca (reproducido: "time=00:05:27"
+      // y subiendo para una tanda de 12s) hasta llenar el disco o la RAM.
+      // Mismo motivo por el que `-framerate`/`-t` en el input MULTIPLICAN la
+      // duracion (con -t 3 a 30fps son 90 frames de input x d=90 = 8100
+      // frames = 4:30 en vez de 3s).
+      inputArgs.push("-i", batchClipPaths[i]!);
       // `zoompan` hace su PROPIO reescalado interno cuadro a cuadro (recorta
       // la region con zoom y la agranda al tamaño de `s`) y ese reescalado
       // NO tiene forma de pedirle lanczos -- usa siempre su algoritmo
@@ -419,51 +455,66 @@ function batchDuration(batchSegments: RenderSegment[], transitionsEnabled: boole
   return sum - (batchSegments.length - 1) * TRANSITION_DURATION_SECONDS;
 }
 
-// Fusiona DOS tandas ya codificadas con un fundido -- bloque minimo que usa
-// assembleBatchesWithTransitions para armar el arbol binario de abajo.
-async function mergePairWithTransition(
-  pathA: string,
-  durationA: number,
-  pathB: string,
-  durationB: number,
+// Fusiona un GRUPO de tandas ya codificadas encadenandolas con fundidos
+// (misma cadena de xfade que buildFfmpegArgsForBatch usa dentro de una
+// tanda) -- bloque que usa assembleBatchesWithTransitions para armar el
+// arbol de abajo. Devuelve la duracion del resultado.
+async function mergeGroupWithTransitions(
+  paths: string[],
+  durations: number[],
   targetVideoBitrateBps: number | null,
   outputPath: string,
   quality: "intermediate" | "final"
 ): Promise<number> {
-  const offset = Math.max(0, durationA - TRANSITION_DURATION_SECONDS);
+  const inputArgs = paths.flatMap((p) => ["-i", p]);
+  const filterParts: string[] = [];
+  let currentLabel = "0:v";
+  let running = durations[0]!;
+  for (let i = 1; i < paths.length; i++) {
+    const outLabel = i === paths.length - 1 ? "outv" : `mx${i}`;
+    const offset = Math.max(0, running - TRANSITION_DURATION_SECONDS);
+    filterParts.push(
+      `[${currentLabel}][${i}:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[${outLabel}]`
+    );
+    currentLabel = outLabel;
+    running = running + durations[i]! - TRANSITION_DURATION_SECONDS;
+  }
   await runFfmpeg([
-    "-i",
-    pathA,
-    "-i",
-    pathB,
+    ...inputArgs,
     "-filter_complex",
-    `[0:v][1:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[outv]`,
+    filterParts.join(";"),
     "-map",
     "[outv]",
     ...videoCodecArgs(targetVideoBitrateBps, quality),
     "-y",
     outputPath,
   ]);
-  return durationA + durationB - TRANSITION_DURATION_SECONDS;
+  return running;
 }
+
+// Cuantas tandas se fusionan por comando en cada nivel del arbol de
+// transiciones. 2 (default) es el arbol binario original, pensado para el
+// plan de 4GB de Render: cada input abierto reserva su propio decoder y
+// buffers (ver comentario de abajo). En el servidor del worker (64GB) se
+// puede subir (RENDER_MERGE_FANIN=8): con ~60 tandas pasa de 6 niveles de
+// re-encode del video completo a 2, que es de lo mas caro del render.
+const MERGE_FANIN = envInt("RENDER_MERGE_FANIN", 2, 2);
 
 // Encadena las tandas ya codificadas (batch-*.mp4) con fundidos -- necesario
 // solo cuando hay mas de una tanda Y transitions_enabled esta prendido.
-// Fusiona de a PARES en niveles (arbol binario: 49 tandas -> 25 -> 13 -> 7 ->
-// 4 -> 2 -> 1) en vez de un unico comando ffmpeg con las 49 tandas abiertas
-// a la vez -- cada input abierto en ffmpeg reserva su propio decoder +
-// buffers de frames de referencia AUNQUE todavia no le toque el turno en la
-// cadena de xfade, asi que un solo comando con N inputs mantiene ese costo
-// residente en memoria las N tandas juntas, no una por vez (visto en
-// produccion: "Ran out of memory (used over 4GB)" con 49 tandas). Con el
-// arbol, cada comando individual tiene como maximo 2 inputs abiertos --el
-// pico de esta etapa deja de crecer con la cantidad de tandas.
-// Los niveles intermedios se codifican casi sin perdida (CRF de
-// "intermediate") -- son varias generaciones de re-encode en cadena (log2(N)
-// niveles en vez de 1 sola fusion), y perder calidad en cada una se notaria;
-// solo la ULTIMA fusion (la que produce assembledPath) usa `quality`, mismo
-// criterio que ya usaban las tandas individuales (ver batchQuality en
-// render_video).
+// Fusiona de a GRUPOS de MERGE_FANIN en niveles (con fan-in 2: 49 tandas ->
+// 25 -> 13 -> 7 -> 4 -> 2 -> 1) en vez de un unico comando ffmpeg con las 49
+// tandas abiertas a la vez -- cada input abierto en ffmpeg reserva su
+// propio decoder + buffers de frames de referencia AUNQUE todavia no le
+// toque el turno en la cadena de xfade, asi que un solo comando con N
+// inputs mantiene ese costo residente en memoria las N tandas juntas, no
+// una por vez (visto en produccion: "Ran out of memory (used over 4GB)" con
+// 49 tandas). Con el arbol, cada comando individual tiene como maximo
+// MERGE_FANIN inputs abiertos -- el pico de esta etapa deja de crecer con la
+// cantidad de tandas.
+// Todos los niveles se codifican casi sin perdida (CRF de "intermediate"):
+// la pasada siguiente (audio + tpad, y subtitulos si hay) vuelve a
+// codificar igual, y es esa la que determina la calidad final.
 async function assembleBatchesWithTransitions(
   batchOutputPaths: string[],
   batchDurations: number[],
@@ -477,32 +528,32 @@ async function assembleBatchesWithTransitions(
   let level = 0;
 
   while (paths.length > 1) {
-    const isLastLevel = paths.length === 2;
+    const isLastLevel = paths.length <= MERGE_FANIN;
     const nextPaths: string[] = [];
     const nextDurations: number[] = [];
 
-    for (let i = 0; i < paths.length; i += 2) {
-      if (i + 1 >= paths.length) {
-        // Cantidad impar de tandas en este nivel -- la ultima pasa sola al
-        // siguiente nivel, no hay con quien fusionarla todavia.
-        nextPaths.push(paths[i]!);
-        nextDurations.push(durations[i]!);
+    for (let i = 0; i < paths.length; i += MERGE_FANIN) {
+      const groupPaths = paths.slice(i, i + MERGE_FANIN);
+      const groupDurations = durations.slice(i, i + MERGE_FANIN);
+      if (groupPaths.length === 1) {
+        // Resto que no llego a formar grupo en este nivel -- pasa solo al
+        // siguiente nivel, no hay con quien fusionarlo todavia.
+        nextPaths.push(groupPaths[0]!);
+        nextDurations.push(groupDurations[0]!);
         continue;
       }
 
-      const outPath = isLastLevel ? assembledPath : path.join(workDir, `merge-L${level}-${i / 2}.mp4`);
-      const mergedDuration = await mergePairWithTransition(
-        paths[i]!,
-        durations[i]!,
-        paths[i + 1]!,
-        durations[i + 1]!,
+      const outPath = isLastLevel ? assembledPath : path.join(workDir, `merge-L${level}-${i / MERGE_FANIN}.mp4`);
+      const mergedDuration = await mergeGroupWithTransitions(
+        groupPaths,
+        groupDurations,
         targetVideoBitrateBps,
         outPath,
         isLastLevel ? quality : "intermediate"
       );
-      // Ya estan fusionadas en outPath -- las dos tandas de origen de este
-      // par no hacen mas falta.
-      await cleanupFiles([paths[i]!, paths[i + 1]!]);
+      // Ya estan fusionadas en outPath -- las tandas de origen de este
+      // grupo no hacen mas falta.
+      await cleanupFiles(groupPaths);
 
       nextPaths.push(outPath);
       nextDurations.push(mergedDuration);
@@ -549,6 +600,21 @@ const COLOR_ARGS = [
 // subtitulos (una sola pasada).
 const INTERMEDIATE_CRF = 17;
 
+// Preset de x264 de la pasada FINAL (ver videoCodecArgs). "medium" es el
+// default historico; en el servidor del worker se recomienda "fast"
+// (RENDER_FINAL_PRESET=fast): el encode final tarda ~la mitad y a 720p la
+// diferencia no se nota a simple vista. Un valor desconocido cae a medium.
+const X264_PRESETS = new Set([
+  "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow",
+]);
+const FINAL_PRESET = (() => {
+  const raw = process.env.RENDER_FINAL_PRESET?.trim().toLowerCase();
+  if (!raw) return "medium";
+  if (X264_PRESETS.has(raw)) return raw;
+  console.warn(`[render_video] RENDER_FINAL_PRESET="${raw}" invalido, usando medium`);
+  return "medium";
+})();
+
 // Args de codec de video para pasarle a ffmpeg en cada tanda. `quality:
 // "intermediate"` fuerza el CRF casi-sin-perdida de arriba e ignora
 // targetVideoBitrateBps (se aplica recien en la pasada final). En modo
@@ -574,13 +640,13 @@ function videoCodecArgs(
   if (targetVideoBitrateBps === null) {
     // CRF por defecto de libx264 es 23 -- bajado a 20 (mas nitido) ya que
     // R2/Supabase Storage no tienen limite de tamano que cuidar aca.
-    return ["-c:v", "libx264", "-preset", "medium", "-crf", "20", ...COLOR_ARGS];
+    return ["-c:v", "libx264", "-preset", FINAL_PRESET, "-crf", "20", ...COLOR_ARGS];
   }
   return [
     "-c:v",
     "libx264",
     "-preset",
-    "medium",
+    FINAL_PRESET,
     "-b:v",
     `${targetVideoBitrateBps}`,
     "-maxrate",
@@ -631,26 +697,34 @@ function escapeForSubtitlesFilter(filePath: string): string {
 // chico (no sobre los clips originales de cada tanda), asi que el costo de
 // memoria es bajo, y no hace falta tocar la logica ya delicada de
 // buildFfmpegArgsForBatch/assembleBatchesWithTransitions.
+function subtitlesFilter(srtPath: string): string {
+  const style =
+    "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
+    "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=60";
+  return `subtitles=${escapeForSubtitlesFilter(srtPath)}:force_style='${style}'`;
+}
+
 async function burnSubtitles(
   inputPath: string,
   srtPath: string,
   targetVideoBitrateBps: number | null,
-  outputPath: string
+  outputPath: string,
+  onTime?: (seconds: number) => void
 ): Promise<void> {
-  const style =
-    "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
-    "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=60";
-  await runFfmpeg([
-    "-i",
-    inputPath,
-    "-vf",
-    `subtitles=${escapeForSubtitlesFilter(srtPath)}:force_style='${style}'`,
-    ...videoCodecArgs(targetVideoBitrateBps),
-    "-c:a",
-    "copy",
-    "-y",
-    outputPath,
-  ]);
+  await runFfmpeg(
+    [
+      "-i",
+      inputPath,
+      "-vf",
+      subtitlesFilter(srtPath),
+      ...videoCodecArgs(targetVideoBitrateBps),
+      "-c:a",
+      "copy",
+      "-y",
+      outputPath,
+    ],
+    onTime
+  );
 }
 
 // Composicion real: descarga cada clip de stock y el audio narrado, procesa
@@ -658,7 +732,28 @@ async function burnSubtitles(
 // memoria de cada ffmpeg sin importar cuantos segmentos tenga el video, y
 // al final pega las tandas ya codificadas sin recomprimir (`-c copy`, cero
 // perdida de calidad) junto con el audio narrado completo.
-async function realRender(videoProjectId: string, timelineId: string): Promise<RenderVideoOutput> {
+// Reparto del progreso del Job durante el render (runRenderPipeline ya lo
+// dejo en 10): la mayor parte es el procesamiento por tandas, despues la
+// union/encode final (con progreso real de ffmpeg) y la subida.
+const PROGRESS_BATCHES_START = 12;
+const PROGRESS_BATCHES_END = 75;
+const PROGRESS_FINAL_START = 78;
+const PROGRESS_FINAL_END = 94;
+const PROGRESS_UPLOAD = 96;
+
+async function realRender(
+  videoProjectId: string,
+  timelineId: string,
+  jobId: string | undefined
+): Promise<RenderVideoOutput> {
+  const progress = (value: number, message: string, force = false) =>
+    reportJobProgress(jobId, value, message, { force });
+  // Progreso continuo de una pasada de ffmpeg sobre el video entero,
+  // repartido entre `from` y `to`.
+  const encodeProgress = (from: number, to: number, message: string) => (seconds: number) => {
+    const fraction = totalDuration > 0 ? Math.min(1, seconds / totalDuration) : 0;
+    void progress(from + fraction * (to - from), `${message} (${Math.round(fraction * 100)}%)`);
+  };
   const { data: timeline, error } = await supabase
     .from("timelines")
     .select("content")
@@ -726,9 +821,10 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
   }
 
   console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos)`);
-  const workDir = await mkdtemp(path.join(tmpdir(), "skaler-render-"));
+  const workDir = await makeWorkDir("skaler-render-");
   try {
     const audioPath = path.join(workDir, "narration.mp3");
+    await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
 
     // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
@@ -743,13 +839,24 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     for (let b = 0; b < totalBatches; b++) {
       const batchStart = b * BATCH_SIZE;
       const batchSegments = segments.slice(batchStart, batchStart + BATCH_SIZE);
+      await progress(
+        PROGRESS_BATCHES_START + (b / totalBatches) * (PROGRESS_BATCHES_END - PROGRESS_BATCHES_START),
+        `Procesando escenas: tanda ${b + 1} de ${totalBatches}...`,
+        b === 0
+      );
 
       // Descarga solo los clips de ESTA tanda (no todos los del video de
       // entrada) -- con 190+ escenas, bajar todos los clips de una antes de
       // codificar el primer frame es el pico real de uso de disco (peor
       // incluso que las tandas ya codificadas), y en hosting con /tmp chico
       // (ver cleanupFiles arriba) alcanza solo para tirar la instancia.
-      const batchClipPaths = await mapWithConcurrency(batchSegments, 5, async (segment, j) => {
+      // Si falla una descarga, se espera a que terminen las demas de la
+      // tanda antes de tirar el error: mapWithConcurrency rechaza con el
+      // primer error y las descargas restantes seguian escribiendo en el
+      // workDir mientras el `finally` de abajo lo borraba (ENOTEMPTY y
+      // archivos huerfanos en disco).
+      let downloadError: unknown = null;
+      const batchClipPaths = await mapWithConcurrency(batchSegments, DOWNLOAD_CONCURRENCY, async (segment, j) => {
         const i = batchStart + j;
         // La extension real importa: el demuxer "image2" (usado con -loop 1
         // para las imagenes generadas) espera un patron de secuencia tipo
@@ -757,9 +864,14 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         // contain an image sequence pattern" -- .png/.mp4 alcanza para que
         // ffmpeg detecte el formato solo, sin forzar -f explicito.
         const clipPath = path.join(workDir, segment.isImage ? `segment-${i}.png` : `segment-${i}.mp4`);
-        await downloadTo(segment.storageKey, clipPath);
+        try {
+          await downloadTo(segment.storageKey, clipPath);
+        } catch (clipError) {
+          downloadError ??= clipError;
+        }
         return clipPath;
       });
+      if (downloadError) throw downloadError;
 
       const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled);
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
@@ -784,6 +896,10 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
     }
 
     const outputPath = path.join(workDir, "final.mp4");
+    const srtPath = path.join(workDir, "subtitles.srt");
+    // true si los subtitulos ya se quemaron en la pasada de audio (caso con
+    // transiciones), para no hacer una pasada extra al final.
+    let subtitlesBurned = false;
 
     if (!transitionsEnabled) {
       // Union final (sin transiciones): las tandas ya estan codificadas con
@@ -796,6 +912,7 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       await writeFile(concatListPath, concatListContent);
 
       console.log(`[render_video] uniendo ${totalBatches} tandas + audio...`);
+      await progress(PROGRESS_FINAL_START, "Uniendo las escenas con el audio...", true);
       await runFfmpeg([
         "-f",
         "concat",
@@ -829,31 +946,45 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
       // que el video queda mas corto que el audio narrado; se compensa
       // sosteniendo el ultimo frame (tpad) el tiempo exacto perdido, para
       // que no se corte la narracion antes de tiempo.
-      // Si ademas hay subtitulos, esta union con audio TAMPOCO es la pasada
-      // final (burnSubtitles reencodea una vez mas sobre outputPath) -- ver
-      // mismo razonamiento que batchQuality.
-      const assembleQuality = subtitlesEnabled ? "intermediate" : "final";
+      // La union con audio (tpad) reencodea igual el video entero, asi que
+      // ES la pasada final: si hay subtitulos se queman aca mismo (mismo
+      // timeline, despues del tpad) en vez de en una pasada extra aparte
+      // -- un re-encode completo menos. Las fusiones del arbol quedan todas
+      // como "intermediate" (casi sin perdida).
       const assembledPath =
         totalBatches === 1 ? batchOutputPaths[0]! : path.join(workDir, "assembled.mp4");
       if (totalBatches > 1) {
-        console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones (arbol binario)...`);
-        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, workDir, assembledPath, assembleQuality);
+        console.log(`[render_video] uniendo ${totalBatches} tandas con transiciones (arbol, fan-in ${MERGE_FANIN})...`);
+        await progress(PROGRESS_BATCHES_END, "Uniendo las escenas con transiciones...", true);
+        await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, workDir, assembledPath, "intermediate");
+      }
+
+      let subtitlesChain = "";
+      if (subtitlesEnabled) {
+        await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
+        subtitlesChain = `,${subtitlesFilter(srtPath)}`;
+        subtitlesBurned = true;
       }
 
       const totalShrinkage = (segments.length - 1) * TRANSITION_DURATION_SECONDS;
-      console.log(`[render_video] agregando audio (compensando ${totalShrinkage.toFixed(2)}s de solape de transiciones)...`);
+      console.log(
+        `[render_video] agregando audio (compensando ${totalShrinkage.toFixed(2)}s de solape de transiciones)` +
+          `${subtitlesBurned ? " + subtitulos" : ""}...`
+      );
+      const finalMessage = subtitlesBurned ? "Codificando el video final con subtitulos" : "Codificando el video final";
+      await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
       await runFfmpeg([
         "-i",
         assembledPath,
         "-i",
         audioPath,
         "-filter_complex",
-        `[0:v]tpad=stop_mode=clone:stop_duration=${totalShrinkage.toFixed(2)}[padded]`,
+        `[0:v]tpad=stop_mode=clone:stop_duration=${totalShrinkage.toFixed(2)}${subtitlesChain}[padded]`,
         "-map",
         "[padded]",
         "-map",
         "1:a",
-        ...videoCodecArgs(targetVideoBitrateBps, assembleQuality),
+        ...videoCodecArgs(targetVideoBitrateBps, "final"),
         "-c:a",
         "aac",
         "-b:a",
@@ -861,25 +992,32 @@ async function realRender(videoProjectId: string, timelineId: string): Promise<R
         "-shortest",
         "-y",
         outputPath,
-      ]);
+      ], encodeProgress(PROGRESS_FINAL_START, PROGRESS_FINAL_END, finalMessage));
       // assembledPath ya esta mezclado con audio en outputPath -- no hace
       // falta conservarlo (incluye el caso totalBatches===1, donde
       // assembledPath era la unica tanda).
-      await cleanupFiles([assembledPath]);
+      await cleanupFiles(subtitlesBurned ? [assembledPath, srtPath] : [assembledPath]);
     }
 
     let finalOutputPath = outputPath;
-    if (subtitlesEnabled) {
+    if (subtitlesEnabled && !subtitlesBurned) {
       console.log(`[render_video] quemando subtitulos (${content.segments!.length} segmentos)...`);
-      const srtPath = path.join(workDir, "subtitles.srt");
       await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
       finalOutputPath = path.join(workDir, "final-subtitled.mp4");
-      await burnSubtitles(outputPath, srtPath, targetVideoBitrateBps, finalOutputPath);
+      await progress(PROGRESS_FINAL_START + 2, "Agregando subtitulos...", true);
+      await burnSubtitles(
+        outputPath,
+        srtPath,
+        targetVideoBitrateBps,
+        finalOutputPath,
+        encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, "Agregando subtitulos")
+      );
       // outputPath (sin subtitulos) ya quedo quemado en finalOutputPath.
       await cleanupFiles([outputPath, srtPath]);
     }
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);
+    await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
     if (usingR2 && r2Config && r2Provider?.api_key) {
       publicUrl = await uploadFileToR2(
@@ -940,6 +1078,6 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
       }
       throw new ProviderNotConfiguredError("render_video");
     }
-    return realRender(video_project_id, timeline_id);
+    return realRender(video_project_id, timeline_id, ctx.jobId);
   },
 };

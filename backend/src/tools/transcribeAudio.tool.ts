@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "module";
 import type { ToolDefinition } from "./tool.types.js";
@@ -11,6 +10,7 @@ import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { getOwnedAsset } from "../lib/ownership.js";
+import { makeWorkDir } from "../lib/workDir.js";
 
 // ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts.
 const require = createRequire(import.meta.url);
@@ -80,7 +80,7 @@ function runFfmpeg(args: string[]): Promise<void> {
 // aca a 16kHz mono (la frecuencia interna que usa Whisper igual, sin
 // perdida de calidad de transcripcion) antes de mandarlo, si hace falta.
 async function compressForWhisper(buffer: Buffer): Promise<Buffer> {
-  const workDir = await mkdtemp(path.join(tmpdir(), "skaler-whisper-"));
+  const workDir = await makeWorkDir("skaler-whisper-");
   const inputPath = path.join(workDir, "input.mp3");
   const outputPath = path.join(workDir, "output.mp3");
   try {

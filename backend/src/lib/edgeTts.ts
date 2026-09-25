@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { EdgeTTS } from "node-edge-tts";
 import { supabase } from "./supabase.js";
 import { ensureAudioBucket, AUDIO_BUCKET } from "./ai33.js";
 import { getAudioDurationSeconds } from "./audioDuration.js";
+import { makeWorkDir } from "./workDir.js";
 
 // Prefijo que distingue una voz de Edge TTS (gratis, sin api key) de las
 // voces de ai33.pro (minimax_/elevenlabs_/edge_/etc, ver generateVoice.tool.ts) --
@@ -73,7 +73,7 @@ export async function generateWithEdgeTts(
   text: string,
   voiceId: string
 ): Promise<EdgeTtsResult> {
-  const workDir = await mkdtemp(path.join(tmpdir(), "skaler-edge-tts-"));
+  const workDir = await makeWorkDir("skaler-edge-tts-");
   try {
     const audioPath = path.join(workDir, "speech.mp3");
     const tts = new EdgeTTS({ voice: voiceId, timeout: EDGE_TTS_TIMEOUT_MS, saveSubtitles: true });

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { listTools, runTool, ProviderNotConfiguredError } from "../../tools/index.js";
 import { getOwnedJob } from "../../lib/ownership.js";
+import { getExecutionMode } from "../../lib/jobQueue.js";
 
 // Mensajes que las propias tools lanzan a proposito y son seguros de
 // mostrar tal cual (no filtran detalles de Postgres ni de proveedores
@@ -30,6 +31,15 @@ export async function executeTool(req: Request, res: Response) {
     const toolName = req.params.tool_name;
     if (typeof toolName !== "string") {
       return res.status(400).json({ error: "tool_name is required" });
+    }
+
+    // Con EXECUTION_MODE=queue la API corre en un plan chico sin ffmpeg
+    // pesado: el render solo se dispara aprobando el stock
+    // (POST /jobs/:id/approve-stock-review), que lo encola para el worker.
+    if (toolName === "render_video" && getExecutionMode() === "queue") {
+      return res.status(409).json({
+        error: "El render corre en el servidor de render: aprobá el stock del proyecto para encolarlo.",
+      });
     }
 
     const userId = req.user!.id;

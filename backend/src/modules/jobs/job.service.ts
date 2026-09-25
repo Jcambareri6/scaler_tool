@@ -4,6 +4,7 @@ import { getOwnedProject, getOwnedJob } from "../../lib/ownership.js";
 import { runRenderPipeline } from "../../pipeline/orchestrator.js";
 import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
+import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
 import { renderQueue } from "../../lib/renderQueue.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
 
@@ -175,25 +176,40 @@ export async function approveStockReview(req: Request, res: Response) {
     }
 
     // progress:1 marca "en cola, todavia no arranco a renderizar de verdad"
-    // -- runRenderPipeline pisa esto con progress:10 recien cuando el
-    // semaforo de renderQueue lo deja correr (ver abajo). Sin esto, un
+    // -- runRenderPipeline pisa esto con progress:10 recien cuando arranca
+    // de verdad: en inline cuando el semaforo de renderQueue lo deja correr
+    // (ver abajo), en queue cuando el worker toma el job. Sin esto, un
     // render que queda esperando turno se ve identico en la UI a uno que ya
     // esta procesando FFmpeg.
+    // EXECUTION_MODE=queue: el mismo Job (que ya paso por la cola de
+    // pre_render) se re-encola en la cola de render para el worker. El
+    // filtro por status evita que un doble click lo encole dos veces.
+    const queued = getExecutionMode() === "queue";
     const { data, error } = await supabase
       .from("jobs")
-      .update({ status: "RENDERING" satisfies JobStatus, progress: 1 })
+      .update({
+        status: "RENDERING" satisfies JobStatus,
+        progress: 1,
+        progress_message: queued ? "En cola, esperando al servidor de render..." : "Preparando el render...",
+        ...(queued ? { ...pendingQueueFields("render", userId), error: null } : {}),
+      })
       .eq("id", job_id)
+      .eq("status", "AWAITING_STOCK_REVIEW")
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+    if (!data) {
+      return res.status(409).json({ error: "Job is no longer awaiting stock review" });
     }
     await syncProjectStatus(job.video_project_id, "RENDERING");
 
     // Mismo criterio que runPipeline: el render (descarga de clips + FFmpeg)
     // corre en background, la request responde ya con el Job en RENDERING.
     res.status(202).json(data);
+    if (queued) return;
 
     // renderQueue serializa los renders pesados (ffmpeg) -- un solo render
     // ya puede pasar los 4GB de RAM y llenar /tmp por si solo (ver
