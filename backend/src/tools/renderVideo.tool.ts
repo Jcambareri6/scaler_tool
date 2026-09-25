@@ -42,8 +42,22 @@ const RENDER_BUCKET = "renders";
 // 720p/30fps: suficiente calidad para revisar, mantiene los tiempos de
 // render razonables (el clip mas lento en esto es descargar+codificar, no
 // la resolucion).
-const OUTPUT_WIDTH = 1280;
-const OUTPUT_HEIGHT = 720;
+// Resolucion de salida segun video_projects.render_quality (ver migracion
+// 20260926000000_render_quality.sql). Un valor desconocido o ausente cae a
+// 720p, el comportamiento historico.
+export type RenderQuality = "720p" | "1080p";
+interface OutputSize {
+  width: number;
+  height: number;
+}
+const RENDER_SIZES: Record<RenderQuality, OutputSize> = {
+  "720p": { width: 1280, height: 720 },
+  "1080p": { width: 1920, height: 1080 },
+};
+function resolveOutputSize(quality: unknown): { quality: RenderQuality; size: OutputSize } {
+  const key: RenderQuality = quality === "1080p" ? "1080p" : "720p";
+  return { quality: key, size: RENDER_SIZES[key] };
+}
 
 function parseTime(value: string): number {
   const [mm, ss] = value.split(":").map(Number);
@@ -371,7 +385,8 @@ const TRANSITION_DURATION_SECONDS = 0.5;
 function buildFfmpegArgsForBatch(
   batchSegments: RenderSegment[],
   batchClipPaths: string[],
-  transitionsEnabled: boolean
+  transitionsEnabled: boolean,
+  { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT }: OutputSize
 ): { inputArgs: string[]; filterComplex: string } {
   const inputArgs: string[] = [];
   const filterParts: string[] = [];
@@ -413,7 +428,7 @@ function buildFfmpegArgsForBatch(
     } else {
       inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(2), "-i", batchClipPaths[i]!);
       // flags=lanczos (en vez del default bilineal de ffmpeg): sin esto, un
-      // clip de stock con resolucion nativa menor a 1280x720 sale
+      // clip de stock con resolucion nativa menor a la de salida sale
       // notoriamente mas blando que sus escenas vecinas al escalarlo hacia
       // arriba -- confirmado como la causa de la inconsistencia de nitidez
       // entre escenas de un mismo video (algunas vienen de clips de menor
@@ -777,7 +792,7 @@ async function realRender(
 
   const { data: project, error: projectError } = await supabase
     .from("video_projects")
-    .select("transitions_enabled, subtitles_enabled")
+    .select("transitions_enabled, subtitles_enabled, render_quality")
     .eq("id", videoProjectId)
     .single();
   if (projectError) {
@@ -791,6 +806,7 @@ async function realRender(
   }
   const transitionsEnabled = Boolean(project?.transitions_enabled) && segments.length > 1;
   const subtitlesEnabled = Boolean(project?.subtitles_enabled) && (content.segments?.length ?? 0) > 0;
+  const { quality: renderQuality, size: outputSize } = resolveOutputSize(project?.render_quality);
 
   const totalDuration = parseTime(scenes[scenes.length - 1]!.end);
 
@@ -820,7 +836,7 @@ async function realRender(
     }
   }
 
-  console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos)`);
+  console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos, ${renderQuality})`);
   const workDir = await makeWorkDir("skaler-render-");
   try {
     const audioPath = path.join(workDir, "narration.mp3");
@@ -873,7 +889,7 @@ async function realRender(
       });
       if (downloadError) throw downloadError;
 
-      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled);
+      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled, outputSize);
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 
       console.log(`[render_video] corriendo ffmpeg (tanda ${b + 1}/${totalBatches}, ${batchSegments.length} segmentos)...`);

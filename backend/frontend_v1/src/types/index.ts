@@ -2,6 +2,8 @@ export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "E
 
 export type VisualSource = "stock" | "ai" | "mixed";
 
+export type RenderQuality = "720p" | "1080p";
+
 export type SceneVisualStatus = "PENDING" | "GENERATING" | "DONE" | "ERROR";
 
 export type JobStatus = "QUEUED" | "RUNNING" | "AWAITING_STOCK_REVIEW" | "DONE" | "FAILED";
@@ -19,6 +21,7 @@ export interface VideoProject {
   visualSource: VisualSource;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
+  renderQuality: RenderQuality;
   workspaceId?: string;
   // Solo viene en GET /projects/:id y /details (rol del usuario actual).
   myRole?: WorkspaceRole;

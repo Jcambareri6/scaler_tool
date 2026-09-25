@@ -3,7 +3,7 @@ import { projectsService } from "@/services/projects.service";
 import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
-import type { Job, VisualSource, Asset } from "@/types";
+import type { Job, VisualSource, Asset, RenderQuality } from "@/types";
 
 interface Props {
   projectId: string;
@@ -288,6 +288,7 @@ export default function PreviewPanel({ projectId }: Props) {
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
+  const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
   const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
@@ -305,6 +306,7 @@ export default function PreviewPanel({ projectId }: Props) {
         setVisualSource(p.visualSource);
         setTransitionsEnabled(p.transitionsEnabled);
         setSubtitlesEnabled(p.subtitlesEnabled);
+        setRenderQuality(p.renderQuality);
       }
     });
   }, [projectId]);
@@ -402,13 +404,28 @@ export default function PreviewPanel({ projectId }: Props) {
       // El pipeline automatico (orchestrator.ts) lee visual_source del
       // proyecto para decidir stock/IA/mixto por escena -- se persiste
       // antes de arrancar para que la corrida use lo que se eligio ahora.
-      await projectsService.updateProject(projectId, { visualSource, transitionsEnabled, subtitlesEnabled });
+      await projectsService.updateProject(projectId, { visualSource, transitionsEnabled, subtitlesEnabled, renderQuality });
       const newJob = await projectsService.runPipeline(projectId);
       setJob(newJob);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo iniciar la generación");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // A diferencia del resto de las opciones (que se guardan al tocar
+  // "Generar"), la calidad se guarda en el acto: render_video la lee recien
+  // al renderizar, asi que cambiarla con el stock en revision aplica al
+  // render que falta.
+  const handleRenderQualityChange = async (quality: RenderQuality) => {
+    const previous = renderQuality;
+    setRenderQuality(quality);
+    try {
+      await projectsService.updateProject(projectId, { renderQuality: quality });
+    } catch (err) {
+      setRenderQuality(previous);
+      setError(err instanceof Error ? err.message : "No se pudo guardar la calidad");
     }
   };
 
@@ -480,6 +497,35 @@ export default function PreviewPanel({ projectId }: Props) {
           className="w-4 h-4 accent-[#7c6aff]"
         />
       </label>
+
+      {/* Resolucion del render final -- ver render_video.tool.ts
+          (video_projects.render_quality). 1080p tarda ~2x. */}
+      <div className="flex flex-col gap-1.5 w-full max-w-xs">
+        <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+          Calidad del video
+        </span>
+        <div className="flex gap-2">
+          {(
+            [
+              { value: "720p" as const, label: "720p" },
+              { value: "1080p" as const, label: "1080p (más lento)" },
+            ]
+          ).map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => void handleRenderQualityChange(opt.value)}
+              className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+              style={
+                renderQuality === opt.value
+                  ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                  : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
     </>
   );
 

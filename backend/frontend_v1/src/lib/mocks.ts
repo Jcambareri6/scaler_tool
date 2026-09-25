@@ -11,6 +11,7 @@ export const mockProjects: VideoProject[] = [
     visualSource: "stock",
     transitionsEnabled: false,
     subtitlesEnabled: false,
+    renderQuality: "720p",
   },
   {
     id: "2",
@@ -22,6 +23,7 @@ export const mockProjects: VideoProject[] = [
     visualSource: "stock",
     transitionsEnabled: false,
     subtitlesEnabled: false,
+    renderQuality: "720p",
   },
   {
     id: "3",
@@ -33,6 +35,7 @@ export const mockProjects: VideoProject[] = [
     visualSource: "stock",
     transitionsEnabled: false,
     subtitlesEnabled: false,
+    renderQuality: "720p",
   },
   {
     id: "4",
@@ -44,6 +47,7 @@ export const mockProjects: VideoProject[] = [
     visualSource: "stock",
     transitionsEnabled: false,
     subtitlesEnabled: false,
+    renderQuality: "720p",
   },
 ];
 

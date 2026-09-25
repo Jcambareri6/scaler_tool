@@ -51,6 +51,7 @@ export const projectsService = {
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
     if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
     if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
+    if (updates.renderQuality !== undefined) body.render_quality = updates.renderQuality;
     if (updates.workspaceId !== undefined) body.workspace_id = updates.workspaceId;
 
     try {

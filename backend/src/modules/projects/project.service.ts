@@ -7,7 +7,7 @@ import { ensurePersonalWorkspace } from "../workspaces/workspace.service.js";
 
 export async function createProject(req: Request, res: Response) {
   try {
-    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled } = req.body;
+    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, render_quality } = req.body;
 
     const userId = req.user!.id;
 
@@ -36,6 +36,7 @@ export async function createProject(req: Request, res: Response) {
         ...(visual_source ? { visual_source } : {}),
         ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
         ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
+        ...(render_quality ? { render_quality } : {}),
       })
       .select()
       .single();
@@ -281,7 +282,7 @@ export async function updateProject(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
 
-    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, workspace_id } = req.body;
+    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, render_quality, workspace_id } = req.body;
 
     const access = await getOwnedProject(project_id, userId, "editor");
     if (!access) {
@@ -312,6 +313,9 @@ export async function updateProject(req: Request, res: Response) {
         ...(visual_source ? { visual_source } : {}),
         ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
         ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
+        // '720p' | '1080p' -- un valor invalido lo rechaza el check de la
+        // columna y vuelve como 400.
+        ...(render_quality ? { render_quality } : {}),
         ...(workspace_id ? { workspace_id } : {}),
       })
       .eq("id", access.id)
