@@ -10,11 +10,66 @@ Frontend ──► API en Render (EXECUTION_MODE=queue) ──► Supabase (tabl
 
 ---
 
+## Resumen: los pasos en orden
+
+| # | Paso | Dónde | Sección |
+|---|---|---|---|
+| 1 | Tener la rama `migracion_worker_render` subida a GitHub | GitHub | — |
+| 2 | Crear tu clave SSH (si no tenés una) | Tu PC | [0.1](#01-crear-tu-clave-ssh-si-no-tenés-una) |
+| 3 | Contratar el servidor con Ubuntu 24.04 y tu clave SSH | Hetzner | [0.2](#02-contratar-el-servidor) |
+| 4 | Correr la migración de la cola | Supabase → SQL Editor | [1](#1-migración-de-supabase-una-sola-vez) |
+| 5 | Preparar el servidor (usuario, SSH, firewall, Docker) | Servidor (root) | [2](#2-preparar-el-servidor) |
+| 6 | Bajar el código con una deploy key | Servidor + GitHub | [3](#3-bajar-el-código) |
+| 7 | Completar `.env.worker` y levantar el worker | Servidor | [4](#4-configurar-y-levantar-el-worker) |
+| 8 | Poner `EXECUTION_MODE=queue` y probar un video real, con subtítulos | Render + la app | [5](#5-pasar-la-api-a-modo-cola) |
+| 9 | Una semana estable → bajar el plan de Render a Starter | Render | [5](#recién-cuando-todo-funcione-recomendado-1-semana) |
+
+Si algo falla en cualquier momento después del paso 8, volvés `EXECUTION_MODE` a `inline` en Render y todo queda como antes ([sección 8](#8-volver-atrás)).
+
+---
+
 ## 0. Qué necesitás antes de empezar
 
-- El servidor contratado con **Ubuntu 24.04** y tu clave SSH cargada.
 - Acceso al dashboard de **Supabase** (SQL Editor) y de **Render**.
-- `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`: los mismos que ya tiene la API en Render.
+- `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`: los mismos que ya tiene la API en Render (Render → servicio → Environment).
+- La rama `migracion_worker_render` subida a GitHub: el servidor baja el código de ahí.
+
+### 0.1 Crear tu clave SSH (si no tenés una)
+
+Es lo que te deja entrar al servidor sin contraseña. En tu PC (Windows PowerShell, macOS o Linux):
+
+```bash
+ssh-keygen -t ed25519 -C "tu-email"
+# Enter a todo (ubicación por defecto). Podés ponerle una passphrase o dejarla vacía.
+cat ~/.ssh/id_ed25519.pub
+# En Windows PowerShell: type $env:USERPROFILE\.ssh\id_ed25519.pub
+```
+
+Copiá la línea que empieza con `ssh-ed25519 …`: es tu **clave pública** y es la que se carga en Hetzner. La otra (`id_ed25519`, sin `.pub`) es privada: no se comparte nunca.
+
+### 0.2 Contratar el servidor
+
+1. Entrá a https://www.hetzner.com/dedicated-rootserver/ax42/ → **Configure**.
+2. **Ubicación:** cualquiera (Alemania o Finlandia). Para un servidor que solo renderiza no importa.
+3. **Sistema operativo:** si el formulario lo ofrece, elegí **Ubuntu 24.04**.
+4. **SSH key:** pegá tu clave pública del paso 0.1.
+5. Confirmá el pedido. Hetzner puede pedirte verificar tu identidad en la primera compra, y la entrega suele tardar entre unas horas y un día.
+6. Cuando esté listo te llega un mail con la **IP** del servidor. Probá entrar:
+   ```bash
+   ssh root@IP_DEL_SERVIDOR
+   ```
+
+Si el servidor te llega en el **Rescue System** (sin sistema operativo instalado), instalá Ubuntu desde ahí:
+
+```bash
+ssh root@IP_DEL_SERVIDOR
+installimage
+# En el menú: Ubuntu → 24.04. Se abre un archivo de configuración: dejá los
+# valores por defecto (RAID 1 con los dos discos) y guardá con F10.
+reboot
+```
+
+Después del reinicio, `ssh root@IP_DEL_SERVIDOR` ya entra al Ubuntu instalado. Si te avisa que cambió la "host key", borrá la línea vieja con `ssh-keygen -R IP_DEL_SERVIDOR` y volvé a entrar.
 
 ---
 
