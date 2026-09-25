@@ -24,6 +24,12 @@ filtre a mano**. No hay red de seguridad debajo.
 - Si agregás una tabla nueva (como `stock_library_entries`), definí desde el
   día uno cómo se scopea por usuario antes de escribir el primer query.
 - Esto aplica incluso a lecturas — no solo a updates/deletes.
+- **Workspaces (2026-09-24):** un proyecto ya no es solo de `user_id` —
+  también lo acceden los miembros de su `workspace_id` según su rol
+  (`owner > admin > editor > viewer`). Para todo lo que cuelga de un
+  proyecto, resolver acceso con `getOwnedProject(id, userId, minRole)` de
+  `lib/ownership.ts` (lecturas `"viewer"`, escrituras `"editor"` = default,
+  borrar `"admin"`), nunca con `eq("user_id", userId)` directo.
 
 ## Solución propuesta (según el documento de diseño)
 

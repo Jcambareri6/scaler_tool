@@ -19,6 +19,9 @@ export interface VideoProject {
   visualSource: VisualSource;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
+  workspaceId?: string;
+  // Solo viene en GET /projects/:id y /details (rol del usuario actual).
+  myRole?: WorkspaceRole;
 }
 
 export interface Script {
@@ -75,4 +78,41 @@ export interface ScriptStyle {
   status: ScriptStyleStatus;
   error: string | null;
   createdAt: string;
+}
+
+// --- workspaces -------------------------------------------------------------
+
+export type WorkspaceRole = "owner" | "admin" | "editor" | "viewer";
+
+export interface Workspace {
+  id: string;
+  name: string;
+  ownerId: string;
+  isPersonal: boolean;
+  myRole: WorkspaceRole;
+  memberCount: number;
+  createdAt: string;
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  email: string | null;
+  role: WorkspaceRole;
+  createdAt: string;
+}
+
+export interface WorkspaceInvite {
+  id: string;
+  email: string;
+  role: WorkspaceRole;
+  inviteUrl: string;
+  expiresAt: string;
+}
+
+export interface MyInvite {
+  id: string;
+  token: string;
+  role: WorkspaceRole;
+  workspaceName: string;
+  expiresAt: string;
 }

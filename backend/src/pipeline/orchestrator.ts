@@ -7,6 +7,7 @@ import {
   type AiVideoSegment,
 } from "../lib/stockSegments.js";
 import { syncProjectStatus } from "../lib/projectStatus.js";
+import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import type { ContentPolicy, VisualSource, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
@@ -81,12 +82,17 @@ async function findUploadedAudioAsset(projectId: string): Promise<GenerateVoiceO
   };
 }
 
+// El pipeline lo puede disparar cualquier editor del workspace, no solo el
+// creador -- el acceso se resuelve con getOwnedProject (rol >= editor).
 async function getProjectOrThrow(projectId: string, userId: string) {
+  const access = await getOwnedProject(projectId, userId);
+  if (!access) {
+    throw new Error("Project not found");
+  }
   const { data: project, error } = await supabase
     .from("video_projects")
     .select("*")
     .eq("id", projectId)
-    .eq("user_id", userId)
     .single();
   if (error || !project) {
     throw new Error("Project not found");

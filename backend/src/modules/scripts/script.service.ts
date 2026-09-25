@@ -45,7 +45,7 @@ export async function getScript(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
 
-    const project = await getOwnedProject(project_id, userId);
+    const project = await getOwnedProject(project_id, userId, "viewer");
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }

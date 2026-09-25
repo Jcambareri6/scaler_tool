@@ -347,7 +347,11 @@ export const generateScriptTool: ToolDefinition<
     let targetChars: number | undefined;
 
     if (script_style_id) {
-      const style = await getOwnedScriptStyle(script_style_id, ctx.userId);
+      // En un workspace compartido el estilo suele ser del creador del
+      // proyecto, no del miembro que dispara la generacion.
+      const style =
+        (await getOwnedScriptStyle(script_style_id, ctx.userId)) ??
+        (await getOwnedScriptStyle(script_style_id, project.user_id));
       if (!style) {
         throw new Error("Script style not found");
       }

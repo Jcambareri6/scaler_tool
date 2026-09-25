@@ -11,6 +11,8 @@ import NewProjectPage from "@/pages/NewProjectPage";
 import ProjectWorkspacePage from "@/pages/ProjectWorkspacePage";
 import ScriptStylesPage from "@/pages/ScriptStylesPage";
 import SettingsPage from "@/pages/SettingsPage";
+import WorkspacesPage from "@/pages/WorkspacesPage";
+import AcceptInvitePage from "@/pages/AcceptInvitePage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 export default function App() {
@@ -34,6 +36,8 @@ export default function App() {
               <Route path="/projects/:projectId" element={<ProjectWorkspacePage />} />
               <Route path="/script-styles" element={<ScriptStylesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/workspaces" element={<WorkspacesPage />} />
+              <Route path="/invites/:token" element={<AcceptInvitePage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

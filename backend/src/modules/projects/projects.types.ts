@@ -18,6 +18,7 @@ export interface ScriptDetail extends Script {
 }
 
 export interface ProjectDetail extends Project {
+  my_role: "owner" | "admin" | "editor" | "viewer";
   script: ScriptDetail | null;
   assets: Asset[];
   timeline: Timeline | null;
@@ -32,6 +33,7 @@ export interface CreateProjectInput {
 export interface Project {
   id: string;
   user_id: string;
+  workspace_id: string | null;
   title: string;
   description: string | null;
   target_duration: number | null;
