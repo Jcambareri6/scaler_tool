@@ -4,6 +4,7 @@ import { getOwnedProject } from "../../lib/ownership.js";
 import { runPreRenderPipeline } from "../../pipeline/orchestrator.js";
 import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
+import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
 
 export async function runPipeline(req: Request, res: Response) {
   try {
@@ -15,21 +16,35 @@ export async function runPipeline(req: Request, res: Response) {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    // EXECUTION_MODE=queue: el Job queda QUEUED en la cola y lo toma el
+    // worker (src/worker.ts), que lo pasa a RUNNING al arrancar. Inline:
+    // como siempre, el pipeline corre en este mismo proceso.
+    const queued = getExecutionMode() === "queue";
     const { data: job, error: jobError } = await supabase
       .from("jobs")
-      .insert({
-        video_project_id: project.id,
-        type: "FULL_PIPELINE",
-        status: "RUNNING",
-        progress: 0,
-        started_at: new Date().toISOString(),
-      })
+      .insert(
+        queued
+          ? {
+              video_project_id: project.id,
+              type: "FULL_PIPELINE",
+              status: "QUEUED",
+              progress: 0,
+              ...pendingQueueFields("pre_render", userId),
+            }
+          : {
+              video_project_id: project.id,
+              type: "FULL_PIPELINE",
+              status: "RUNNING",
+              progress: 0,
+              started_at: new Date().toISOString(),
+            }
+      )
       .select()
       .single();
     if (jobError || !job) {
       return res.status(400).json({ error: jobError?.message ?? "Failed to create job" });
     }
-    await syncProjectStatus(project.id, "RUNNING");
+    await syncProjectStatus(project.id, queued ? "QUEUED" : "RUNNING");
 
     // El pipeline corre en background a partir de aca -- la request
     // responde de una con el Job recien creado, en vez de bloquear varios
@@ -38,6 +53,7 @@ export async function runPipeline(req: Request, res: Response) {
     // estado del Job; orchestrator.ts va actualizando status/progress a
     // medida que avanza.
     res.status(202).json(job);
+    if (queued) return;
 
     runPreRenderPipeline(project.id, { userId, jobId: job.id }).catch(async (pipelineError) => {
       const message = errorMessage(pipelineError, "Pipeline failed");

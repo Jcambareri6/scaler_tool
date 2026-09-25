@@ -66,6 +66,17 @@ export interface Job {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  // Cola del worker de render (migracion 20260925000000_job_queue.sql) --
+  // opcionales: los jobs creados con EXECUTION_MODE=inline no los usan.
+  user_id?: string | null;
+  queue?: "pre_render" | "render" | null;
+  queue_state?: "pending" | "claimed" | "done" | "failed" | null;
+  claimed_by?: string | null;
+  claimed_at?: string | null;
+  heartbeat_at?: string | null;
+  attempts?: number;
+  max_attempts?: number;
+  run_after?: string;
 }
 
 // Gap #2 (LEEME): reemplaza bad_stock_ids.json / stock_overrides.json.

@@ -4,6 +4,7 @@ import { getOwnedProject, getOwnedJob } from "../../lib/ownership.js";
 import { runRenderPipeline } from "../../pipeline/orchestrator.js";
 import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
+import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
 
 // Orden del pipeline (ver CLAUDE.md, gap #1 del LEEME): AWAITING_STOCK_REVIEW
@@ -173,21 +174,33 @@ export async function approveStockReview(req: Request, res: Response) {
       });
     }
 
+    // EXECUTION_MODE=queue: el mismo Job (que ya paso por la cola de
+    // pre_render) se re-encola en la cola de render para el worker. El
+    // filtro por status evita que un doble click lo encole dos veces.
+    const queued = getExecutionMode() === "queue";
     const { data, error } = await supabase
       .from("jobs")
-      .update({ status: "RENDERING" satisfies JobStatus })
+      .update({
+        status: "RENDERING" satisfies JobStatus,
+        ...(queued ? { ...pendingQueueFields("render", userId), error: null } : {}),
+      })
       .eq("id", job_id)
+      .eq("status", "AWAITING_STOCK_REVIEW")
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+    if (!data) {
+      return res.status(409).json({ error: "Job is no longer awaiting stock review" });
     }
     await syncProjectStatus(job.video_project_id, "RENDERING");
 
     // Mismo criterio que runPipeline: el render (descarga de clips + FFmpeg)
     // corre en background, la request responde ya con el Job en RENDERING.
     res.status(202).json(data);
+    if (queued) return;
 
     runRenderPipeline(job.video_project_id, { userId, jobId: job.id }).catch(async (pipelineError) => {
       const message = errorMessage(pipelineError, "Render failed");
