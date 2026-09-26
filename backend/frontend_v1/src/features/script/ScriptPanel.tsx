@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
+import { filesService } from "@/services/files.service";
 import type { Script, VideoProject, ScriptStyle } from "@/types";
 
 interface Props {
@@ -15,6 +16,18 @@ interface Props {
 // global por usuario, reusable entre proyectos, no algo exclusivo de este
 // panel. Aca solo queda elegir CUAL estilo (ya creado) usar para el guion
 // de este proyecto puntual, que si es un concern de Script.
+
+// El value es lo que recibe el LLM ("escribi el guion en <value>"); vacio =
+// automatico (el idioma de la idea / del estilo, como antes).
+const LANGUAGES = [
+  { value: "", label: "Automático" },
+  { value: "español", label: "Español" },
+  { value: "inglés", label: "Inglés" },
+  { value: "portugués", label: "Portugués" },
+  { value: "francés", label: "Francés" },
+  { value: "italiano", label: "Italiano" },
+  { value: "alemán", label: "Alemán" },
+];
 
 export default function ScriptPanel({ projectId, project }: Props) {
   const [script, setScript] = useState<Script | null>(null);
@@ -38,6 +51,12 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const [approxChars, setApproxChars] = useState<number | undefined>(undefined);
   const [referenceScript, setReferenceScript] = useState("");
   const [keyPoints, setKeyPoints] = useState("");
+  const [language, setLanguage] = useState("");
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Muestra el editor vacio para escribir/pegar un guion propio sin tener
+  // que generar uno primero.
+  const [writingManually, setWritingManually] = useState(false);
 
   useEffect(() => {
     projectsService
@@ -81,7 +100,31 @@ export default function ScriptPanel({ projectId, project }: Props) {
     }
   };
 
-  const handleApproxCharsChange = (raw: string) => {
+  // Guion propio desde archivo: se extrae el texto (mismo endpoint que usa
+  // Estilos de narracion) y se carga en el editor -- queda como borrador
+  // hasta que el usuario toque Guardar, igual que una edicion a mano.
+  const handleImportFile = async (file: File | null) => {
+    if (!file) return;
+    if (content.trim() && !window.confirm("Esto reemplaza el guion actual del editor. ¿Continuar?")) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setImporting(true);
+    setError(null);
+    try {
+      const text = await filesService.extractText(file);
+      if (!text.trim()) throw new Error("El archivo no tiene texto");
+      setContent(text.trim());
+      setWritingManually(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo leer el archivo");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleApproxCharsChange =(raw: string) => {
     const digits = raw.replace(/\D/g, "");
     setApproxChars(digits ? Number(digits) : undefined);
   };
@@ -101,6 +144,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
         approxChars,
         referenceScript: referenceScript.trim() || undefined,
         keyPoints: keyPoints.trim() || undefined,
+        language: language || undefined,
       });
       setScript(s);
       setContent(s.content);
@@ -148,6 +192,26 @@ export default function ScriptPanel({ projectId, project }: Props) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.docx,.pdf"
+            className="hidden"
+            onChange={(e) => handleImportFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing || generating}
+            title="Cargar un guion propio (.txt, .docx, .pdf)"
+            className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            {importing ? "Leyendo..." : "Cargar guion"}
+          </button>
           <button
             onClick={handleGenerate}
             disabled={generating}
@@ -213,6 +277,20 @@ export default function ScriptPanel({ projectId, project }: Props) {
             <option value="anthropic">Claude</option>
             <option value="openai">GPT</option>
           </select>
+          <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+            Idioma
+          </label>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            className="input-glass rounded-lg px-2 py-1 text-xs"
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
           <Link
             to="/script-styles"
             className="text-[11px] transition-opacity hover:opacity-80"
@@ -270,7 +348,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
 
       {/* Editor */}
       <div className="flex-1 overflow-hidden">
-        {script || content ? (
+        {script || content || writingManually ? (
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
@@ -294,16 +372,34 @@ export default function ScriptPanel({ projectId, project }: Props) {
             <div>
               <p className="text-sm font-medium mb-1" style={{ color: "var(--foreground)" }}>Sin guion todavía</p>
               <p className="text-xs max-w-xs leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
-                Generá el guion con IA a partir de la descripción del proyecto, o escribilo vos mismo.
+                Generá el guion con IA a partir de la descripción del proyecto, cargá un archivo o escribilo vos mismo.
               </p>
             </div>
-            <button
-              onClick={handleGenerate}
-              disabled={generating}
-              className="btn-primary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
-            >
-              {generating ? "Generando..." : "Generar guion con IA"}
-            </button>
+            <div className="flex flex-col items-center gap-2">
+              <button
+                onClick={handleGenerate}
+                disabled={generating || importing}
+                className="btn-primary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+              >
+                {generating ? "Generando..." : "Generar guion con IA"}
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={generating || importing}
+                  className="btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50"
+                >
+                  {importing ? "Leyendo archivo..." : "Cargar archivo (.txt, .docx, .pdf)"}
+                </button>
+                <button
+                  onClick={() => setWritingManually(true)}
+                  disabled={generating || importing}
+                  className="btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50"
+                >
+                  Escribir / pegar guion
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

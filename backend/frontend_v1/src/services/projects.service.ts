@@ -228,6 +228,7 @@ export const projectsService = {
       approxChars?: number;
       referenceScript?: string;
       keyPoints?: string;
+      language?: string;
     }
   ): Promise<Script> {
     await api.post(`/tools/generate_script/execute`, {
@@ -244,6 +245,7 @@ export const projectsService = {
         ...(options?.approxChars ? { approx_chars: options.approxChars } : {}),
         ...(options?.referenceScript ? { reference_script: options.referenceScript } : {}),
         ...(options?.keyPoints ? { key_points: options.keyPoints } : {}),
+        ...(options?.language ? { language: options.language } : {}),
       },
     });
     const script = await this.getScript(projectId);

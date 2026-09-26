@@ -50,6 +50,9 @@ export interface GenerateScriptInput {
   approx_chars?: number;
   reference_script?: string;
   key_points?: string;
+  // Idioma en el que se escribe el guion (ej: "inglés"). Si no viene, se
+  // usa el idioma de la idea / del Prompt Maestro, como hasta ahora.
+  language?: string;
 }
 
 export interface GenerateScriptOutput {
@@ -78,7 +81,16 @@ const OPENAI_FORMAT_INSTRUCTIONS = `Ademas de todas las reglas anteriores, respo
 El JSON debe tener esta forma exacta:
 { "title": string, "full_text": string }`;
 
-const ANTHROPIC_FORMAT_INSTRUCTIONS = `Ademas de todas las reglas anteriores, entrega el resultado exclusivamente a traves de la tool "${RETURN_SCRIPT_TOOL_NAME}".`;
+// Va al final del system prompt para que pise tanto la regla generica
+// ("mismo idioma que la idea") como el idioma que asuma el Prompt Maestro
+// (que suele estar escrito en el idioma de los guiones de referencia).
+function buildLanguageInstruction(language?: string): string {
+  const trimmed = language?.trim();
+  if (!trimmed) return "";
+  return `\n\nIDIOMA OBLIGATORIO: escribi el titulo y el guion completo en ${trimmed}, aunque la idea, el guion de referencia o las instrucciones anteriores esten en otro idioma. Adapta expresiones y ejemplos para que suenen naturales en ${trimmed}, no traduzcas literal.`;
+}
+
+const ANTHROPIC_FORMAT_INSTRUCTIONS =`Ademas de todas las reglas anteriores, entrega el resultado exclusivamente a traves de la tool "${RETURN_SCRIPT_TOOL_NAME}".`;
 
 function buildUserPrompt(idea: string, targetDuration?: number): string {
   if (!targetDuration) return `Idea del video: ${idea}`;
@@ -384,6 +396,7 @@ export const generateScriptTool: ToolDefinition<
       approx_chars: { type: "number", description: "Cantidad aproximada de caracteres del guion (solo aplica con script_style_id)" },
       reference_script: { type: "string", description: "Guion de referencia a adaptar (solo aplica con script_style_id)" },
       key_points: { type: "string", description: "Puntos clave a mantener (solo aplica con script_style_id)" },
+      language: { type: "string", description: "Idioma del guion (ej: 'inglés'). Default: el idioma de la idea" },
     },
     required: ["video_project_id", "idea"],
   },
@@ -421,6 +434,7 @@ export const generateScriptTool: ToolDefinition<
       targetChars = input.approx_chars ?? defaultApproxChars;
       userPrompt = buildStyledUserPrompt(input, defaultApproxChars);
     }
+    systemPrompt += buildLanguageInstruction(input.language);
 
     const generated =
       provider === "openai"
