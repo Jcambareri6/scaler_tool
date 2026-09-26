@@ -153,6 +153,51 @@ const returnScriptTool: Anthropic.Tool = {
   strict: true,
 };
 
+// El primer intento siempre termina con un cierre (despedida, CTA, etc.).
+// Si despues se pide una continuacion y se pega sin mas, el video termina
+// cerrando 2-3 veces. Por eso la continuacion devuelve tambien donde empieza
+// el cierre anterior: se corta ahi y el fragmento nuevo trae el unico cierre.
+const CONTINUE_SCRIPT_TOOL_NAME = "continue_script";
+
+const continueScriptTool: Anthropic.Tool = {
+  name: CONTINUE_SCRIPT_TOOL_NAME,
+  description:
+    "Devuelve la continuacion del guion, indicando donde empieza el cierre del texto anterior para quitarlo.",
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      closing_start: {
+        type: "string",
+        description:
+          "Copia TEXTUAL (exacta, 8-20 palabras) del inicio del cierre/despedida del guion acumulado hasta ahora. Todo desde ahi se elimina. String vacio si el texto anterior no tiene cierre.",
+      },
+      full_text: {
+        type: "string",
+        description:
+          "Solo el fragmento nuevo, que continua desde justo antes del cierre eliminado y termina con el UNICO cierre del video.",
+      },
+    },
+    required: ["closing_start", "full_text"],
+  },
+  strict: true,
+};
+
+// Solo se acepta cortar en el tramo final del guion -- si el modelo cita
+// algo de mas atras (o que no existe), se prefiere no cortar a perder texto.
+const MAX_CLOSING_CUT_RATIO = 0.3;
+
+function stripPreviousClosing(fullText: string, closingStart: unknown): string {
+  if (typeof closingStart !== "string") return fullText;
+  const needle = closingStart.trim();
+  if (!needle) return fullText;
+  const index = fullText.lastIndexOf(needle);
+  if (index <= 0 || index < fullText.length * (1 - MAX_CLOSING_CUT_RATIO)) {
+    return fullText;
+  }
+  return fullText.slice(0, index);
+}
+
 function parseGeneratedScript(raw: unknown): GeneratedScriptPayload {
   const payload = raw as Partial<GeneratedScriptPayload> | null;
   if (!payload || typeof payload.full_text !== "string" || !payload.full_text.trim()) {
@@ -190,12 +235,13 @@ async function generateWithAnthropic(
     let toolUse: Anthropic.ToolUseBlock | undefined;
     let parsed: GeneratedScriptPayload;
     try {
+      const toolName = attempt === 0 ? RETURN_SCRIPT_TOOL_NAME : CONTINUE_SCRIPT_TOOL_NAME;
       const stream = client.messages.stream({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
         system: systemPrompt,
-        tools: [returnScriptTool],
-        tool_choice: { type: "tool", name: RETURN_SCRIPT_TOOL_NAME },
+        tools: [returnScriptTool, continueScriptTool],
+        tool_choice: { type: "tool", name: toolName },
         messages,
       });
 
@@ -216,9 +262,13 @@ async function generateWithAnthropic(
       title = parsed.title;
       fullText = parsed.full_text;
     } else {
-      // En las continuaciones "full_text" es solo el fragmento nuevo --
-      // se pego al final del guion acumulado (ver instruccion de continuacion).
-      fullText = `${fullText.trimEnd()}\n\n${parsed.full_text.trimStart()}`;
+      // En las continuaciones "full_text" es solo el fragmento nuevo -- se
+      // saca el cierre anterior y se pega al final (ver continueScriptTool).
+      const withoutClosing = stripPreviousClosing(
+        fullText,
+        (toolUse.input as { closing_start?: unknown }).closing_start
+      );
+      fullText = `${withoutClosing.trimEnd()}\n\n${parsed.full_text.trimStart()}`;
     }
 
     if (!targetChars || fullText.length >= targetChars * MIN_ACCEPTABLE_LENGTH_RATIO) {
@@ -240,7 +290,11 @@ async function generateWithAnthropic(
         },
         {
           type: "text",
-          text: `El guion lleva ${fullText.length} caracteres y el objetivo es ${targetChars}. Continua el guion EXACTAMENTE desde donde termino el texto anterior -- no repitas ni resumas nada de lo ya escrito -- manteniendo el mismo tono y estilo, hasta sumar aproximadamente ${missingChars} caracteres mas. En "full_text" devolve SOLO el fragmento nuevo de continuacion (no el guion completo). Si la historia ya llega a un cierre narrativo natural, priorizalo por sobre forzar mas texto.`,
+          text: `El guion lleva ${fullText.length} caracteres y el objetivo es ${targetChars}. Hay que extenderlo aproximadamente ${missingChars} caracteres mas, usando la tool "${CONTINUE_SCRIPT_TOOL_NAME}".
+El video tiene que tener UN SOLO cierre. El texto anterior ya termina con un cierre (conclusion, reflexion final, despedida, pedido de like/suscripcion, etc.), asi que:
+1. En "closing_start" copia TEXTUALMENTE las primeras palabras donde empieza ese cierre en el guion acumulado. Todo desde ahi se va a borrar.
+2. En "full_text" escribi SOLO el fragmento nuevo: continua el desarrollo desde justo antes de ese cierre, con contenido nuevo (sin repetir ni resumir lo ya escrito), mismo tono y estilo, y termina con el unico cierre del video.
+No escribas mas de un cierre ni despedidas intermedias.`,
         },
       ],
     });
