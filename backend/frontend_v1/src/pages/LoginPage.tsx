@@ -6,22 +6,20 @@ import { authService } from "@/services/auth.service";
 
 type Mode = "login" | "register";
 
-// Wordmark chico y discreto -- mismo isotipo que el Sidebar (cuadrado con
-// gradiente de marca + play icon), reusado aca para consistencia visual
+// Wordmark chico y discreto -- mismo isotipo que el Sidebar (logo de
+// YT Scalers + nombre de la plataforma), reusado aca para consistencia visual
 // entre login y app logueada.
 function BrandMark() {
   return (
     <div className="flex items-center gap-2.5 justify-center mb-6">
-      <div
-        className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0"
-        style={{ background: "linear-gradient(135deg, #7c6aff 0%, #5b4de8 100%)", boxShadow: "0 0 14px rgba(124,106,255,0.4)" }}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="white">
-          <path d="M8 5v14l11-7z" />
-        </svg>
-      </div>
-      <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--foreground)" }}>
-        Scaler<span style={{ color: "var(--primary)" }}>Tool</span>
+      <img
+          src="/logo.png"
+          alt="YT Scalers"
+          className="w-10 h-10 rounded-lg shrink-0 object-cover"
+          style={{ boxShadow: "0 0 14px rgba(227,11,16,0.35)", border: "1px solid rgba(255,235,225,0.1)" }}
+        />
+      <span className="text-[17px] font-bold uppercase tracking-[0.06em] leading-none" style={{ color: "var(--brand-stone)", fontFamily: "var(--font-barlow)" }}>
+          Scaler<span style={{ color: "var(--primary)" }}>Tool</span>
       </span>
     </div>
   );
@@ -45,17 +43,17 @@ function AuthVisualPanel() {
   return (
     <div
       className="w-full h-full relative overflow-hidden flex items-end p-12"
-      style={{ background: "linear-gradient(160deg, #0b0a1f 0%, #1a1440 55%, #3a2e8f 100%)" }}
+      style={{ background: "linear-gradient(160deg, #0D0506 0%, #4B0004 55%, #8D0006 100%)" }}
     >
       {/* Formas abstractas */}
       <svg className="absolute inset-0 w-full h-full" viewBox="0 0 800 900" fill="none" aria-hidden>
         <circle cx="650" cy="120" r="220" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-        <circle cx="650" cy="120" r="140" stroke="rgba(124,106,255,0.25)" strokeWidth="1" />
+        <circle cx="650" cy="120" r="140" stroke="rgba(227,11,16,0.25)" strokeWidth="1" />
         <circle cx="120" cy="760" r="180" fill="url(#glow)" />
         <defs>
           <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="rgba(124,106,255,0.35)" />
-            <stop offset="100%" stopColor="rgba(124,106,255,0)" />
+            <stop offset="0%" stopColor="rgba(227,11,16,0.35)" />
+            <stop offset="100%" stopColor="rgba(227,11,16,0)" />
           </radialGradient>
           <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
             <path d="M 48 0 L 0 0 0 48" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
@@ -179,7 +177,7 @@ export default function LoginPage() {
             height: 700,
             top: "-18%",
             left: "-10%",
-            background: "radial-gradient(circle, rgba(99,77,220,0.10) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(227,11,16,0.10) 0%, transparent 70%)",
             filter: "blur(1px)",
           }}
           aria-hidden
@@ -258,7 +256,7 @@ export default function LoginPage() {
                       type="button"
                       onClick={handleForgotPassword}
                       className="text-[11px] font-medium transition-opacity hover:opacity-80"
-                      style={{ color: "var(--primary)" }}
+                      style={{ color: "var(--accent)" }}
                     >
                       ¿Olvidaste tu contraseña?
                     </button>
@@ -296,7 +294,7 @@ export default function LoginPage() {
               )}
 
               {forgotNotice && (
-                <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(124,106,255,0.08)", color: "rgba(196,189,255,0.95)", border: "1px solid rgba(124,106,255,0.18)" }}>
+                <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(227,11,16,0.08)", color: "rgba(255,179,180,0.95)", border: "1px solid rgba(227,11,16,0.18)" }}>
                   Todavía no está disponible la recuperación automática — escribinos a soporte para restablecer tu contraseña.
                 </p>
               )}
@@ -358,7 +356,7 @@ export default function LoginPage() {
                 setResent(false);
               }}
               className="font-medium transition-opacity hover:opacity-80"
-              style={{ color: "var(--primary)" }}
+              style={{ color: "var(--accent)" }}
             >
               {mode === "login" ? "Crear una" : "Iniciar sesion"}
             </button>

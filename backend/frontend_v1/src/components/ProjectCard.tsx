@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import StatusBadge from "@/components/StatusBadge";
 import ConfirmModal from "@/components/ConfirmModal";
-import { formatRelativeTime } from "@/lib/mocks";
+import { formatRelativeTime } from "@/lib/format";
 import { projectsService } from "@/services/projects.service";
 import { useToast } from "@/lib/toastContext";
 import type { VideoProject } from "@/types";
@@ -50,9 +50,9 @@ export default function ProjectCard({
         }}
         onMouseEnter={(e) => {
           const el = e.currentTarget as HTMLElement;
-          el.style.border = "1px solid rgba(124,106,255,0.25)";
-          el.style.background = "rgba(124,106,255,0.06)";
-          el.style.boxShadow = "0 4px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(124,106,255,0.1) inset";
+          el.style.border = "1px solid rgba(227,11,16,0.25)";
+          el.style.background = "rgba(227,11,16,0.06)";
+          el.style.boxShadow = "0 4px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(227,11,16,0.1) inset";
         }}
         onMouseLeave={(e) => {
           const el = e.currentTarget as HTMLElement;
@@ -68,7 +68,7 @@ export default function ProjectCard({
         >
           <div
             className="absolute inset-0"
-            style={{ background: "radial-gradient(ellipse at 30% 40%, rgba(99,77,220,0.14) 0%, transparent 70%)" }}
+            style={{ background: "radial-gradient(ellipse at 30% 40%, rgba(227,11,16,0.14) 0%, transparent 70%)" }}
           />
           <svg
             width="26"

@@ -74,9 +74,9 @@ export default function NewProjectPage() {
               style={
                 activeStarter === i
                   ? {
-                      background: "rgba(124,106,255,0.15)",
-                      border: "1px solid rgba(124,106,255,0.35)",
-                      color: "#c4b5fd",
+                      background: "rgba(227,11,16,0.15)",
+                      border: "1px solid rgba(227,11,16,0.35)",
+                      color: "#FFB3B4",
                       backdropFilter: "blur(8px)",
                     }
                   : {
@@ -112,7 +112,7 @@ export default function NewProjectPage() {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Ej: Historia de River Plate"
+              placeholder="Ej: 10 hábitos de la gente exitosa"
               className="input-glass w-full rounded-xl px-4 py-3 text-sm"
             />
           </div>

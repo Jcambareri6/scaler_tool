@@ -158,7 +158,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "#a78bfa" }} />
+        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
       </div>
     );
   }
@@ -294,7 +294,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
           <Link
             to="/script-styles"
             className="text-[11px] transition-opacity hover:opacity-80"
-            style={{ color: "var(--primary)" }}
+            style={{ color: "var(--accent)" }}
           >
             + Crear estilo nuevo
           </Link>

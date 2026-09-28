@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 @import 'tailwindcss';
 
 @theme inline {
@@ -16,52 +16,60 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
-  --font-sans: var(--font-outfit);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-barlow);
   --font-mono: var(--font-jetbrains);
 }
 
 :root {
-  /* Paleta oficial de marca Scaler Tool (violeta sobre casi-negro,
-     estetica "glass") -- confirmada como identidad de marca, no cambiar
-     estos valores sin actualizar tambien el favicon (public/favicon.svg). */
+  /* Paleta de marca YT Scalers -- extraida del logo del cliente:
+     rojo YT (#E30B10) como unico acento, fondo casi negro tintado de
+     carmesi y neutros calidos "piedra" del wordmark. Detalle y contrastes
+     en la guia de marca. Si se cambia, actualizar tambien public/logo.png y public/favicon.png. */
 
   /* Base */
-  --background: #050912;
-  --foreground: #e2e4ef;
+  --background: #0d0506;
+  --foreground: #ede6df;
 
   /* Glass surfaces */
-  --card: rgba(255, 255, 255, 0.042);
-  --card-foreground: #e2e4ef;
-  --glass-md: rgba(255, 255, 255, 0.06);
-  --glass-sm: rgba(255, 255, 255, 0.03);
+  --card: rgba(255, 240, 235, 0.045);
+  --card-foreground: #ede6df;
+  --glass-md: rgba(255, 240, 235, 0.065);
+  --glass-sm: rgba(255, 240, 235, 0.03);
 
   /* Interactive */
-  --primary: #7c6aff;
+  --primary: #e30b10;
+  --primary-hover: #ff2a2f;
+  --primary-deep: #a5050a;
   --primary-foreground: #ffffff;
-  --secondary: rgba(255, 255, 255, 0.06);
-  --secondary-foreground: #b0b3c6;
+  --secondary: rgba(255, 240, 235, 0.06);
+  --secondary-foreground: #c6b6a7;
 
   /* Text */
-  --muted: rgba(255, 255, 255, 0.04);
-  --muted-foreground: #6b6e84;
+  --muted: rgba(255, 240, 235, 0.04);
+  --muted-foreground: #8c7f76;
 
-  /* Accent */
-  --accent: #7c6aff;
+  /* Accent (texto de acento sobre oscuro: el rojo puro no llega a AA) */
+  --accent: #ff8a8d;
   --accent-foreground: #ffffff;
+  --brand-crimson: #8d0006;
+  --brand-crimson-deep: #4b0004;
+  --brand-stone: #d4cabe;
 
   /* Structure */
-  --border: rgba(255, 255, 255, 0.08);
-  --border-bright: rgba(255, 255, 255, 0.13);
-  --ring: rgba(124, 106, 255, 0.5);
+  --border: rgba(255, 235, 225, 0.08);
+  --border-bright: rgba(255, 235, 225, 0.13);
+  --ring: rgba(227, 11, 16, 0.5);
   --radius: 14px;
 
   /* Shadows */
-  --shadow-glass: 0 4px 24px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --shadow-primary: 0 0 20px rgba(124, 106, 255, 0.25), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-glass: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 0 rgba(255, 240, 235, 0.04) inset;
+  --shadow-primary: 0 0 20px rgba(227, 11, 16, 0.28), 0 4px 12px rgba(0, 0, 0, 0.35);
 
   /* Fonts */
-  --font-outfit: 'Outfit', system-ui, sans-serif;
-  --font-jetbrains: 'JetBrains Mono', monospace;
+  --font-inter: "Inter", system-ui, sans-serif;
+  --font-barlow: "Barlow Semi Condensed", "Inter", system-ui, sans-serif;
+  --font-jetbrains: "JetBrains Mono", monospace;
 }
 
 * {
@@ -79,8 +87,18 @@ body,
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: var(--font-outfit);
+  font-family: var(--font-inter);
   -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(141, 0, 6, 0.22), transparent 70%);
+  background-attachment: fixed;
+}
+
+/* Titulos con la voz display de la marca (eco del wordmark SCALERS) */
+h1,
+h2,
+h3 {
+  font-family: var(--font-barlow);
+  letter-spacing: 0.005em;
 }
 
 /* Glass utility classes */
@@ -99,28 +117,28 @@ body {
 }
 
 .glass-sidebar {
-  background: rgba(8, 10, 22, 0.6);
+  background: rgba(14, 6, 7, 0.65);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border-right: 1px solid var(--border);
 }
 
 .glass-header {
-  background: rgba(5, 9, 18, 0.7);
+  background: rgba(13, 5, 6, 0.72);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #7c6aff 0%, #5b4de8 100%);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
   box-shadow: var(--shadow-primary);
   color: white;
   transition: opacity 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 .btn-primary:hover {
-  opacity: 0.92;
-  box-shadow: 0 0 28px rgba(124, 106, 255, 0.35), 0 4px 16px rgba(0, 0, 0, 0.35);
+  background: linear-gradient(135deg, var(--primary-hover) 0%, var(--primary) 100%);
+  box-shadow: 0 0 28px rgba(227, 11, 16, 0.35), 0 4px 16px rgba(0, 0, 0, 0.35);
   transform: scale(1.015);
 }
 .btn-primary:active {
@@ -161,8 +179,8 @@ body {
   color: var(--muted-foreground);
 }
 .input-glass:focus {
-  border-color: rgba(124, 106, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.12);
+  border-color: rgba(227, 11, 16, 0.5);
+  box-shadow: 0 0 0 3px rgba(227, 11, 16, 0.12);
 }
 /* El popup nativo de <select> ignora el fondo glass del control cerrado
    -- se fuerza fondo/color oscuro en las <option> para que no quede texto
@@ -193,7 +211,7 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 235, 225, 0.12);
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {

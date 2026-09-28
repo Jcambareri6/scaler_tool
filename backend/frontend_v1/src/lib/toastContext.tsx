@@ -17,7 +17,7 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 const KIND_STYLE: Record<ToastKind, { bg: string; border: string; color: string }> = {
   success: { bg: "rgba(16,185,129,0.12)", border: "rgba(52,211,153,0.3)", color: "rgba(110,231,183,0.95)" },
   error: { bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.3)", color: "rgba(252,165,165,0.95)" },
-  info: { bg: "rgba(124,106,255,0.12)", border: "rgba(124,106,255,0.3)", color: "rgba(196,189,255,0.95)" },
+  info: { bg: "rgba(227,11,16,0.12)", border: "rgba(227,11,16,0.3)", color: "rgba(255,179,180,0.95)" },
 };
 
 // Provider global para feedback no bloqueante (exito/error/info) -- pensado

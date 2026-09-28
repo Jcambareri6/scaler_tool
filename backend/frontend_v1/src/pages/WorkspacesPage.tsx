@@ -186,8 +186,8 @@ export default function WorkspacesPage() {
       </div>
 
       {myInvites.length > 0 && (
-        <div className="rounded-2xl p-4 mb-6 space-y-2" style={{ ...cardStyle, border: "1px solid rgba(124,106,255,0.35)" }}>
-          <p className={labelClass} style={{ color: "rgba(196,188,255,0.95)" }}>Invitaciones para vos</p>
+        <div className="rounded-2xl p-4 mb-6 space-y-2" style={{ ...cardStyle, border: "1px solid rgba(227,11,16,0.35)" }}>
+          <p className={labelClass} style={{ color: "rgba(255,179,180,0.95)" }}>Invitaciones para vos</p>
           {myInvites.map((inv) => (
             <div key={inv.id} className="flex items-center justify-between gap-3">
               <p className="text-sm" style={{ color: "var(--foreground)" }}>
@@ -215,7 +215,7 @@ export default function WorkspacesPage() {
                   onClick={() => setSelectedId(ws.id)}
                   className="w-full text-left rounded-xl px-3 py-2.5 transition-colors"
                   style={{
-                    background: ws.id === selectedId ? "rgba(124,106,255,0.14)" : "transparent",
+                    background: ws.id === selectedId ? "rgba(227,11,16,0.14)" : "transparent",
                     color: "var(--foreground)",
                   }}
                 >
@@ -326,7 +326,7 @@ export default function WorkspacesPage() {
                       <div className="flex items-center gap-3 min-w-0">
                         <div
                           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
-                          style={{ background: "rgba(124,106,255,0.2)", color: "rgba(196,188,255,0.95)" }}
+                          style={{ background: "rgba(227,11,16,0.2)", color: "rgba(255,179,180,0.95)" }}
                         >
                           {(m.email ?? "?")[0].toUpperCase()}
                         </div>

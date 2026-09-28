@@ -13,7 +13,7 @@ export default function Layout() {
             height: 700,
             top: "-18%",
             left: "-10%",
-            background: "radial-gradient(circle, rgba(99,77,220,0.10) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(227,11,16,0.10) 0%, transparent 70%)",
             filter: "blur(1px)",
           }}
         />
@@ -24,7 +24,7 @@ export default function Layout() {
             height: 600,
             bottom: "-15%",
             right: "-8%",
-            background: "radial-gradient(circle, rgba(56,48,180,0.09) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(141,0,6,0.09) 0%, transparent 70%)",
             filter: "blur(1px)",
           }}
         />
@@ -35,7 +35,7 @@ export default function Layout() {
             height: 380,
             top: "45%",
             left: "38%",
-            background: "radial-gradient(circle, rgba(80,60,200,0.06) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(141,0,6,0.06) 0%, transparent 70%)",
             filter: "blur(1px)",
           }}
         />

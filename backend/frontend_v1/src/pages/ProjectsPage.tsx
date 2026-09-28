@@ -23,9 +23,9 @@ function EmptyState({ hasFilters, onClear }: { hasFilters: boolean; onClear: () 
     <div className="flex flex-col items-center justify-center py-24 text-center">
       <div
         className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
-        style={{ background: "rgba(124,106,255,0.1)", border: "1px solid rgba(124,106,255,0.2)" }}
+        style={{ background: "rgba(227,11,16,0.1)", border: "1px solid rgba(227,11,16,0.2)" }}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(167,155,255,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,138,141,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
           <path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.845v6.31a1 1 0 0 1-1.447.894L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z" />
         </svg>
       </div>

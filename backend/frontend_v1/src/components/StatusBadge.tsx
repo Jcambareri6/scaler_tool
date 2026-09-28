@@ -6,22 +6,22 @@ const config: Record<Status, { label: string; bg: string; text: string; border: 
   DRAFT: {
     label: "Borrador",
     bg: "rgba(255,255,255,0.04)",
-    text: "rgba(160,163,180,0.9)",
+    text: "rgba(198,182,167,0.9)",
     border: "rgba(255,255,255,0.09)",
   },
   IN_PROGRESS: {
     label: "En progreso",
-    bg: "rgba(99,77,220,0.12)",
-    text: "rgba(167,155,255,0.95)",
-    border: "rgba(124,106,255,0.22)",
-    dot: "#a78bfa",
+    bg: "rgba(251,191,36,0.08)",
+    text: "rgba(252,211,77,0.95)",
+    border: "rgba(251,191,36,0.2)",
+    dot: "#FBBF24",
   },
   GENERATING: {
     label: "Generando",
-    bg: "rgba(109,77,220,0.14)",
-    text: "rgba(196,181,253,0.95)",
-    border: "rgba(139,92,246,0.25)",
-    dot: "#c4b5fd",
+    bg: "rgba(227,11,16,0.14)",
+    text: "rgba(255,179,180,0.95)",
+    border: "rgba(227,11,16,0.25)",
+    dot: "#FFB3B4",
   },
   DONE: {
     label: "Listo",
@@ -38,7 +38,7 @@ const config: Record<Status, { label: string; bg: string; text: string; border: 
   PENDING: {
     label: "Pendiente",
     bg: "rgba(255,255,255,0.04)",
-    text: "rgba(148,151,168,0.9)",
+    text: "rgba(140,127,118,0.9)",
     border: "rgba(255,255,255,0.08)",
   },
 };

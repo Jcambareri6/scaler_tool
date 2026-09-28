@@ -122,7 +122,7 @@ export default function ProjectWorkspacePage() {
       <div className="flex items-center justify-center h-full">
         <div
           className="w-6 h-6 rounded-full border-2 animate-spin"
-          style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "var(--primary)" }}
+          style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "var(--primary)" }}
         />
       </div>
     );
@@ -156,7 +156,7 @@ export default function ProjectWorkspacePage() {
           {project.myRole && project.myRole !== "owner" && (
             <span
               className="text-[10px] font-medium uppercase tracking-widest px-2 py-0.5 rounded-md"
-              style={{ background: "rgba(124,106,255,0.12)", color: "rgba(196,188,255,0.95)", border: "1px solid rgba(124,106,255,0.25)" }}
+              style={{ background: "rgba(227,11,16,0.12)", color: "rgba(255,179,180,0.95)", border: "1px solid rgba(227,11,16,0.25)" }}
               title={project.myRole === "viewer" ? "Podés ver el proyecto y sus previews, pero no editarlo" : undefined}
             >
               {project.myRole === "viewer" ? "Solo lectura" : ROLE_LABELS[project.myRole]}

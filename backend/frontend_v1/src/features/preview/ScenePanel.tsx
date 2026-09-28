@@ -76,9 +76,9 @@ function SceneRow({
   }, [playing]);
 
   const rowStyle = selected
-    ? { background: "rgba(124,106,255,0.1)", border: "1px solid rgba(124,106,255,0.3)" }
+    ? { background: "rgba(227,11,16,0.1)", border: "1px solid rgba(227,11,16,0.3)" }
     : playing
-      ? { background: "rgba(124,106,255,0.04)", border: "1px solid rgba(124,106,255,0.15)" }
+      ? { background: "rgba(227,11,16,0.04)", border: "1px solid rgba(227,11,16,0.15)" }
       : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" };
 
   return (
@@ -90,7 +90,7 @@ function SceneRow({
     >
       <div
         className="shrink-0 rounded-lg overflow-hidden relative"
-        style={{ width: 84, height: 48, border: selected ? "1px solid #a78bfa" : "1px solid rgba(255,255,255,0.08)" }}
+        style={{ width: 84, height: 48, border: selected ? "1px solid #FF8A8D" : "1px solid rgba(255,255,255,0.08)" }}
       >
         <SceneThumbnail asset={asset} />
         <span
@@ -107,7 +107,7 @@ function SceneRow({
           >
             <span
               className="w-4 h-4 border-2 rounded-full animate-spin"
-              style={{ borderColor: "rgba(255,255,255,0.25)", borderTopColor: "#a78bfa" }}
+              style={{ borderColor: "rgba(255,255,255,0.25)", borderTopColor: "#FF8A8D" }}
             />
           </div>
         )}
@@ -119,7 +119,7 @@ function SceneRow({
             {playing && (
               <span
                 className="inline-block rounded-full shrink-0"
-                style={{ width: 5, height: 5, background: "#a78bfa", boxShadow: "0 0 6px rgba(167,155,255,0.8)", animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite" }}
+                style={{ width: 5, height: 5, background: "#FF8A8D", boxShadow: "0 0 6px rgba(255,138,141,0.8)", animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite" }}
               />
             )}
             {scene.timeStart}–{scene.timeEnd}

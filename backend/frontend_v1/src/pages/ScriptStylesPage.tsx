@@ -63,7 +63,7 @@ function ReferenceScriptSlot({
             onClick={() => fileInputRef.current?.click()}
             disabled={extracting}
             className="text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
-            style={{ color: "var(--primary)" }}
+            style={{ color: "var(--accent)" }}
           >
             {extracting ? "Leyendo archivo..." : "Adjuntar archivo (.txt, .docx, .pdf)"}
           </button>
@@ -244,7 +244,7 @@ function CreateStyleModal({
                   onClick={() => fileInputRef.current?.click()}
                   disabled={extracting}
                   className="text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
-                  style={{ color: "var(--primary)" }}
+                  style={{ color: "var(--accent)" }}
                 >
                   {extracting ? "Leyendo archivo..." : "Adjuntar archivo (.txt, .docx, .pdf)"}
                 </button>
@@ -414,9 +414,9 @@ export default function ScriptStylesPage() {
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <div
             className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
-            style={{ background: "rgba(124,106,255,0.1)", border: "1px solid rgba(124,106,255,0.2)" }}
+            style={{ background: "rgba(227,11,16,0.1)", border: "1px solid rgba(227,11,16,0.2)" }}
           >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(167,155,255,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,138,141,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
             </svg>
           </div>

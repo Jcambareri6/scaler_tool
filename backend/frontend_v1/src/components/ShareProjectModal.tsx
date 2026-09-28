@@ -78,8 +78,8 @@ export default function ShareProjectModal({ project, onClose, onMoved }: Props) 
                   disabled={current || savingId !== null}
                   className="w-full flex items-center justify-between gap-3 text-left rounded-xl px-3 py-2.5 disabled:cursor-default"
                   style={{
-                    background: current ? "rgba(124,106,255,0.14)" : "rgba(255,255,255,0.03)",
-                    border: `1px solid ${current ? "rgba(124,106,255,0.35)" : "rgba(255,255,255,0.07)"}`,
+                    background: current ? "rgba(227,11,16,0.14)" : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${current ? "rgba(227,11,16,0.35)" : "rgba(255,255,255,0.07)"}`,
                     color: "var(--foreground)",
                   }}
                 >
@@ -102,7 +102,7 @@ export default function ShareProjectModal({ project, onClose, onMoved }: Props) 
           {hasTeamWorkspace
             ? "Para sumar gente a un workspace, invitala desde "
             : "Todavía no tenés un workspace de equipo. Creá uno (ej: \"Con mi editor\") e invitá a tu editor desde "}
-          <Link to="/workspaces" className="underline" style={{ color: "rgba(196,188,255,0.95)" }}>Equipo</Link>.
+          <Link to="/workspaces" className="underline" style={{ color: "rgba(255,179,180,0.95)" }}>Equipo</Link>.
         </p>
 
         <div className="flex justify-end">

@@ -282,7 +282,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "#a78bfa" }} />
+        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
       </div>
     );
   }
@@ -346,7 +346,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 >
                   <span
                     className="w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-110"
-                    style={{ background: "rgba(124,106,255,0.9)", boxShadow: "0 8px 32px rgba(124,106,255,0.5)" }}
+                    style={{ background: "rgba(227,11,16,0.9)", boxShadow: "0 8px 32px rgba(227,11,16,0.5)" }}
                   >
                     <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: 3 }}>
                       <path d="M8 5v14l11-7z" />
@@ -376,12 +376,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 onClick={handleTogglePlay}
                 disabled={!audioAsset}
                 className="w-9 h-9 rounded-full flex items-center justify-center transition-opacity disabled:opacity-40"
-                style={{ background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)" }}
+                style={{ background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)" }}
               >
                 {isPlaying ? (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFB3B4"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
                 ) : (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#c4b5fd" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFB3B4" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
                 )}
               </button>
               <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
@@ -399,14 +399,14 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 {showRateMenu && (
                   <div
                     className="absolute bottom-full left-0 mb-1.5 rounded-lg overflow-hidden py-1 z-10"
-                    style={{ background: "rgba(18,18,28,0.97)", border: "1px solid rgba(255,255,255,0.1)" }}
+                    style={{ background: "rgba(22,10,11,0.97)", border: "1px solid rgba(255,255,255,0.1)" }}
                   >
                     {PLAYBACK_RATES.map((rate) => (
                       <button
                         key={rate}
                         onClick={() => handleChangeRate(rate)}
                         className="block w-full text-xs px-4 py-1.5 text-left whitespace-nowrap"
-                        style={{ color: rate === playbackRate ? "#a78bfa" : "rgba(255,255,255,0.85)" }}
+                        style={{ color: rate === playbackRate ? "#FF8A8D" : "rgba(255,255,255,0.85)" }}
                       >
                         {rate}x
                       </button>
@@ -462,7 +462,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   {/* Playhead */}
                   <div
                     className="absolute top-0 bottom-0 w-px z-10 pointer-events-none"
-                    style={{ left: `${(currentTime / totalDuration) * 100}%`, background: "#a78bfa", boxShadow: "0 0 6px rgba(167,155,255,0.8)" }}
+                    style={{ left: `${(currentTime / totalDuration) * 100}%`, background: "#FF8A8D", boxShadow: "0 0 6px rgba(255,138,141,0.8)" }}
                   />
                   {/* Marcadores de limite de escena -- referencia liviana, no
                       son clickeables por si (el click va a handleWaveformClick). */}
@@ -481,13 +481,13 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
                   <div
                     className="flex items-end gap-[2px] rounded-md px-2"
-                    style={{ height: 48, background: "rgba(124,106,255,0.08)", border: "1px solid rgba(124,106,255,0.15)" }}
+                    style={{ height: 48, background: "rgba(227,11,16,0.08)", border: "1px solid rgba(227,11,16,0.15)" }}
                   >
                     {Array.from({ length: WAVEFORM_BAR_COUNT }).map((_, i) => (
                       <div
                         key={i}
                         className="flex-1 rounded-full"
-                        style={{ height: `${waveformHeight(i)}%`, background: "rgba(167,155,255,0.55)", minWidth: 1 }}
+                        style={{ height: `${waveformHeight(i)}%`, background: "rgba(255,138,141,0.55)", minWidth: 1 }}
                       />
                     ))}
                   </div>

@@ -3,7 +3,7 @@
   "description": "Scaler Tool: creá videos de forma automática con IA, de la idea al guion, la voz y el render final, en una plataforma pensada para escalar tu producción de contenido.",
   "language": "es",
   "icons": {
-    "icon": "/favicon.svg"
+    "icon": "/favicon.png?v=2"
   },
   "robots": {
     "index": false

@@ -103,7 +103,7 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
               className="flex-1 text-xs font-medium py-1.5 rounded-lg transition-all duration-150"
               style={
                 tab === t.id
-                  ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                  ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                   : { background: "transparent", border: "1px solid transparent", color: "var(--muted-foreground)" }
               }
             >
@@ -178,7 +178,7 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
                 className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
                 style={
                   aiKind === "ai"
-                    ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                    ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                     : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
                 }
               >
@@ -189,7 +189,7 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
                 className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
                 style={
                   aiKind === "ai_image"
-                    ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                    ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                     : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
                 }
               >

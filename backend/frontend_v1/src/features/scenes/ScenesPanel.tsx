@@ -23,8 +23,8 @@ function SceneCard({ scene, selected, onSelect }: { scene: Scene; selected: bool
       style={
         selected
           ? {
-              background: "rgba(124,106,255,0.1)",
-              border: "1px solid rgba(124,106,255,0.25)",
+              background: "rgba(227,11,16,0.1)",
+              border: "1px solid rgba(227,11,16,0.25)",
               backdropFilter: "blur(12px)",
             }
           : {
@@ -190,12 +190,12 @@ function SceneDetail({
           )
         ) : regenerating ? (
           <div className="relative text-center">
-            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(167,155,255,0.2)", borderTopColor: "#a78bfa" }} />
-            <p className="text-xs" style={{ color: "#a78bfa" }}>Buscando clip...</p>
+            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(255,138,141,0.2)", borderTopColor: "#FF8A8D" }} />
+            <p className="text-xs" style={{ color: "#FF8A8D" }}>Buscando clip...</p>
           </div>
         ) : (
           <>
-            <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 30% 40%, rgba(99,77,220,0.1) 0%, transparent 70%)" }} />
+            <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 30% 40%, rgba(227,11,16,0.1) 0%, transparent 70%)" }} />
             <div className="relative text-center">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-2">
                 <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" />
@@ -219,7 +219,7 @@ function SceneDetail({
               style={{
                 width: 96,
                 height: 54,
-                border: i === activeIndex ? "2px solid #a78bfa" : "1px solid rgba(255,255,255,0.1)",
+                border: i === activeIndex ? "2px solid #FF8A8D" : "1px solid rgba(255,255,255,0.1)",
               }}
             >
               <video src={a.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" />
@@ -238,7 +238,7 @@ function SceneDetail({
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>Narrativa</label>
-          <button onClick={() => setEditing(!editing)} className="text-[11px] transition-opacity hover:opacity-80" style={{ color: "var(--primary)" }}>
+          <button onClick={() => setEditing(!editing)} className="text-[11px] transition-opacity hover:opacity-80" style={{ color: "var(--accent)" }}>
             {editing ? "Cancelar" : "Editar"}
           </button>
         </div>
@@ -268,7 +268,7 @@ function SceneDetail({
             className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
             style={
               source === "stock"
-                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                 : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
             }
           >
@@ -279,7 +279,7 @@ function SceneDetail({
             className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
             style={
               source === "ai"
-                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                 : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
             }
           >
@@ -290,7 +290,7 @@ function SceneDetail({
             className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
             style={
               source === "ai_image"
-                ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                 : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
             }
           >
@@ -432,7 +432,7 @@ export default function ScenesPanel({ projectId }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "#a78bfa" }} />
+        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
       </div>
     );
   }

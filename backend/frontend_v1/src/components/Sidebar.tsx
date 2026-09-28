@@ -85,15 +85,13 @@ export default function Sidebar() {
         className="flex items-center gap-3 px-5 h-16"
         style={{ borderBottom: "1px solid var(--border)" }}
       >
-        <div
-          className="flex items-center justify-center w-7 h-7 rounded-lg"
-          style={{ background: "linear-gradient(135deg, #7c6aff 0%, #5b4de8 100%)", boxShadow: "0 0 12px rgba(124,106,255,0.4)" }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="white">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        </div>
-        <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--foreground)" }}>
+        <img
+          src="/logo.png"
+          alt="YT Scalers"
+          className="w-8 h-8 rounded-lg shrink-0 object-cover"
+          style={{ boxShadow: "0 0 14px rgba(227,11,16,0.35)", border: "1px solid rgba(255,235,225,0.1)" }}
+        />
+        <span className="text-[17px] font-bold uppercase tracking-[0.06em] leading-none" style={{ color: "var(--brand-stone)", fontFamily: "var(--font-barlow)" }}>
           Scaler<span style={{ color: "var(--primary)" }}>Tool</span>
         </span>
       </div>
@@ -128,17 +126,17 @@ export default function Sidebar() {
               className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-150 relative group"
               style={{
                 color: active ? "var(--foreground)" : "var(--muted-foreground)",
-                background: active ? "rgba(124,106,255,0.12)" : "transparent",
-                border: active ? "1px solid rgba(124,106,255,0.2)" : "1px solid transparent",
+                background: active ? "rgba(227,11,16,0.12)" : "transparent",
+                border: active ? "1px solid rgba(227,11,16,0.2)" : "1px solid transparent",
               }}
             >
               {active && (
                 <span
                   className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-r-full"
-                  style={{ background: "var(--primary)", boxShadow: "0 0 8px rgba(124,106,255,0.6)" }}
+                  style={{ background: "var(--primary)", boxShadow: "0 0 8px rgba(227,11,16,0.6)" }}
                 />
               )}
-              <span className={active ? "text-violet-400" : ""}>{item.icon}</span>
+              <span className={active ? "text-[#FF8A8D]" : ""}>{item.icon}</span>
               {item.label}
             </Link>
           );
@@ -171,7 +169,7 @@ export default function Sidebar() {
         <div className="flex items-center gap-3 px-3 py-2 mt-2">
           <div
             className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, #7c6aff, #4f46e5)" }}
+            style={{ background: "linear-gradient(135deg, #E30B10, #4f46e5)" }}
           >
             {(user?.email ?? "U").charAt(0).toUpperCase()}
           </div>

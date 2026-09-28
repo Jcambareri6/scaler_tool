@@ -8,9 +8,9 @@ export default function NotFoundPage() {
     <div className="flex flex-col items-center justify-center h-full text-center p-8">
       <div
         className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
-        style={{ background: "rgba(124,106,255,0.1)", border: "1px solid rgba(124,106,255,0.2)" }}
+        style={{ background: "rgba(227,11,16,0.1)", border: "1px solid rgba(227,11,16,0.2)" }}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(167,155,255,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,138,141,0.7)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10" />
           <line x1="12" y1="8" x2="12" y2="12" />
           <line x1="12" y1="16" x2="12.01" y2="16" />

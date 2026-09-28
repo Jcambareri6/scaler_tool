@@ -100,7 +100,7 @@ export default function AudioPanel({ projectId, project }: Props) {
       <div className="flex items-center justify-center h-full">
         <div
           className="w-5 h-5 border-2 rounded-full animate-spin"
-          style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "#a78bfa" }}
+          style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }}
         />
       </div>
     );
@@ -224,8 +224,8 @@ export default function AudioPanel({ projectId, project }: Props) {
                 onClick={() => handleSelectVoice(voice.voiceId)}
                 className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all"
                 style={{
-                  background: active ? "rgba(124,106,255,0.1)" : "rgba(255,255,255,0.03)",
-                  border: active ? "1px solid rgba(124,106,255,0.4)" : "1px solid rgba(255,255,255,0.07)",
+                  background: active ? "rgba(227,11,16,0.1)" : "rgba(255,255,255,0.03)",
+                  border: active ? "1px solid rgba(227,11,16,0.4)" : "1px solid rgba(255,255,255,0.07)",
                 }}
               >
                 <div className="min-w-0">

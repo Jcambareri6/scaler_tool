@@ -61,7 +61,7 @@ export default function AuthCallbackPage() {
       ) : (
         <div
           className="w-6 h-6 rounded-full border-2 animate-spin"
-          style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "var(--primary)" }}
+          style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "var(--primary)" }}
         />
       )}
     </div>

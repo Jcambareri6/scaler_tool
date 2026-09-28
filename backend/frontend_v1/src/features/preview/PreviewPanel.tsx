@@ -16,8 +16,8 @@ function ProgressBar({ value }: { value: number }) {
         className="h-full rounded-full transition-all duration-500"
         style={{
           width: `${value}%`,
-          background: "linear-gradient(90deg, #7c6aff, #6366f1)",
-          boxShadow: "0 0 8px rgba(124,106,255,0.4)",
+          background: "linear-gradient(90deg, #E30B10, #6366f1)",
+          boxShadow: "0 0 8px rgba(227,11,16,0.4)",
         }}
       />
     </div>
@@ -113,7 +113,7 @@ function VideoPlayer({ src, captionsUrl }: { src: string; captionsUrl: string | 
         >
           <span
             className="w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-110"
-            style={{ background: "rgba(124,106,255,0.9)", boxShadow: "0 8px 32px rgba(124,106,255,0.5)" }}
+            style={{ background: "rgba(227,11,16,0.9)", boxShadow: "0 8px 32px rgba(227,11,16,0.5)" }}
           >
             <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: 3 }}>
               <path d="M8 5v14l11-7z" />
@@ -156,7 +156,7 @@ function VideoPlayer({ src, captionsUrl }: { src: string; captionsUrl: string | 
             if (video) video.currentTime = time;
             setCurrentTime(time);
           }}
-          className="flex-1 accent-[#7c6aff]"
+          className="flex-1 accent-[#E30B10]"
         />
 
         <span className="text-[11px] font-mono flex-shrink-0" style={{ color: "rgba(255,255,255,0.8)" }}>
@@ -191,14 +191,14 @@ function VideoPlayer({ src, captionsUrl }: { src: string; captionsUrl: string | 
           {showRateMenu && (
             <div
               className="absolute bottom-full right-0 mb-1.5 rounded-lg overflow-hidden py-1"
-              style={{ background: "rgba(18,18,28,0.97)", border: "1px solid rgba(255,255,255,0.1)" }}
+              style={{ background: "rgba(22,10,11,0.97)", border: "1px solid rgba(255,255,255,0.1)" }}
             >
               {PLAYBACK_RATES.map((rate) => (
                 <button
                   key={rate}
                   onClick={() => changeRate(rate)}
                   className="block w-full text-[11px] px-4 py-1.5 text-left whitespace-nowrap"
-                  style={{ color: rate === playbackRate ? "#a78bfa" : "rgba(255,255,255,0.85)" }}
+                  style={{ color: rate === playbackRate ? "#FF8A8D" : "rgba(255,255,255,0.85)" }}
                 >
                   {rate}x
                 </button>
@@ -259,9 +259,9 @@ function JobStatus({ job }: { job: Job }) {
       <div className="flex items-center gap-3">
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center"
-          style={{ background: "rgba(124,106,255,0.12)", border: "1px solid rgba(124,106,255,0.2)" }}
+          style={{ background: "rgba(227,11,16,0.12)", border: "1px solid rgba(227,11,16,0.2)" }}
         >
-          <span className="w-4 h-4 border-2 rounded-full animate-spin inline-block" style={{ borderColor: "rgba(167,155,255,0.2)", borderTopColor: "#a78bfa" }} />
+          <span className="w-4 h-4 border-2 rounded-full animate-spin inline-block" style={{ borderColor: "rgba(255,138,141,0.2)", borderTopColor: "#FF8A8D" }} />
         </div>
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>Generando video</p>
@@ -272,7 +272,7 @@ function JobStatus({ job }: { job: Job }) {
       <div className="space-y-1.5">
         <div className="flex justify-between items-center">
           <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>Progreso</span>
-          <span className="text-xs font-mono" style={{ color: "#a78bfa" }}>{job.progress}%</span>
+          <span className="text-xs font-mono" style={{ color: "#FF8A8D" }}>{job.progress}%</span>
         </div>
         <ProgressBar value={job.progress} />
       </div>
@@ -453,7 +453,7 @@ export default function PreviewPanel({ projectId }: Props) {
               className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
               style={
                 visualSource === opt.value
-                  ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                  ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                   : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
               }
             >
@@ -476,7 +476,7 @@ export default function PreviewPanel({ projectId }: Props) {
           type="checkbox"
           checked={transitionsEnabled}
           onChange={(e) => setTransitionsEnabled(e.target.checked)}
-          className="w-4 h-4 accent-[#7c6aff]"
+          className="w-4 h-4 accent-[#E30B10]"
         />
       </label>
 
@@ -494,7 +494,7 @@ export default function PreviewPanel({ projectId }: Props) {
           type="checkbox"
           checked={subtitlesEnabled}
           onChange={(e) => setSubtitlesEnabled(e.target.checked)}
-          className="w-4 h-4 accent-[#7c6aff]"
+          className="w-4 h-4 accent-[#E30B10]"
         />
       </label>
 
@@ -517,7 +517,7 @@ export default function PreviewPanel({ projectId }: Props) {
               className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
               style={
                 renderQuality === opt.value
-                  ? { background: "rgba(124,106,255,0.15)", border: "1px solid rgba(124,106,255,0.3)", color: "var(--foreground)" }
+                  ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                   : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
               }
             >
@@ -532,7 +532,7 @@ export default function PreviewPanel({ projectId }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(124,106,255,0.2)", borderTopColor: "#a78bfa" }} />
+        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
       </div>
     );
   }
@@ -561,19 +561,19 @@ export default function PreviewPanel({ projectId }: Props) {
           boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 50% 50%, rgba(60,50,140,0.15) 0%, transparent 65%)" }} />
+        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 50% 50%, rgba(141,0,6,0.15) 0%, transparent 65%)" }} />
 
         {job?.status === "DONE" && renderAsset ? (
           <VideoPlayer key={renderAsset.id} src={renderAsset.storageKey} captionsUrl={captionsUrl} />
         ) : job?.status === "DONE" ? (
           <div className="relative text-center">
-            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(167,155,255,0.2)", borderTopColor: "#a78bfa" }} />
-            <p className="text-xs" style={{ color: "#a78bfa" }}>Cargando video...</p>
+            <div className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(255,138,141,0.2)", borderTopColor: "#FF8A8D" }} />
+            <p className="text-xs" style={{ color: "#FF8A8D" }}>Cargando video...</p>
           </div>
         ) : job?.status === "RUNNING" || job?.status === "QUEUED" ? (
           <div className="relative text-center">
-            <div className="w-10 h-10 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(167,155,255,0.15)", borderTopColor: "#a78bfa" }} />
-            <p className="text-xs" style={{ color: "rgba(167,155,255,0.6)" }}>Generando...</p>
+            <div className="w-10 h-10 border-2 rounded-full animate-spin mx-auto mb-2" style={{ borderColor: "rgba(255,138,141,0.15)", borderTopColor: "#FF8A8D" }} />
+            <p className="text-xs" style={{ color: "rgba(255,138,141,0.6)" }}>Generando...</p>
           </div>
         ) : (
           <div className="relative text-center">
