@@ -64,31 +64,43 @@ function parseTime(value: string): number {
   return (mm ?? 0) * 60 + (ss ?? 0);
 }
 
-function formatTime(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.round(totalSeconds));
-  const mm = Math.floor(seconds / 60).toString().padStart(2, "0");
-  const ss = (seconds % 60).toString().padStart(2, "0");
-  return `${mm}:${ss}`;
-}
-
-// Las escenas no siempre quedan pegadas una a la otra -- hay pausas reales
-// en la narracion entre una y la siguiente (mismo fenomeno que ya reconoce
-// StockReviewPanel.tsx del frontend, que sostiene el clip actual durante el
-// hueco en vez de saltar). El preview del navegador lo resuelve en JS, pero
-// el render de ffmpeg concatenaba cada clip con la duracion exacta de
-// "habla" de su escena, sin dejar lugar para esas pausas -- el audio real
-// SI las incluye como tiempo transcurrido, asi que el video quedaba mas
-// corto que el audio (y progresivamente desincronizado) por la suma total
-// de esos huecos. Se extiende cada segmento hasta el inicio del siguiente
-// para que el video cubra exactamente el mismo tiempo que el audio real.
+// Los segmentos se concatenan uno detras del otro, asi que el video solo
+// queda sincronizado con el audio si cubren [0, fin] sin huecos: la
+// posicion de cada clip en el video es la SUMA de las duraciones anteriores,
+// no su `start`. Timelines viejos pueden traer huecos (pausas de la
+// narracion entre escenas) o arrancar despues de 0 -- se cierran estirando
+// el segmento anterior hasta el inicio del siguiente, y el primero arranca
+// en 0 (si no, todo el video quedaba adelantado lo que tardaba en arrancar
+// la primera palabra).
 function closeGapsBetweenSegments(segments: RenderSegment[]): void {
+  if (segments.length === 0) return;
+  segments[0]!.start = 0;
   for (let i = 0; i < segments.length - 1; i++) {
-    const ownEnd = parseTime(segments[i]!.end);
-    const nextStart = parseTime(segments[i + 1]!.start);
-    if (nextStart > ownEnd) {
-      segments[i]!.end = formatTime(nextStart);
+    const nextStart = segments[i + 1]!.start;
+    if (nextStart > segments[i]!.end) {
+      segments[i]!.end = nextStart;
     }
   }
+}
+
+// Duracion de cada segmento en frames enteros a partir de sus limites
+// absolutos (no de su largo individual): el error de redondear cada corte a
+// un frame queda acotado a 1 frame en vez de acumularse corte tras corte.
+// Con transiciones, cada fundido superpone TRANSITION_DURATION_SECONDS del
+// segmento con el siguiente (xfade), lo que antes adelantaba 0.5s TODAS las
+// escenas posteriores por cada corte (con ~200 segmentos, las imagenes iban
+// hasta un minuto y medio por delante del audio, y se compensaba recien al
+// final congelando el ultimo frame). Se estira cada segmento (menos el
+// ultimo) lo que le come el fundido, asi cada clip termina de aparecer
+// exactamente donde empieza su escena.
+function assignSegmentDurations(segments: RenderSegment[], transitionsEnabled: boolean): void {
+  const frameOf = (seconds: number) => Math.round(seconds * OUTPUT_FPS);
+  segments.forEach((segment, i) => {
+    const isLast = i === segments.length - 1;
+    const endFrame = isLast ? frameOf(segment.end) : frameOf(segments[i + 1]!.start);
+    const frames = Math.max(1, endFrame - frameOf(segment.start));
+    segment.duration = frames / OUTPUT_FPS + (transitionsEnabled && !isLast ? TRANSITION_DURATION_SECONDS : 0);
+  });
 }
 
 async function mockRender(videoProjectId: string, timelineId: string): Promise<RenderVideoOutput> {
@@ -110,10 +122,14 @@ async function mockRender(videoProjectId: string, timelineId: string): Promise<R
   };
 }
 
+// `start_seconds`/`end_seconds` (precisos) los escribe build_timeline desde
+// que existen; timelines viejos solo tienen "MM:SS" redondeado.
 interface TimelineAssetEntry {
   storage_key: string;
   start: string;
   end: string;
+  start_seconds?: number;
+  end_seconds?: number;
   type?: string | undefined;
 }
 
@@ -122,6 +138,8 @@ interface TimelineSceneEntry {
   order: number;
   start: string;
   end: string;
+  start_seconds?: number;
+  end_seconds?: number;
   // Una escena cubierta por mas de un clip (replaceStockSegmentsForScene
   // completo con otro candidato en vez de repetir el mismo) trae varios
   // aca, cada uno con su propio sub-tramo de tiempo. `asset` (singular) se
@@ -147,8 +165,10 @@ interface TimelineContent {
 
 interface RenderSegment {
   storageKey: string;
-  start: string;
-  end: string;
+  start: number;
+  end: number;
+  // Lo que dura el segmento en el video (ver assignSegmentDurations).
+  duration: number;
   // Timelines viejos (de antes de que existiera generate_image) no tienen
   // `type` guardado -- se asume VIDEO, que es como se comportaba todo esto
   // antes de que IMAGE existiera.
@@ -162,14 +182,24 @@ function flattenSegments(scenes: TimelineSceneEntry[]): RenderSegment[] {
       scene.assets && scene.assets.length > 0
         ? scene.assets
         : scene.asset
-          ? [{ storage_key: scene.asset.storage_key, start: scene.start, end: scene.end, type: scene.asset.type }]
+          ? [
+              {
+                storage_key: scene.asset.storage_key,
+                start: scene.start,
+                end: scene.end,
+                ...(scene.start_seconds !== undefined ? { start_seconds: scene.start_seconds } : {}),
+                ...(scene.end_seconds !== undefined ? { end_seconds: scene.end_seconds } : {}),
+                type: scene.asset.type,
+              },
+            ]
           : [];
     for (const asset of assets) {
       if (!asset.storage_key) continue;
       segments.push({
         storageKey: asset.storage_key,
-        start: asset.start,
-        end: asset.end,
+        start: asset.start_seconds ?? parseTime(asset.start),
+        end: asset.end_seconds ?? parseTime(asset.end),
+        duration: 0,
         isImage: asset.type === "IMAGE",
       });
     }
@@ -379,9 +409,8 @@ const TRANSITION_DURATION_SECONDS = 0.5;
 // de pegar los segmentos con un corte directo (`concat`) los encadena con
 // `xfade` (fundido) -- cada fundido "roba" TRANSITION_DURATION_SECONDS del
 // total (los streams se superponen en vez de sumarse), asi que la tanda sale
-// un poco mas corta que la suma de sus segmentos; ver batchDuration() y el
-// padding al final de realRender que compensa esto para no cortar el audio
-// narrado.
+// un poco mas corta que la suma de sus segmentos; ver batchDuration() y
+// assignSegmentDurations, que estira cada segmento para compensarlo.
 function buildFfmpegArgsForBatch(
   batchSegments: RenderSegment[],
   batchClipPaths: string[],
@@ -392,7 +421,7 @@ function buildFfmpegArgsForBatch(
   const filterParts: string[] = [];
   const durations: number[] = [];
   batchSegments.forEach((segment, i) => {
-    const duration = Math.max(0.1, parseTime(segment.end) - parseTime(segment.start));
+    const duration = segment.duration;
     durations.push(duration);
     if (segment.isImage) {
       const totalFrames = Math.max(1, Math.round(duration * OUTPUT_FPS));
@@ -426,7 +455,7 @@ function buildFfmpegArgsForBatch(
           `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v${i}]`
       );
     } else {
-      inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(2), "-i", batchClipPaths[i]!);
+      inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
       // flags=lanczos (en vez del default bilineal de ffmpeg): sin esto, un
       // clip de stock con resolucion nativa menor a la de salida sale
       // notoriamente mas blando que sus escenas vecinas al escalarlo hacia
@@ -453,7 +482,7 @@ function buildFfmpegArgsForBatch(
     const outLabel = isLast ? "outv" : `bt${i}`;
     const offset = Math.max(0, running - TRANSITION_DURATION_SECONDS);
     filterParts.push(
-      `[${currentLabel}][v${i}]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[${outLabel}]`
+      `[${currentLabel}][v${i}]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(3)}[${outLabel}]`
     );
     currentLabel = outLabel;
     running = running + durations[i]! - TRANSITION_DURATION_SECONDS;
@@ -465,7 +494,7 @@ function buildFfmpegArgsForBatch(
 // interno le resta TRANSITION_DURATION_SECONDS a la suma de sus segmentos
 // (ver comentario de buildFfmpegArgsForBatch).
 function batchDuration(batchSegments: RenderSegment[], transitionsEnabled: boolean): number {
-  const sum = batchSegments.reduce((total, s) => total + Math.max(0.1, parseTime(s.end) - parseTime(s.start)), 0);
+  const sum = batchSegments.reduce((total, s) => total + s.duration, 0);
   if (!transitionsEnabled || batchSegments.length <= 1) return sum;
   return sum - (batchSegments.length - 1) * TRANSITION_DURATION_SECONDS;
 }
@@ -489,7 +518,7 @@ async function mergeGroupWithTransitions(
     const outLabel = i === paths.length - 1 ? "outv" : `mx${i}`;
     const offset = Math.max(0, running - TRANSITION_DURATION_SECONDS);
     filterParts.push(
-      `[${currentLabel}][${i}:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(2)}[${outLabel}]`
+      `[${currentLabel}][${i}:v]xfade=transition=fade:duration=${TRANSITION_DURATION_SECONDS.toFixed(2)}:offset=${offset.toFixed(3)}[${outLabel}]`
     );
     currentLabel = outLabel;
     running = running + durations[i]! - TRANSITION_DURATION_SECONDS;
@@ -807,8 +836,9 @@ async function realRender(
   const transitionsEnabled = Boolean(project?.transitions_enabled) && segments.length > 1;
   const subtitlesEnabled = Boolean(project?.subtitles_enabled) && (content.segments?.length ?? 0) > 0;
   const { quality: renderQuality, size: outputSize } = resolveOutputSize(project?.render_quality);
+  assignSegmentDurations(segments, transitionsEnabled);
 
-  const totalDuration = parseTime(scenes[scenes.length - 1]!.end);
+  const totalDuration = segments[segments.length - 1]!.end;
 
   // Orden de prioridad de destino: R2 > Cloudinary > Supabase Storage. Solo
   // Cloudinary tiene el limite de 100MB (ver CLOUDINARY_MAX_BYTES) -- R2 y
@@ -957,11 +987,11 @@ async function realRender(
       // Union final CON transiciones: las tandas se encadenan con fundidos
       // en vez de un corte directo (assembleBatchesWithTransitions) cuando
       // hay mas de una -- si es una sola tanda, ya viene armada con sus
-      // fundidos internos (ver buildFfmpegArgsForBatch). Cada fundido
-      // "roba" TRANSITION_DURATION_SECONDS de la duracion visible total, asi
-      // que el video queda mas corto que el audio narrado; se compensa
-      // sosteniendo el ultimo frame (tpad) el tiempo exacto perdido, para
-      // que no se corte la narracion antes de tiempo.
+      // fundidos internos (ver buildFfmpegArgsForBatch). Los segmentos ya
+      // vienen estirados lo que les come cada fundido (ver
+      // assignSegmentDurations), asi que el video dura lo mismo que el
+      // audio; el tpad es solo un margen por redondeos de frames, para que
+      // `-shortest` nunca corte la narracion.
       // La union con audio (tpad) reencodea igual el video entero, asi que
       // ES la pasada final: si hay subtitulos se queman aca mismo (mismo
       // timeline, despues del tpad) en vez de en una pasada extra aparte
@@ -982,11 +1012,8 @@ async function realRender(
         subtitlesBurned = true;
       }
 
-      const totalShrinkage = (segments.length - 1) * TRANSITION_DURATION_SECONDS;
-      console.log(
-        `[render_video] agregando audio (compensando ${totalShrinkage.toFixed(2)}s de solape de transiciones)` +
-          `${subtitlesBurned ? " + subtitulos" : ""}...`
-      );
+      const safetyPadSeconds = 1;
+      console.log(`[render_video] agregando audio${subtitlesBurned ? " + subtitulos" : ""}...`);
       const finalMessage = subtitlesBurned ? "Codificando el video final con subtitulos" : "Codificando el video final";
       await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
       await runFfmpeg([
@@ -995,7 +1022,7 @@ async function realRender(
         "-i",
         audioPath,
         "-filter_complex",
-        `[0:v]tpad=stop_mode=clone:stop_duration=${totalShrinkage.toFixed(2)}${subtitlesChain}[padded]`,
+        `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}${subtitlesChain}[padded]`,
         "-map",
         "[padded]",
         "-map",

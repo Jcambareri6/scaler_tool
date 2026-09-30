@@ -2,6 +2,7 @@ import type { ToolDefinition } from "./tool.types.js";
 import type { TranscribedWord } from "./transcribeAudio.tool.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
+import { alignScriptTokens, tokenizeScript, type TokenTiming } from "../lib/wordAlignment.js";
 
 export interface BuildTimelineInput {
   video_project_id: string;
@@ -34,52 +35,39 @@ function formatTime(totalSeconds: number): string {
 // LEEME (seccion 5): el timing de cada escena tiene que salir de Whisper
 // (audio real), no de una estimacion por cantidad de palabras -- eso es
 // solo el fallback "timeline_base" antes de que exista transcripcion. Las
-// escenas reconstruyen full_text en orden (contrato de generate_script), asi
-// que alcanza con consumir la lista de palabras transcriptas de forma
-// secuencial, tomando para cada escena la cantidad de palabras que le
-// corresponde: start = la primera palabra que le toca, end = la ultima.
-// Si el conteo de palabras no matchea (audio real distinto al texto, o
-// transcripcion parcial) las escenas que se quedan sin palabras reales caen
-// al fallback proporcional de mas abajo, no rompen el resto.
+// escenas reconstruyen full_text en orden (contrato de generate_script): se
+// alinean sus tokens contra las palabras de Whisper (alignScriptTokens) y
+// cada escena toma start = su primer token, end = el ultimo.
+
 // Cuantas palabras del guion agrupa cada cue de subtitulo -- ~8 palabras es
 // el tamaño tipico de una linea de subtitulo legible (2-3s de habla a ritmo
 // normal), bastante mas corto que los segmentos de Whisper (que pueden durar
 // una frase entera en pantalla).
 const CAPTION_WORDS_PER_CUE = 8;
 
-function buildScriptWords(sceneRows: SceneRow[]): string[] {
-  const words: string[] = [];
-  for (const scene of sceneRows) {
-    const text = ((scene.content as { text?: string } | null)?.text) ?? "";
-    if (text.trim()) words.push(...text.trim().split(/\s+/));
-  }
-  return words;
+function sceneTokens(scene: SceneRow): string[] {
+  return tokenizeScript(((scene.content as { text?: string } | null)?.text) ?? "");
 }
 
 // Subtitulos (para render_video.tool.ts y el preview del frontend): en vez
 // del texto que Whisper CREYO escuchar (transcription.segments, que se
 // equivoca con nombres propios, numeros, jerga -- reportado en produccion),
 // se arma con el guion real (siempre exacto, ya escrito/validado por el
-// usuario) alineado palabra a palabra con el timing real de Whisper -- mismo
-// criterio posicional que alignScenesToWords de aca abajo: la palabra i del
-// guion se asume que corresponde a la palabra i que transcribio Whisper. El
-// timing de Whisper es confiable (viene del audio real); el RECONOCIMIENTO
-// de texto de Whisper no tiene por que serlo.
+// usuario) con el timing de Whisper de cada palabra via alignScriptTokens
+// (tolera que guion y transcripcion no tengan exactamente las mismas
+// palabras). El timing de Whisper es confiable (viene del audio real); el
+// RECONOCIMIENTO de texto de Whisper no tiene por que serlo.
 function buildCaptionSegments(
-  sceneRows: SceneRow[],
-  transcribedWords: TranscribedWord[]
+  scriptWords: string[],
+  timings: TokenTiming[]
 ): { text: string; start: number; end: number }[] {
-  const scriptWords = buildScriptWords(sceneRows);
-  const count = Math.min(scriptWords.length, transcribedWords.length);
   const cues: { text: string; start: number; end: number }[] = [];
-  for (let i = 0; i < count; i += CAPTION_WORDS_PER_CUE) {
-    const chunkScriptWords = scriptWords.slice(i, i + CAPTION_WORDS_PER_CUE);
-    const chunkTimedWords = transcribedWords.slice(i, i + CAPTION_WORDS_PER_CUE);
-    if (chunkTimedWords.length === 0) break;
+  for (let i = 0; i < scriptWords.length; i += CAPTION_WORDS_PER_CUE) {
+    const last = Math.min(i + CAPTION_WORDS_PER_CUE, scriptWords.length) - 1;
     cues.push({
-      text: chunkScriptWords.join(" "),
-      start: chunkTimedWords[0]!.start,
-      end: chunkTimedWords[chunkTimedWords.length - 1]!.end,
+      text: scriptWords.slice(i, last + 1).join(" "),
+      start: timings[i]!.start,
+      end: timings[last]!.end,
     });
   }
   return cues;
@@ -87,24 +75,19 @@ function buildCaptionSegments(
 
 function alignScenesToWords(
   sceneRows: SceneRow[],
-  words: TranscribedWord[]
+  timings: TokenTiming[]
 ): Map<string, { start: number; end: number }> {
   const timingByScene = new Map<string, { start: number; end: number }>();
-  let wordIndex = 0;
+  let tokenIndex = 0;
 
   for (const scene of sceneRows) {
-    const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
-    const sceneWordCount = wordCount(sceneText);
-    if (sceneWordCount === 0) continue;
-
-    const slice = words.slice(wordIndex, wordIndex + sceneWordCount);
-    if (slice.length === 0) break;
-
+    const count = sceneTokens(scene).length;
+    if (count === 0) continue;
     timingByScene.set(scene.id, {
-      start: slice[0]!.start,
-      end: slice[slice.length - 1]!.end,
+      start: timings[tokenIndex]!.start,
+      end: timings[tokenIndex + count - 1]!.end,
     });
-    wordIndex += slice.length;
+    tokenIndex += count;
   }
 
   return timingByScene;
@@ -217,29 +200,48 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
 
     const transcribedWords =
       ((existingTimeline?.content as { words?: TranscribedWord[] } | null)?.words) ?? [];
-    const realTiming =
-      transcribedWords.length > 0 ? alignScenesToWords(sceneRows, transcribedWords) : null;
+    const scriptWords = sceneRows.flatMap(sceneTokens);
+    const wordTimings = transcribedWords.length > 0 ? alignScriptTokens(scriptWords, transcribedWords) : null;
+    const realTiming = wordTimings ? alignScenesToWords(sceneRows, wordTimings) : null;
 
+    // Primero los rangos de todas las escenas, despues se vuelven contiguos:
+    // cada escena visual dura hasta que arranca la siguiente (las pausas de
+    // la narracion entre escenas quedan cubiertas por el clip actual), la
+    // primera arranca en 0 y la ultima llega al final real del audio. Asi
+    // el video, el preview y el audio cubren exactamente el mismo tiempo --
+    // antes el render estiraba huecos por su cuenta y el ultimo tramo de
+    // audio quedaba cortado por `-shortest`.
     let cursor = 0;
-    const timelineScenes: Record<string, unknown>[] = [];
-
-    for (const scene of sceneRows) {
+    const ranges = sceneRows.map((scene) => {
       const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
       const real = realTiming?.get(scene.id);
-
-      let start: number;
-      let end: number;
       if (real) {
-        start = real.start;
-        end = real.end;
-      } else {
-        // Fallback proporcional: todavia no hay transcripcion (timeline
-        // "base") o esta escena quedo afuera de la alineacion real.
-        const share = totalWords > 0 ? wordCount(sceneText) / totalWords : 1 / (sceneRows.length || 1);
-        start = cursor;
-        end = cursor + totalDuration * share;
+        cursor = real.end;
+        return { start: real.start, end: real.end };
       }
-      cursor = end;
+      // Fallback proporcional: todavia no hay transcripcion (timeline
+      // "base") o esta escena no tiene texto.
+      const share = totalWords > 0 ? wordCount(sceneText) / totalWords : 1 / (sceneRows.length || 1);
+      const start = cursor;
+      cursor = cursor + totalDuration * share;
+      return { start, end: cursor };
+    });
+    if (ranges.length > 0) {
+      ranges[0]!.start = 0;
+      for (let i = 0; i < ranges.length - 1; i++) {
+        const nextStart = ranges[i + 1]!.start;
+        if (nextStart > ranges[i]!.start) ranges[i]!.end = nextStart;
+      }
+      const whisperDuration = (existingTimeline?.content as { duration_seconds?: number } | null)?.duration_seconds;
+      const audioEnd = Math.max(audioDuration ?? 0, whisperDuration ?? 0);
+      const last = ranges[ranges.length - 1]!;
+      if (audioEnd > last.end) last.end = audioEnd;
+    }
+
+    const timelineScenes: Record<string, unknown>[] = [];
+
+    for (const [sceneIndex, scene] of sceneRows.entries()) {
+      const { start, end } = ranges[sceneIndex]!;
       const durationSeconds = end - start;
 
       const sceneVisualAssets = visualAssetsByScene.get(scene.id) ?? [];
@@ -263,6 +265,10 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
           type: asset.type,
           start: formatTime(segStart),
           end: formatTime(segEnd),
+          // `start`/`end` ("MM:SS") redondean al segundo -- el render y el
+          // preview usan estos para no acumular ese error en cada corte.
+          start_seconds: segStart,
+          end_seconds: segEnd,
         };
       });
 
@@ -270,6 +276,8 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
         ...(scene.content ?? {}),
         timeStart: formatTime(start),
         timeEnd: formatTime(end),
+        startSeconds: start,
+        endSeconds: end,
         duration: `${Math.round(durationSeconds)}s`,
       };
 
@@ -284,6 +292,8 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
         order: scene.order,
         start: formatTime(start),
         end: formatTime(end),
+        start_seconds: start,
+        end_seconds: end,
         // `assets`: uno o mas clips (en orden) que juntos cubren toda la
         // escena. Se mantiene tambien `asset` (el primero) para no romper
         // consumidores viejos del timeline que todavia esperan uno solo.
@@ -306,7 +316,7 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
       // cues armados desde el guion real -- ver buildCaptionSegments. Solo
       // cuando ya hay transcripcion real; sin eso se deja lo que hubiera
       // (timeline "base", ver comentario del Tool mas abajo).
-      ...(transcribedWords.length > 0 ? { segments: buildCaptionSegments(sceneRows, transcribedWords) } : {}),
+      ...(wordTimings ? { segments: buildCaptionSegments(scriptWords, wordTimings) } : {}),
     };
 
     if (existingTimeline) {

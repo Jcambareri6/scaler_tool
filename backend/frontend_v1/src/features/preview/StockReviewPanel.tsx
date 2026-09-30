@@ -24,6 +24,17 @@ function parseTimeToSeconds(time: string): number {
   return (mm ?? 0) * 60 + (ss ?? 0);
 }
 
+// startSeconds/endSeconds son los tiempos reales; timeStart/timeEnd estan
+// redondeados al segundo (solo para mostrar) y quedan de fallback para
+// escenas viejas.
+function sceneStart(scene: Scene): number {
+  return scene.startSeconds ?? parseTimeToSeconds(scene.timeStart);
+}
+
+function sceneEnd(scene: Scene): number {
+  return scene.endSeconds ?? parseTimeToSeconds(scene.timeEnd);
+}
+
 function formatSeconds(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
   const mm = Math.floor(seconds / 60).toString().padStart(2, "0");
@@ -127,8 +138,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   const segments = useMemo<TimelineSegment[]>(() => {
     const result: TimelineSegment[] = [];
     for (const scene of scenes) {
-      const startSec = parseTimeToSeconds(scene.timeStart);
-      const endSec = parseTimeToSeconds(scene.timeEnd);
+      const startSec = sceneStart(scene);
+      const endSec = sceneEnd(scene);
       const sceneAssets = assets.filter((a) => a.sceneId === scene.id).sort((a, b) => sequenceOf(a) - sequenceOf(b));
 
       if (sceneAssets.length === 0) {
@@ -185,8 +196,18 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     const video = videoRef.current;
     if (!video || !activeSegment?.asset || activeSegment.asset.type !== "VIDEO") return;
     if (!video.src.endsWith(activeSegment.asset.storageKey)) {
+      // Si se entro al segmento a mitad (seek), el clip arranca desde el
+      // punto equivalente -- igual que en el render, donde el clip corre
+      // (en loop) desde el inicio del segmento.
+      const offset = Math.max(0, (audioRef.current?.currentTime ?? 0) - activeSegment.startSec);
       video.src = activeSegment.asset.storageKey;
-      video.currentTime = 0;
+      video.addEventListener(
+        "loadedmetadata",
+        () => {
+          video.currentTime = video.duration > 0 ? offset % video.duration : 0;
+        },
+        { once: true }
+      );
     }
     video.playbackRate = playbackRate;
     if (isPlaying) video.play().catch(() => {});
@@ -231,7 +252,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // que es lo que habilita el boton "Reemplazar clip" de arriba del panel.
   const handleSelectScene = (scene: Scene) => {
     setSelectedSceneId(scene.id);
-    handleSeek(parseTimeToSeconds(scene.timeStart));
+    handleSeek(sceneStart(scene));
   };
 
   const handleOpenReplace = () => {
@@ -471,7 +492,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                       key={scene.id}
                       className="absolute top-3 pointer-events-none"
                       style={{
-                        left: `${(parseTimeToSeconds(scene.timeStart) / totalDuration) * 100}%`,
+                        left: `${(sceneStart(scene) / totalDuration) * 100}%`,
                         width: 1,
                         height: 48,
                         background: "rgba(255,255,255,0.14)",

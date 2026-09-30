@@ -43,6 +43,10 @@ export interface Scene {
   title: string;
   timeStart: string;
   timeEnd: string;
+  // Precisos (timeStart/timeEnd redondean al segundo, son para mostrar).
+  // Ausentes en escenas armadas antes de que el backend los guardara.
+  startSeconds?: number;
+  endSeconds?: number;
   narrativeContent: string;
   visualPrompt?: string;
   visualStatus: SceneVisualStatus;

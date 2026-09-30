@@ -2,6 +2,7 @@ import type { ToolDefinition } from "./tool.types.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
 import type { TranscribedWord } from "./transcribeAudio.tool.js";
+import { alignScriptTokens, tokenizeScript } from "../lib/wordAlignment.js";
 
 export interface BuildScenesInput {
   video_project_id: string;
@@ -114,24 +115,22 @@ interface AlignedClause {
   end: number;
 }
 
-// Las clausulas concatenadas reconstruyen full_text en orden, igual que las
-// escenas lo hacian antes -- alcanza con consumir la lista de palabras
-// transcriptas de forma secuencial (mismo criterio que
-// buildTimeline.tool.ts::alignScenesToWords, pero a nivel clausula).
+// Las clausulas concatenadas reconstruyen full_text en orden -- se alinean
+// todos sus tokens contra las palabras de Whisper (alignScriptTokens, que
+// tolera diferencias entre guion y transcripcion sin correr el resto) y cada
+// clausula toma el inicio de su primer token y el fin del ultimo.
 function alignClausesToWords(clauses: string[], words: TranscribedWord[]): AlignedClause[] {
+  const tokensPerClause = clauses.map(tokenizeScript);
+  const timings = alignScriptTokens(tokensPerClause.flat(), words);
   const aligned: AlignedClause[] = [];
-  let wordIndex = 0;
+  let tokenIndex = 0;
 
-  for (const clause of clauses) {
-    const count = wordCount(clause);
-    if (count === 0) continue;
-
-    const slice = words.slice(wordIndex, wordIndex + count);
-    if (slice.length === 0) break;
-
-    aligned.push({ text: clause, start: slice[0]!.start, end: slice[slice.length - 1]!.end });
-    wordIndex += slice.length;
-  }
+  clauses.forEach((clause, c) => {
+    const count = tokensPerClause[c]!.length;
+    if (count === 0) return;
+    aligned.push({ text: clause, start: timings[tokenIndex]!.start, end: timings[tokenIndex + count - 1]!.end });
+    tokenIndex += count;
+  });
 
   return aligned;
 }
@@ -265,6 +264,10 @@ export const buildScenesTool: ToolDefinition<BuildScenesInput, BuildScenesOutput
         text: scene.text,
         timeStart: formatTime(scene.start),
         timeEnd: formatTime(scene.end),
+        // Precisos (timeStart/timeEnd son solo para mostrar, redondeados al
+        // segundo) -- ver build_timeline.
+        startSeconds: scene.start,
+        endSeconds: scene.end,
         duration: `${Math.round(scene.end - scene.start)}s`,
       },
     }));

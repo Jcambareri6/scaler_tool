@@ -112,6 +112,8 @@ interface SceneContent {
   title?: string;
   timeStart?: string;
   timeEnd?: string;
+  startSeconds?: number;
+  endSeconds?: number;
   text?: string;
   visualPrompt?: string;
   visualStatus?: SceneVisualStatus;
@@ -133,6 +135,8 @@ export function mapScene(row: SceneRow, projectId: string): Scene {
     title: c.title ?? `Escena ${row.order}`,
     timeStart: c.timeStart ?? "00:00",
     timeEnd: c.timeEnd ?? "00:00",
+    ...(typeof c.startSeconds === "number" ? { startSeconds: c.startSeconds } : {}),
+    ...(typeof c.endSeconds === "number" ? { endSeconds: c.endSeconds } : {}),
     narrativeContent: c.text ?? "",
     visualPrompt: c.visualPrompt,
     visualStatus: c.visualStatus ?? "PENDING",
@@ -145,6 +149,8 @@ export function sceneToContent(scene: Partial<Scene>): SceneContent {
   if (scene.title !== undefined) content.title = scene.title;
   if (scene.timeStart !== undefined) content.timeStart = scene.timeStart;
   if (scene.timeEnd !== undefined) content.timeEnd = scene.timeEnd;
+  if (scene.startSeconds !== undefined) content.startSeconds = scene.startSeconds;
+  if (scene.endSeconds !== undefined) content.endSeconds = scene.endSeconds;
   if (scene.narrativeContent !== undefined) content.text = scene.narrativeContent;
   if (scene.visualPrompt !== undefined) content.visualPrompt = scene.visualPrompt;
   if (scene.visualStatus !== undefined) content.visualStatus = scene.visualStatus;
