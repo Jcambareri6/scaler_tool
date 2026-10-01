@@ -10,6 +10,7 @@ import {
   regenerateSceneVisual,
   uploadSceneVisual,
 } from "./scene.service.js";
+import { generateSceneImagePrompts, uploadBatchSceneVisuals, MAX_BATCH_FILES } from "./sceneBatch.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 // Mismo criterio que files/file.route.ts (memoria, sin tocar disco), pero
@@ -25,6 +26,13 @@ export const sceneListRouter = Router({ mergeParams: true });
 sceneListRouter.post("/", authMiddleware, createScene);
 sceneListRouter.get("/", authMiddleware, listScenes);
 sceneListRouter.patch("/reorder", authMiddleware, reorderScenes);
+sceneListRouter.post("/image-prompts", authMiddleware, generateSceneImagePrompts);
+sceneListRouter.post(
+  "/batch-visuals",
+  authMiddleware,
+  upload.array("files", MAX_BATCH_FILES),
+  uploadBatchSceneVisuals
+);
 
 // Mounted at /scenes/:scene_id
 export const sceneRouter = Router({ mergeParams: true });

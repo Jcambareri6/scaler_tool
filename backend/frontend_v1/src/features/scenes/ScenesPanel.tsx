@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
+import BatchVisualsModal from "./BatchVisualsModal";
 import type { Scene, Asset } from "@/types";
 
 interface Props {
@@ -222,7 +223,11 @@ function SceneDetail({
                 border: i === activeIndex ? "2px solid #FF8A8D" : "1px solid rgba(255,255,255,0.1)",
               }}
             >
-              <video src={a.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+              {a.type === "IMAGE" ? (
+                <img src={a.storageKey} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <video src={a.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+              )}
             </button>
           ))}
         </div>
@@ -379,6 +384,7 @@ export default function ScenesPanel({ projectId }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [batchOpen, setBatchOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -418,6 +424,21 @@ export default function ScenesPanel({ projectId }: Props) {
   const handleSceneSaved = (updated: Scene) => {
     setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   };
+
+  // Carga en lote (BatchVisualsModal): cada escena recibida reemplaza su
+  // visual entero, igual que "subir propio" en una escena suelta.
+  const handleBatchUploaded = (uploaded: Record<string, Asset[]>) => {
+    setAssetsByScene((prev) => {
+      const next = { ...prev };
+      for (const [sceneId, sceneAssets] of Object.entries(uploaded)) {
+        next[sceneId] = [...sceneAssets].sort((a, b) => sequenceOf(a) - sequenceOf(b));
+      }
+      return next;
+    });
+  };
+
+  const scenesWithVisual = new Set(Object.keys(assetsByScene).filter((id) => assetsByScene[id]?.length));
+  const missingCount = scenes.filter((s) => !scenesWithVisual.has(s.id)).length;
 
   if (error) {
     return (
@@ -460,9 +481,25 @@ export default function ScenesPanel({ projectId }: Props) {
     <div className="flex h-full">
       {/* List */}
       <div className="w-72 min-w-72 overflow-y-auto p-4 space-y-2" style={{ borderRight: "1px solid rgba(255,255,255,0.07)" }}>
-        <p className="text-[10px] font-medium uppercase tracking-widest mb-3 px-1" style={{ color: "var(--muted-foreground)" }}>
-          {scenes.length} escenas
-        </p>
+        <div className="flex items-center justify-between mb-3 px-1">
+          <p className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+            {scenes.length} escenas
+          </p>
+          {missingCount > 0 && (
+            <span className="text-[10px]" style={{ color: "#FF8A8D" }}>
+              {missingCount} sin visual
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setBatchOpen(true)}
+          className="btn-secondary w-full flex items-center justify-center gap-2 py-2 mb-3 text-xs font-medium rounded-xl"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" />
+          </svg>
+          Imágenes en lote (Flow)
+        </button>
         {scenes.map((scene) => (
           <SceneCard
             key={scene.id}
@@ -485,6 +522,17 @@ export default function ScenesPanel({ projectId }: Props) {
         <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "var(--muted-foreground)" }}>
           Seleccioná una escena
         </div>
+      )}
+
+      {batchOpen && (
+        <BatchVisualsModal
+          projectId={projectId}
+          scenes={scenes}
+          scenesWithVisual={scenesWithVisual}
+          onClose={() => setBatchOpen(false)}
+          onScenesUpdated={setScenes}
+          onAssetsUploaded={handleBatchUploaded}
+        />
       )}
     </div>
   );
