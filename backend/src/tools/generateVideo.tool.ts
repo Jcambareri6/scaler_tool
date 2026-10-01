@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { withRetry } from "../lib/retry.js";
@@ -87,8 +88,7 @@ async function pollSnapgenTask(taskId: string, apiKey: string): Promise<SnapgenT
           signal: AbortSignal.timeout(POLL_REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`SnapGen task API error (${response.status}): ${body}`);
+          throw providerApiError("SnapGen task", response.status, await response.text(), [apiKey]);
         }
         return (await response.json()) as SnapgenTaskResponse;
       },
@@ -137,8 +137,7 @@ async function generateWithSnapgen(
     signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
   });
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`SnapGen API error (${response.status}): ${body}`);
+    throw providerApiError("SnapGen", response.status, await response.text(), [apiKey]);
   }
   const submitted = (await response.json()) as { id: string };
   if (!submitted.id) {

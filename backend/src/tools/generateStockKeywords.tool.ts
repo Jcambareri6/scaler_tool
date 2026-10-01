@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { deriveKeywords } from "../lib/keywords.js";
 import { withRetry } from "../lib/retry.js";
@@ -154,8 +155,7 @@ export const generateStockKeywordsTool: ToolDefinition<
       });
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`OpenAI API error (${response.status}): ${body}`);
+        throw providerApiError("OpenAI", response.status, await response.text(), [provider.api_key]);
       }
 
       return (await response.json()) as {

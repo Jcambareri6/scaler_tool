@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { getOwnedProject, getOwnedScriptStyle } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
@@ -346,8 +347,7 @@ async function generateWithOpenAI(
   );
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${body}`);
+    throw providerApiError("OpenAI", response.status, await response.text(), [provider.api_key]);
   }
 
   const data = (await response.json()) as {

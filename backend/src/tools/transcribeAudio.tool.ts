@@ -11,6 +11,7 @@ import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { getOwnedAsset } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
+import { providerApiError } from "../lib/errors.js";
 
 // ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts.
 const require = createRequire(import.meta.url);
@@ -133,8 +134,7 @@ export async function transcribeBuffer(
     );
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`OpenAI transcription API error (${response.status}): ${body}`);
+      throw providerApiError("OpenAI transcription", response.status, await response.text(), [apiKey]);
     }
 
     return (await response.json()) as {

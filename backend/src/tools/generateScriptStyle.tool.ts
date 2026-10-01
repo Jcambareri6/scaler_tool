@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { supabase } from "../lib/supabase.js";
 import { fetchWithTimeout } from "../lib/http.js";
@@ -114,8 +115,7 @@ export const generateScriptStyleTool: ToolDefinition<
       );
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`OpenAI API error (${response.status}): ${body}`);
+        throw providerApiError("OpenAI", response.status, await response.text(), [provider.api_key]);
       }
 
       const data = (await response.json()) as {

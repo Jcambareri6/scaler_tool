@@ -2,6 +2,7 @@ import type { ToolDefinition } from "./tool.types.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
+import { providerApiError } from "../lib/errors.js";
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -110,8 +111,7 @@ export const generateVisualContextTool: ToolDefinition<
         });
 
         if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`OpenAI API error (${response.status}): ${body}`);
+          throw providerApiError("OpenAI", response.status, await response.text(), [provider.api_key]);
         }
 
         return (await response.json()) as { choices: { message: { content: string | null } }[] };

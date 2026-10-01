@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./tool.types.js";
 import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { supabase } from "../lib/supabase.js";
@@ -49,8 +50,7 @@ async function generateWithSnapgen(prompt: string, apiKey: string, model: string
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`SnapGen image API error (${response.status}): ${body}`);
+      throw providerApiError("SnapGen image", response.status, await response.text(), [apiKey]);
     }
     return (await response.json()) as { data: { b64_json: string }[] };
   });

@@ -9,6 +9,7 @@ import { getAudioDurationSeconds } from "./audioDuration.js";
 import { getActiveProvider } from "./providers.js";
 import { resolveR2Config, uploadFileToR2 } from "./r2.js";
 import { makeWorkDir } from "./workDir.js";
+import { providerApiError } from "./errors.js";
 
 // ffmpeg-static es CJS puro -- mismo patron que renderVideo.tool.ts /
 // transcribeAudio.tool.ts.
@@ -73,26 +74,38 @@ async function uploadAudioFile(localPath: string, storageKey: string): Promise<s
 
 // v3/text-to-speech de ai33.pro es asincronico -- devuelve un task_id y hay
 // que consultar GET /v1/task/:id hasta que status sea "done" (o "error").
+// ai33.pro falla de forma intermitente al consultar una tarea: su propia
+// base tira "Failed query: select id from users where api_key = ..."
+// (devuelto como 400) o un 503 -- medido: ~1 de cada 40 consultas. Una
+// narracion larga hace cientos de consultas de estado, asi que antes un
+// solo hipo de esos tiraba el job entero (withRetry no reintenta 400). Se
+// toleran fallos sueltos y solo se corta si fallan varias consultas SEGUIDAS.
+const MAX_CONSECUTIVE_POLL_FAILURES = 10;
+
 export async function pollAi33Task(taskId: string, apiKey: string): Promise<Ai33TaskResponse> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
+  let consecutiveFailures = 0;
 
   while (Date.now() < deadline) {
-    // Reintento corto por vuelta de polling -- una tarea puede tardar
-    // minutos, no tiene sentido tirar todo por un blip de red puntual en
-    // una sola consulta de estado.
-    const task = await withRetry(
-      async () => {
-        const response = await fetchWithTimeout(`${AI33_BASE_URL}/v1/task/${taskId}`, {
-          headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
-        });
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`ai33.pro task API error (${response.status}): ${body}`);
-        }
-        return (await response.json()) as Ai33TaskResponse;
-      },
-      { retries: 2 }
-    );
+    let task: Ai33TaskResponse;
+    try {
+      const response = await fetchWithTimeout(`${AI33_BASE_URL}/v1/task/${taskId}`, {
+        headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+      });
+      if (!response.ok) {
+        throw providerApiError("ai33.pro task", response.status, await response.text(), [apiKey]);
+      }
+      task = (await response.json()) as Ai33TaskResponse;
+      consecutiveFailures = 0;
+    } catch (pollError) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw pollError;
+      console.warn(
+        `[ai33] fallo consultando la tarea ${taskId} (${consecutiveFailures}/${MAX_CONSECUTIVE_POLL_FAILURES}), reintentando...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      continue;
+    }
     if (task.status === "done") return task;
     if (task.status === "error") {
       throw new Error(`ai33.pro TTS task failed: ${task.error_message ?? "unknown error"}`);
@@ -127,8 +140,7 @@ export async function generateWithAi33(
       body: formData,
     });
     if (!submitResponse.ok) {
-      const body = await submitResponse.text();
-      throw new Error(`ai33.pro API error (${submitResponse.status}): ${body}`);
+      throw providerApiError("ai33.pro", submitResponse.status, await submitResponse.text(), [apiKey]);
     }
     return (await submitResponse.json()) as { success: boolean; task_id: string };
   });
