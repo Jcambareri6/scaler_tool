@@ -24,9 +24,12 @@
        no hay login propio. Solo se invita a abrir Scaler Tool. -->
   <section id="connect" class="empty">
     <div class="empty-icon" aria-hidden="true">↻</div>
-    <p class="empty-title">Esperando tu sesión de Scaler Tool</p>
-    <p class="empty-text">Abrí Scaler Tool en esta ventana e iniciá sesión. La extensión se conecta sola con tu usuario.</p>
-    <button id="openAppBtn" class="sm" style="margin-top: 10px">Abrir Scaler Tool</button>
+    <p class="empty-title">Conectá la extensión con Scaler Tool</p>
+    <p id="connectText" class="empty-text">Abrí Scaler Tool en esta ventana e iniciá sesión. La extensión se conecta sola con tu usuario.</p>
+    <div class="actions" style="justify-content: center; margin-top: 10px">
+      <button id="connectTabBtn" class="sm" hidden>Conectar con esta pestaña</button>
+      <button id="openAppBtn" class="ghost sm" hidden>Abrir Scaler Tool</button>
+    </div>
   </section>
 
   <!-- Proyecto y cola -->
@@ -63,6 +66,24 @@
       </div>
       <button id="loadBtn" class="block">Cargar prompts del proyecto</button>
       <p id="loadInfo" class="muted small"></p>
+    </div>
+  </details>
+
+  <!-- Personajes / objetos de referencia: se agregan en Flow como
+       "ingredientes" en las escenas cuya narracion los nombra. -->
+  <details id="refsBox" class="quick" hidden>
+    <summary><span>Personajes y referencias</span><span id="refsCount" class="muted"></span></summary>
+    <div class="quick-body">
+      <p class="muted small">
+        Subí la imagen de un personaje u objeto y escribí su nombre (o varios separados por coma: <b>María, la abuela</b>).
+        Se usa como ingrediente en Flow en las escenas cuya narración lo nombra, hasta 3 por escena.
+        Después tocá <b>Cargar prompts del proyecto</b>.
+      </p>
+      <div id="refsList" class="ref-list"></div>
+      <label class="ref-add">
+        <input id="refFile" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden />
+        <span class="btn-like">+ Agregar imagen</span>
+      </label>
     </div>
   </details>
 

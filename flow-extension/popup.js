@@ -8,7 +8,6 @@ const $ = (id) => document.getElementById(id);
 // Flow se mudo a flow.google.com (labs.google/fx/tools/flow redirige ahi);
 // se acepta tambien la URL vieja por si alguna cuenta todavia la usa.
 const FLOW_TAB_PATTERNS = ["https://flow.google.com/*", "https://labs.google/fx/*"];
-const DEFAULT_APP_URL = "http://localhost:8443";
 
 function send(msg) {
   return new Promise((resolve, reject) => {
@@ -69,24 +68,230 @@ async function renderAuth() {
   setChip("chipApp", logged ? "ok" : "warn", logged ? `Conectado a Scaler Tool (${auth.email ?? "sesión de la app"})` : "Sin sesión de Scaler Tool");
   $("connect").hidden = logged;
   $("setup").hidden = !logged;
+  $("refsBox").hidden = !logged;
+  if (!logged) await updateConnectUI();
   if (logged) await loadProjects();
   const { run } = await chrome.storage.local.get(["run"]);
   $("empty").hidden = !logged || !!run?.items?.length;
 }
 
 // Abre la app (o la trae al frente si ya esta abierta) para que el usuario
-// inicie sesion: el puente toma la sesion apenas aparece.
+// inicie sesion: el puente toma la sesion apenas aparece. Solo se ofrece si
+// ya se sabe donde esta la app (nunca se adivina una URL).
 $("openAppBtn").addEventListener("click", async () => {
   const { appUrl } = await getSettings();
-  const url = appUrl || DEFAULT_APP_URL;
-  const [existing] = await chrome.tabs.query({ url: `${new URL(url).origin}/*` });
+  if (!appUrl) return;
+  const [existing] = await chrome.tabs.query({ url: `${new URL(appUrl).origin}/*` });
   if (existing) {
     await chrome.tabs.update(existing.id, { active: true });
     send({ type: "syncFromTabs" }).catch(() => {});
   } else {
-    await chrome.tabs.create({ url });
+    await chrome.tabs.create({ url: appUrl });
   }
 });
+
+// Pestaña activa candidata a ser Scaler Tool: cualquier pagina web que no
+// sea Flow. La extension no conoce de antemano el dominio de produccion: el
+// usuario la conecta una vez estando en la pestaña de Scaler Tool.
+async function activeAppCandidate() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab?.url || !/^https?:/.test(tab.url)) return null;
+  const url = new URL(tab.url);
+  if (/(^|\.)flow\.google\.com$|(^|\.)labs\.google$/.test(url.hostname)) return null;
+  return { tab, origin: url.origin, host: url.host };
+}
+
+async function updateConnectUI() {
+  const { auth } = await chrome.storage.local.get(["auth"]);
+  if (auth?.accessToken || auth?.authDisabled) return;
+  const { appUrl } = await getSettings();
+  const candidate = await activeAppCandidate();
+  $("openAppBtn").hidden = !appUrl;
+  $("connectTabBtn").hidden = !candidate;
+  if (candidate) $("connectTabBtn").textContent = `Conectar con ${candidate.host}`;
+  $("connectText").textContent = candidate
+    ? `Si esta pestaña es Scaler Tool y ya iniciaste sesión, tocá “Conectar con ${candidate.host}”. Se hace una sola vez: después se conecta sola.`
+    : "Abrí Scaler Tool en esta ventana, iniciá sesión y volvé a este panel para conectarla.";
+}
+
+// Segundo paso (solo si el backend esta en otro dominio que la app): el
+// permiso para el backend. Chrome exige un clic propio para pedirlo.
+let pendingApiOrigin = null;
+
+$("connectTabBtn").addEventListener("click", (e) =>
+  withBusy(e.currentTarget, async () => {
+    if (pendingApiOrigin) {
+      const ok = await chrome.permissions.request({ origins: [`${pendingApiOrigin}/*`] });
+      if (!ok) throw new Error("Sin ese permiso la extensión no puede hablar con el servidor de Scaler Tool");
+      pendingApiOrigin = null;
+    }
+    const candidate = await activeAppCandidate();
+    if (!candidate) throw new Error("Pasá a la pestaña de Scaler Tool y volvé a tocar Conectar");
+    // Permiso para ESE dominio (lo pide Chrome, una sola vez). Si ya esta,
+    // no se vuelve a pedir: Chrome solo deja pedir permisos dentro del clic,
+    // y en el segundo paso el clic ya se uso para el del servidor.
+    const appPattern = { origins: [`${candidate.origin}/*`] };
+    const granted = (await chrome.permissions.contains(appPattern)) || (await chrome.permissions.request(appPattern));
+    if (!granted) throw new Error("Sin ese permiso la extensión no puede leer tu sesión de Scaler Tool");
+    const res = await send({ type: "registerApp", origin: candidate.origin, tabId: candidate.tab.id });
+    if (res?.needsApi) {
+      pendingApiOrigin = res.needsApi;
+      const host = new URL(res.needsApi).host;
+      showMsg(`Falta un paso: tocá de nuevo el botón para permitir la conexión con el servidor (${host}).`, "ok");
+      setTimeout(() => ($("connectTabBtn").textContent = `Permitir servidor ${host}`), 0);
+      return;
+    }
+    if (!res?.isApp) {
+      throw new Error(
+        res?.loggedOut
+          ? "Es Scaler Tool pero no hay una sesión iniciada: iniciá sesión y volvé a tocar Conectar"
+          : "Esa pestaña no parece ser Scaler Tool (o la app todavía no está actualizada): recargala con F5 y reintentá"
+      );
+    }
+  })
+);
+
+// --- personajes y referencias ------------------------------------------
+// Cada referencia: { id, names: "María, la abuela", dataUrl, flowName }.
+// flowName es el nombre con el que se sube a Flow (sale del contenido de la
+// imagen): con el, la extension la encuentra en la biblioteca del proyecto
+// de Flow y no la vuelve a subir.
+
+const MAX_REFS_PER_SCENE = 3; // limite de ingredientes de Flow
+const REF_MAX_SIDE = 1536;
+
+async function getRefs() {
+  const { refs } = await chrome.storage.local.get(["refs"]);
+  return refs ?? [];
+}
+
+// Achica la imagen (las referencias viajan en cada escena que las usa y se
+// guardan en chrome.storage) y la devuelve como JPEG.
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, REF_MAX_SIDE / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.9));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`No se pudo leer la imagen ${file.name}`));
+    };
+    img.src = url;
+  });
+}
+
+async function shortHash(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].slice(0, 4).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const slugify = (s) =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "ref";
+
+$("refFile").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  try {
+    const refs = await getRefs();
+    for (const file of files) {
+      const dataUrl = await shrinkImage(file);
+      const stem = file.name.replace(/\.[^.]+$/, "");
+      const hash = await shortHash(dataUrl);
+      if (refs.some((r) => r.flowName.includes(hash))) continue; // misma imagen ya cargada
+      refs.push({
+        id: `${Date.now().toString(36)}-${hash}`,
+        names: stem.replace(/[-_]+/g, " ").trim(),
+        dataUrl,
+        flowName: `scaler-ref-${slugify(stem)}-${hash}.jpg`,
+      });
+    }
+    await chrome.storage.local.set({ refs });
+    showMsg(files.length ? "Imagen agregada: revisá el nombre y volvé a cargar los prompts" : "", "ok");
+  } catch (err) {
+    showMsg(err instanceof Error ? err.message : String(err));
+  }
+});
+
+async function renderRefs() {
+  const refs = await getRefs();
+  $("refsCount").textContent = refs.length ? `${refs.length}` : "";
+  const list = $("refsList");
+  list.innerHTML = "";
+  for (const ref of refs) {
+    const row = document.createElement("div");
+    row.className = "ref-row";
+
+    const img = document.createElement("img");
+    img.src = ref.dataUrl;
+    img.alt = ref.names;
+
+    const meta = document.createElement("div");
+    meta.className = "ref-meta";
+    const input = document.createElement("input");
+    input.value = ref.names;
+    input.placeholder = "Nombre (ej: María, la abuela)";
+    input.addEventListener("change", async () => {
+      const all = await getRefs();
+      const target = all.find((r) => r.id === ref.id);
+      if (target) target.names = input.value.trim();
+      await chrome.storage.local.set({ refs: all });
+    });
+    const file = document.createElement("span");
+    file.className = "ref-file";
+    file.textContent = ref.flowName;
+    file.title = "Nombre con el que se sube a Flow";
+    meta.append(input, file);
+
+    const actions = document.createElement("div");
+    actions.className = "ref-actions";
+    // Plan B si Flow no acepta la subida automatica: bajarla con su nombre
+    // y arrastrarla a mano al proyecto de Flow.
+    const download = document.createElement("a");
+    download.href = ref.dataUrl;
+    download.download = ref.flowName;
+    download.textContent = "Bajar";
+    download.title = "Bajarla con el nombre para Flow, por si hay que subirla a mano";
+    const remove = document.createElement("button");
+    remove.className = "danger sm";
+    remove.textContent = "Quitar";
+    remove.addEventListener("click", async () => {
+      const all = await getRefs();
+      await chrome.storage.local.set({ refs: all.filter((r) => r.id !== ref.id) });
+    });
+    actions.append(download, remove);
+
+    row.append(img, meta, actions);
+    list.appendChild(row);
+  }
+}
+
+// Texto comparable: minusculas y sin acentos ("María" == "maria").
+const plain = (s) => (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Referencias que nombra el texto de una escena, en el orden en que estan
+// cargadas, hasta el limite de Flow. Palabra completa: "Ana" no matchea "banana".
+function refsForScene(refs, text) {
+  const haystack = plain(text);
+  return refs
+    .filter((ref) =>
+      ref.names
+        .split(",")
+        .map((n) => plain(n).trim())
+        .filter(Boolean)
+        .some((name) => new RegExp(`(^|[^a-z0-9])${escapeRe(name)}($|[^a-z0-9])`).test(haystack))
+    )
+    .slice(0, MAX_REFS_PER_SCENE)
+    .map((ref) => ref.id);
+}
 
 // --- proyecto + cola ----------------------------------------------------
 
@@ -175,14 +380,18 @@ $("loadBtn").addEventListener("click", (e) =>
     }
     await saveSettings({ maxScenes: max || null, randomPick: random });
 
+    const refs = await getRefs();
     const items = chosen.map((p) => ({
       sceneId: p.scene_id,
       order: p.order,
       prompt: p.image_prompt,
+      // Personajes que nombra la narracion (o el prompt) de la escena.
+      refIds: refsForScene(refs, `${p.text ?? ""} ${p.image_prompt ?? ""}`),
       status: "pending",
       attempts: 0,
       error: null,
     }));
+    const withRefs = items.filter((i) => i.refIds.length).length;
 
     await chrome.storage.local.set({
       run: {
@@ -198,6 +407,7 @@ $("loadBtn").addEventListener("click", (e) =>
     $("loadInfo").textContent =
       `${items.length} escenas en cola` +
       (items.length < withPrompt.length ? ` (${random ? "al azar" : "las primeras"} de ${withPrompt.length} posibles)` : "") +
+      (refs.length ? ` · ${withRefs} con personajes` : "") +
       (withoutPrompt ? ` · ${withoutPrompt} sin prompt (no tienen narrativa)` : "");
   })
 );
@@ -305,6 +515,25 @@ document.querySelectorAll("#viewFilter button").forEach((btn) =>
   })
 );
 
+let refsCache = [];
+
+async function toggleSceneRef(sceneId, refId) {
+  const { run } = await chrome.storage.local.get(["run"]);
+  const item = run?.items.find((i) => i.sceneId === sceneId);
+  if (!item) return;
+  const current = item.refIds ?? [];
+  if (current.includes(refId)) {
+    item.refIds = current.filter((id) => id !== refId);
+  } else {
+    if (current.length >= MAX_REFS_PER_SCENE) {
+      showMsg(`Flow acepta hasta ${MAX_REFS_PER_SCENE} referencias por escena`);
+      return;
+    }
+    item.refIds = [...current, refId];
+  }
+  await chrome.storage.local.set({ run });
+}
+
 function itemCard(item) {
   const card = document.createElement("div");
   card.className = `item ${item.status}`;
@@ -357,6 +586,31 @@ function itemCard(item) {
     prompt.classList.toggle("open");
   });
   body.appendChild(prompt);
+
+  // Personajes de la escena: los detectados por nombre vienen marcados; se
+  // pueden marcar/desmarcar a mano mientras la escena no se genero.
+  if (refsCache.length) {
+    const tags = document.createElement("div");
+    tags.className = "item-refs";
+    const editable = item.status === "pending" || item.status === "error";
+    const selected = item.refIds ?? [];
+    for (const ref of refsCache) {
+      const on = selected.includes(ref.id);
+      if (!on && !editable) continue;
+      const tag = document.createElement("button");
+      tag.type = "button";
+      tag.className = `ref-tag${on ? " on" : ""}`;
+      tag.disabled = !editable;
+      tag.title = editable ? (on ? "Sacar de esta escena" : "Usar en esta escena") : "";
+      const face = document.createElement("img");
+      face.src = ref.dataUrl;
+      face.alt = "";
+      tag.append(face, document.createTextNode(ref.names.split(",")[0].trim() || "sin nombre"));
+      tag.addEventListener("click", () => toggleSceneRef(item.sceneId, ref.id));
+      tags.appendChild(tag);
+    }
+    if (tags.childElementCount) body.appendChild(tags);
+  }
 
   if (item.error) {
     const error = document.createElement("p");
@@ -412,6 +666,11 @@ function renderRun(run) {
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.run) renderRun(changes.run.newValue);
   if (changes.auth) renderAuth();
+  if (changes.refs) {
+    refsCache = changes.refs.newValue ?? [];
+    renderRefs();
+    chrome.storage.local.get(["run"]).then(({ run }) => renderRun(run));
+  }
   if (changes.appContext) {
     // Abrir otro proyecto en la app cancela el "Elegir otro" anterior.
     if (changes.appContext.newValue?.projectId !== manualPickFor) manualPickFor = null;
@@ -475,6 +734,8 @@ $("saveAdvanced").addEventListener("click", (e) =>
   $("mediaType").addEventListener("change", () => saveSettings({ mediaType: $("mediaType").value }));
   $("retries").addEventListener("change", () => saveSettings({ retries: Number($("retries").value) || 0 }));
 
+  refsCache = await getRefs();
+  await renderRefs();
   await renderAuth();
   const { run } = await chrome.storage.local.get(["run"]);
   renderRun(run);
@@ -483,6 +744,9 @@ $("saveAdvanced").addEventListener("click", (e) =>
   refreshFlowChip();
   chrome.tabs.onUpdated.addListener(() => void refreshFlowChip());
   chrome.tabs.onRemoved.addListener(() => void refreshFlowChip());
+  // Sin sesion, el boton "Conectar con <dominio>" sigue a la pestaña activa.
+  chrome.tabs.onActivated.addListener(() => void updateConnectUI());
+  chrome.tabs.onUpdated.addListener((_id, info) => info.url && void updateConnectUI());
 
   // Sin sesion: busca una pestaña de Scaler Tool ya abierta y toma su sesion
   // (llega via storage.onChanged -> renderAuth).

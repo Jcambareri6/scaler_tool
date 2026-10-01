@@ -308,6 +308,9 @@
     running = true;
     stopRequested = false;
     const alreadyUsed = new Set();
+    // Ingredientes que quedaron puestos en Flow (null = no se sabe: el primer
+    // envio de la corrida siempre los rearma).
+    let lastRefKey = null;
     try {
       await patchRun((run) => {
         run.status = "running";
@@ -327,6 +330,21 @@
         for (let attempt = 1; attempt <= retries + 1 && !stopRequested; attempt++) {
           await patchItem(item.sceneId, { attempts: attempt });
           try {
+            // Ingredientes de la escena (personajes/objetos de referencia).
+            // Flow conserva los de la escena anterior: si cambian (o hay que
+            // vaciarlos) se rearman; si son los mismos, no se toca nada.
+            const { refs: allRefs } = await chrome.storage.local.get(["refs"]);
+            const wanted = (item.refIds ?? []).map((id) => (allRefs ?? []).find((r) => r.id === id)).filter(Boolean);
+            const refKey = wanted.map((r) => r.flowName).join("|");
+            if (refKey !== lastRefKey) {
+              await patchItem(item.sceneId, { step: wanted.length ? "poniendo referencias en Flow" : "sacando referencias de Flow" });
+              const applied = await send({
+                type: "flowApplyRefs",
+                refs: wanted.map((r) => ({ names: r.names, flowName: r.flowName, dataUrl: r.dataUrl })),
+              });
+              if (!applied?.ok) throw new Error(applied?.error ?? "No se pudieron poner las referencias en Flow");
+              lastRefKey = refKey;
+            }
             const media = await generateOne(item, settings ?? {}, alreadyUsed);
             // Si cancelaron (o pausaron) mientras Flow generaba, no se sube.
             const { run: still } = await chrome.storage.local.get(["run"]);
@@ -343,6 +361,7 @@
             break;
           } catch (err) {
             lastError = err instanceof Error ? err.message : String(err);
+            lastRefKey = null; // tras un error no se sabe que quedo puesto en Flow
             if (/Sesión vencida/.test(lastError)) break; // reintentar no lo arregla
             await sleep(3000);
           }

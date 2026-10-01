@@ -114,11 +114,11 @@ function DownloadCard() {
 
 const TROUBLESHOOTING: { problem: string; fix: ReactNode }[] = [
   {
-    problem: "El panel dice “Esperando tu sesión de Scaler Tool”",
+    problem: "El panel dice “Conectá la extensión con Scaler Tool”",
     fix: (
       <>
-        Tocá <Strong>Abrir Scaler Tool</Strong> e iniciá sesión en esta misma ventana de Chrome. Si ya estabas logueado, recargá la
-        pestaña de Scaler Tool con F5: el panel se conecta en unos segundos.
+        Pasá a la pestaña de Scaler Tool (con la sesión iniciada) y tocá <Strong>Conectar con …</Strong> en el panel. Si dice que
+        la pestaña no parece ser Scaler Tool, recargala con F5 y reintentá.
       </>
     ),
   },
@@ -241,8 +241,10 @@ export default function FlowExtensionPage() {
           ]}
         />
         <p>
-          Si el panel dice <Strong>“Esperando tu sesión de Scaler Tool”</Strong>, tocá <Strong>Abrir Scaler Tool</Strong>, iniciá
-          sesión, y el panel se conecta solo en unos segundos.
+          <Strong>La primera vez</Strong> el panel dice <Strong>“Conectá la extensión con Scaler Tool”</Strong>. Estando en esta
+          pestaña de Scaler Tool, tocá <Strong>Conectar con …</Strong> (aparece con la dirección de esta página) y aceptá el permiso
+          que pide Chrome. Si te pide un segundo permiso para el servidor, volvé a tocar el botón y aceptalo también. Se hace una sola
+          vez: desde ahí se conecta sola.
         </p>
         <Note>
           Si cerrás sesión en Scaler Tool, la extensión también se desconecta. Para cambiar de usuario, iniciá sesión con el otro
