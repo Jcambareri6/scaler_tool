@@ -16,7 +16,7 @@ export const authService = {
     if (!data.session) {
       throw new Error("Login sin sesion — revisa la configuracion de Supabase Auth");
     }
-    setToken(data.session.access_token);
+    setToken(data.session.access_token, data.session.refresh_token);
     return data.user;
   },
 
@@ -26,7 +26,7 @@ export const authService = {
   async register(email: string, password: string): Promise<{ requiresLogin: boolean; user?: AuthUser }> {
     const data = await api.post<SupabaseAuthPayload>("/auth/register", { email, password });
     if (data.session) {
-      setToken(data.session.access_token);
+      setToken(data.session.access_token, data.session.refresh_token);
       return { requiresLogin: false, user: data.user };
     }
     return { requiresLogin: true };

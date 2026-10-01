@@ -14,17 +14,24 @@
   if (window.__scalerFlowBridge) return;
   window.__scalerFlowBridge = true;
 
+  // DOM real de Flow (flow.google.com, Angular): el prompt es un editor
+  // ProseMirror y el boton de generar es la flecha "Iniciar generación".
+  // Si no estan, se cae a la busqueda generica de mas abajo.
   const DEFAULT_SELECTORS = {
-    // id que usa hoy el cuadro de prompt de Flow; si no esta, se busca el
-    // textarea / contenteditable visible mas grande.
-    prompt: "#PINHOLE_TEXT_AREA_ELEMENT_ID",
-    submit: "",
+    prompt: "flow-rich-text-editor .ProseMirror[contenteditable='true'], .ProseMirror[contenteditable='true']",
+    submit:
+      "flow-generate-icon-button button[type='submit'], button.generate-icon-button, button[aria-label='Iniciar generación']",
     result: "",
   };
-  const SUBMIT_TEXT = /arrow_forward|send|create|generate|crear|generar|enviar/i;
+  // Solo palabras que inequivocamente son "mandar": "crear"/"create" quedo
+  // afuera porque en Flow en español el boton "+" (agregar) matcheaba y se
+  // clickeaba ese en vez de la flecha.
+  const SUBMIT_TEXT = /arrow_forward|arrow_upward|send|enviar|submit|generar|generate/i;
+  const NOT_SUBMIT_TEXT = /close|cerrar|clear|borrar|add|agregar|añadir|crear|create|agente|agent|model|modelo/i;
   const ERROR_TEXT =
     /(couldn'?t|could not|failed|unable|something went wrong|try again|policy|no se pudo|fall[oó]|error|inténtalo|intentá|pol[ií]tica)/i;
   const MIN_MEDIA_SIZE = 200; // px -- descarta iconos, avatares, miniaturas
+  const TEST_PROMPT = "A red apple on a white table, soft daylight";
 
   let stopRequested = false;
   let running = false;
@@ -79,8 +86,8 @@
   }
 
   function findPromptBox(selectors) {
-    const custom = selectors.prompt && document.querySelector(selectors.prompt);
-    if (custom && isVisible(custom)) return custom;
+    const custom = selectors.prompt && [...document.querySelectorAll(selectors.prompt)].find(isVisible);
+    if (custom) return custom;
     const candidates = [...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')].filter(isVisible);
     candidates.sort((a, b) => {
       const ra = a.getBoundingClientRect();
@@ -105,26 +112,80 @@
     }
   }
 
+  function promptText(el) {
+    return (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement ? el.value : el.textContent) ?? "";
+  }
+
+  // A donde apuntar el clic real: si el elemento es el que devuelve el
+  // selector, se manda el selector y Chrome calcula la posicion exacta (ver
+  // centerOfSelector en background.js); si salio de la busqueda generica,
+  // van las coordenadas.
+  function targetOf(selector, el, point) {
+    return selector && document.querySelector(selector) === el ? { selector } : point;
+  }
+
+  // Centro del elemento en px del viewport (lo que espera el clic real).
+  function centerOf(el) {
+    el.scrollIntoView({ block: "center", inline: "center" });
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
   function buttonLabel(btn) {
     return `${btn.getAttribute("aria-label") ?? ""} ${btn.title ?? ""} ${btn.textContent ?? ""}`.trim();
   }
 
-  // El boton de generar esta "cerca" del cuadro de prompt: se sube por los
-  // ancestros buscando un boton habilitado cuyo texto/icono matchee.
+  function isEnabled(btn) {
+    return !btn.disabled && btn.getAttribute("aria-disabled") !== "true";
+  }
+
+  // El boton de generar vive en el mismo "cuadro" que el prompt. Se sube por
+  // los ancestros hasta el primero que tiene varios botones (el compositor:
+  // +, Agente, modelo, flecha) y ahi: primero uno con etiqueta de "mandar";
+  // si no hay (la flecha de Flow es solo un icono), el de mas abajo a la
+  // derecha -- en Flow es siempre la flecha →.
   function findSubmitButton(selectors, promptBox) {
     if (selectors.submit) {
-      const custom = document.querySelector(selectors.submit);
+      const custom = [...document.querySelectorAll(selectors.submit)].find(isVisible);
       if (custom) return custom;
     }
     let scope = promptBox;
-    for (let depth = 0; depth < 6 && scope; depth++) {
+    for (let depth = 0; depth < 8 && scope; depth++) {
       scope = scope.parentElement;
       if (!scope) break;
-      const buttons = [...scope.querySelectorAll("button")].filter((b) => isVisible(b) && !b.disabled);
-      const match = buttons.find((b) => SUBMIT_TEXT.test(buttonLabel(b)));
-      if (match) return match;
+      const buttons = [...scope.querySelectorAll('button, [role="button"]')].filter(
+        (b) => isVisible(b) && !b.contains(promptBox)
+      );
+      if (buttons.length < 2) continue;
+      const labeled = buttons.find((b) => SUBMIT_TEXT.test(buttonLabel(b)));
+      if (labeled) return labeled;
+      const candidates = buttons.filter((b) => !NOT_SUBMIT_TEXT.test(buttonLabel(b)));
+      if (candidates.length === 0) continue;
+      return candidates.reduce((best, b) => {
+        const rb = b.getBoundingClientRect();
+        const rBest = best.getBoundingClientRect();
+        return rb.right + rb.bottom > rBest.right + rBest.bottom ? b : best;
+      });
     }
     return null;
+  }
+
+  // Click "de verdad": algunos componentes reaccionan a pointerdown/mousedown
+  // y no solo a click.
+  function realClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.click();
+  }
+
+  function pressEnter(el) {
+    const opts = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    el.dispatchEvent(new KeyboardEvent("keydown", opts));
+    el.dispatchEvent(new KeyboardEvent("keypress", opts));
+    el.dispatchEvent(new KeyboardEvent("keyup", opts));
   }
 
   function mediaSelector(settings) {
@@ -214,26 +275,29 @@
   }
 
   async function generateOne(item, settings, alreadyUsed) {
-    const selectors = mergeSelectors(settings);
-    const promptBox = findPromptBox(selectors);
-    if (!promptBox) throw new Error("No encontré el cuadro de prompt de Flow (revisá Avanzado → selectores)");
-
     const before = currentMediaSrcs(settings);
-    setPromptText(promptBox, item.prompt);
-    await sleep(600);
+    // Paso actual, visible en el popup -- para saber donde se traba.
+    const step = (text) => {
+      console.log(`[Scaler→Flow] escena ${item.order}: ${text}`);
+      return patchItem(item.sceneId, { step: text });
+    };
+    await step("escribiendo y enviando el prompt");
 
-    const button = findSubmitButton(selectors, promptBox);
-    if (button) {
-      button.click();
-    } else {
-      // Ultimo recurso: Enter en el cuadro de prompt.
-      promptBox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
-    }
+    // Escribir + enviar corre en el MAIN world de la pagina (background.js ->
+    // flowSendInPage), con el metodo de la extension de referencia. Solo
+    // vuelve ok si Flow vacio la caja, o sea si de verdad tomo el prompt.
+    const sent = await send({ type: "flowSend", prompt: item.prompt });
+    if (!sent?.ok) throw new Error(sent?.error ?? "No se pudo enviar el prompt a Flow");
 
+    await step("enviado, esperando el resultado de Flow");
     const timeoutMs = (Number(settings.timeoutSec) || (settings.mediaType === "video" ? 600 : 240)) * 1000;
     const src = await waitForNewMedia(settings, before, alreadyUsed, timeoutMs);
     alreadyUsed.add(src);
+    // Miniatura para la tarjeta de la escena en el panel. Solo URLs http(s):
+    // un blob:/data: de esta pagina no se puede mostrar desde la extension.
+    if (/^https?:/.test(src)) await patchItem(item.sceneId, { thumb: src });
 
+    await step("descargando y subiendo a la escena");
     const media = await downloadMedia(src);
     const fileName = `escena_${String(item.order).padStart(2, "0")}.${extensionFor(media.mime, settings.mediaType)}`;
     return { ...media, fileName };
@@ -264,6 +328,9 @@
           await patchItem(item.sceneId, { attempts: attempt });
           try {
             const media = await generateOne(item, settings ?? {}, alreadyUsed);
+            // Si cancelaron (o pausaron) mientras Flow generaba, no se sube.
+            const { run: still } = await chrome.storage.local.get(["run"]);
+            if (stopRequested || !still) break;
             await send({
               type: "upload",
               scriptId: run.scriptId,
@@ -323,6 +390,13 @@
       sendResponse({ ok: true });
     } else if (msg?.type === "flow:ping") {
       sendResponse({ ok: true, running });
+    } else if (msg?.type === "flow:testSubmit") {
+      // Prueba de punta a punta del envio (el mismo flowSend que usa la
+      // corrida) con un prompt de prueba. Genera UNA imagen real en Flow.
+      send({ type: "flowSend", prompt: TEST_PROMPT })
+        .then((r) => sendResponse({ ok: true, ...r }))
+        .catch((err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      return true;
     } else if (msg?.type === "flow:test") {
       // Diagnostico desde el popup: ¿encuentro el prompt y el boton?
       chrome.storage.local.get(["settings"]).then(({ settings }) => {
@@ -332,7 +406,9 @@
         sendResponse({
           ok: true,
           prompt: !!prompt,
-          button: button ? buttonLabel(button).slice(0, 40) || "(sin texto)" : null,
+          button: button
+            ? `${buttonLabel(button).slice(0, 40) || "(icono sin texto)"}${isEnabled(button) ? "" : " [deshabilitado: falta texto en el prompt]"}`
+            : null,
           media: currentMediaSrcs(settings ?? {}).size,
         });
       });

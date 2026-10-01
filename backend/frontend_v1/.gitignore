@@ -19,3 +19,7 @@ logs/
 # beside it.
 /.plugins/
 /.opencode-skills/
+
+# Generados por scripts/zip-extension.mjs (predev/prebuild)
+/public/flow-extension.zip
+/public/flow-extension.json

@@ -1,16 +1,31 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 const TOKEN_KEY = "skaler_access_token";
+const REFRESH_TOKEN_KEY = "skaler_refresh_token";
+
+// La extension de Chrome (flow-extension/app-bridge.js) lee la sesion y a
+// que backend habla esta app desde localStorage para conectarse sola, sin
+// pedirle login aparte al usuario.
+// skaler_auth_disabled: en local con VITE_DISABLE_AUTH (y DISABLE_AUTH en
+// el backend) no hay token -- la extension se conecta igual, sin Authorization.
+try {
+  localStorage.setItem("skaler_api_url", API_URL);
+  localStorage.setItem("skaler_auth_disabled", String(import.meta.env.VITE_DISABLE_AUTH === "true"));
+} catch {
+  // localStorage bloqueado: la extension no se conecta sola, la app sigue igual.
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function setToken(token: string): void {
+export function setToken(token: string, refreshToken?: string | null): void {
   localStorage.setItem(TOKEN_KEY, token);
+  if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
 }
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export class ApiError extends Error {

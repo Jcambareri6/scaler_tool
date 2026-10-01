@@ -18,16 +18,18 @@ y recargar la pestaña de Flow.
 ## Usar
 
 1. Levantá el backend (`cd backend && npm run dev`) o usá el deployado.
-2. Abrí la extensión → **Conectar**:
-   - con email y contraseña de Scaler Tool, o
-   - si entrás con Google: abrí Scaler Tool en una pestaña (logueado), abrí la
-     extensión **estando en esa pestaña** y tocá *Usar la sesión de la pestaña*.
-     Ese token dura ~1 h; si vence, la corrida se pausa y lo volvés a tocar.
+2. Abrí Scaler Tool (`localhost:8443`) e iniciá sesión: la extensión toma
+   esa sesión sola (`app-bridge.js`) y se conecta con tu usuario, sin login
+   aparte. Usa el refresh token de la app para renovarse cuando vence el
+   access token, y si cerrás sesión en la app también se desconecta.
+   (Sesiones iniciadas antes de este cambio no guardaban el refresh token:
+   cerrá sesión y volvé a entrar una vez.) Como alternativa, en *Conectar a
+   mano* sigue el login con email/contraseña.
 3. Elegí el proyecto → *Cargar prompts del proyecto* (los arma la IA la
    primera vez y quedan guardados en cada escena; se pueden editar desde la
    app en Escenas → *Imágenes en lote (Flow)*).
    - *Solo escenas sin visual* y *Desde escena N* para completar lo que falte.
-4. Abrí Google Flow en otra pestaña, entrá a un proyecto y dejá elegido el
+4. Abrí Google Flow (`flow.google.com`) en otra pestaña, entrá a un proyecto y dejá elegido el
    modo (**imagen** o **video**) y el formato **16:9**.
 5. En la extensión: **▶ Empezar**. Podés cerrar el popup: sigue solo. No
    cierres ni recargues la pestaña de Flow mientras corre.
