@@ -1,0 +1,29 @@
+:root { color-scheme: dark; --bg: #0b0d13; --panel: rgba(255,255,255,0.04); --border: rgba(255,255,255,0.09); --fg: #f2f2f4; --muted: #9a9caa; --accent: #e30b10; --ok: #4ade80; --err: #fca5a5; }
+* { box-sizing: border-box; }
+body { width: 380px; margin: 0; padding: 12px; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; }
+header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+section, details { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+label.inline { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
+input, select { width: 100%; background: rgba(255,255,255,0.05); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; margin-top: 2px; }
+input[type=checkbox] { width: auto; margin: 0; }
+input.tiny { width: 56px; }
+label.inline select { width: auto; }
+.row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.row > input { flex: 1; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 10px; font: inherit; font-weight: 600; cursor: pointer; margin-bottom: 4px; }
+button.secondary { background: rgba(255,255,255,0.08); color: var(--fg); border: 1px solid var(--border); font-weight: 500; }
+button.link { background: none; color: var(--muted); padding: 0; font-weight: 400; text-decoration: underline; }
+button:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; margin: 4px 0; }
+.error { color: var(--err); }
+.hidden { display: none !important; }
+ol { list-style: none; padding: 0; margin: 6px 0 0; max-height: 220px; overflow-y: auto; }
+li { display: flex; gap: 6px; padding: 4px 0; border-top: 1px solid var(--border); font-size: 11px; }
+li .n { font-family: monospace; color: var(--muted); min-width: 22px; }
+li .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+li .s { min-width: 70px; text-align: right; }
+li.ok .s { color: var(--ok); } li.error .s { color: var(--err); } li.working .s { color: #fbbf24; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }

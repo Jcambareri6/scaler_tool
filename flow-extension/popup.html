@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Scaler Tool → Flow</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <strong>Scaler Tool → Flow</strong>
+    <span id="who" class="muted"></span>
+  </header>
+
+  <!-- 1. Conexion -->
+  <section id="connect">
+    <h2>1 · Conectar con Scaler Tool</h2>
+    <label>URL del backend
+      <input id="apiUrl" placeholder="http://localhost:3000" />
+    </label>
+    <div class="row">
+      <input id="email" type="email" placeholder="Email" />
+      <input id="password" type="password" placeholder="Contraseña" />
+    </div>
+    <button id="loginBtn">Iniciar sesión</button>
+    <p class="muted small">¿Entrás con Google? Abrí Scaler Tool en otra pestaña (ya logueado) y tocá:</p>
+    <button id="useAppSession" class="secondary">Usar la sesión de la pestaña de Scaler Tool</button>
+    <button id="logoutBtn" class="link hidden">Cerrar sesión</button>
+  </section>
+
+  <!-- 2. Proyecto + cola -->
+  <section id="setup" class="hidden">
+    <h2>2 · Proyecto</h2>
+    <select id="project"></select>
+    <div class="row">
+      <label class="inline"><input id="onlyMissing" type="checkbox" /> Solo escenas sin visual</label>
+      <label class="inline">Desde escena <input id="fromScene" type="number" min="1" value="1" class="tiny" /></label>
+    </div>
+    <div class="row">
+      <label class="inline">Generar
+        <select id="mediaType">
+          <option value="image">imágenes</option>
+          <option value="video">videos</option>
+        </select>
+      </label>
+      <label class="inline">Reintentos <input id="retries" type="number" min="0" max="5" value="2" class="tiny" /></label>
+    </div>
+    <button id="loadBtn">Cargar prompts del proyecto</button>
+    <p id="loadInfo" class="muted small"></p>
+  </section>
+
+  <!-- 3. Ejecucion -->
+  <section id="runSection" class="hidden">
+    <h2>3 · Flow</h2>
+    <p class="muted small">Dejá abierta la pestaña de Flow con el proyecto y el modo (imagen/video, formato 16:9) ya elegidos.</p>
+    <div class="row">
+      <button id="startBtn">▶ Empezar</button>
+      <button id="pauseBtn" class="secondary">⏸ Pausar</button>
+      <button id="retryBtn" class="secondary">↻ Reintentar fallidas</button>
+    </div>
+    <p id="runInfo" class="small"></p>
+    <p id="runError" class="error small hidden"></p>
+    <ol id="items"></ol>
+  </section>
+
+  <details>
+    <summary>Avanzado</summary>
+    <button id="testBtn" class="secondary">Probar detección en la pestaña de Flow</button>
+    <p id="testInfo" class="muted small"></p>
+    <label>Selector del cuadro de prompt <input id="selPrompt" placeholder="#PINHOLE_TEXT_AREA_ELEMENT_ID" /></label>
+    <label>Selector del botón generar <input id="selSubmit" placeholder="(automático)" /></label>
+    <label>Selector de resultados <input id="selResult" placeholder="img / video (automático)" /></label>
+    <div class="row">
+      <label class="inline">Timeout (s) <input id="timeoutSec" type="number" min="30" class="tiny" placeholder="auto" /></label>
+      <label class="inline">Pausa entre escenas (s) <input id="delaySec" type="number" min="0" value="3" class="tiny" /></label>
+    </div>
+    <button id="saveAdvanced" class="secondary">Guardar</button>
+  </details>
+
+  <p id="msg" class="small"></p>
+  <script src="popup.js"></script>
+</body>
+</html>
