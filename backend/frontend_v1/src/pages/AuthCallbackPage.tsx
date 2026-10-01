@@ -30,7 +30,7 @@ export default function AuthCallbackPage() {
       return;
     }
 
-    setToken(accessToken);
+    setToken(accessToken, params.get("refresh_token"));
     api
       .get<AuthUser>("/auth/me")
       .then((user) => {

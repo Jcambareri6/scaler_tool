@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Scaler Tool → Flow</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">S</span>
+      <span class="name">Scaler <span class="arrow">→</span> Flow</span>
+      <span id="version" class="version"></span>
+    </div>
+    <div class="chips">
+      <span id="chipFlow" class="chip" title="Pestaña de Google Flow"><i></i><span>Flow</span></span>
+      <span id="chipApp" class="chip" title="Conexión con Scaler Tool"><i></i><span>Scaler</span></span>
+    </div>
+  </header>
+
+  <p id="msg" class="msg" hidden></p>
+
+  <!-- Sin sesion: la extension toma sola la sesion de la app (app-bridge.js),
+       no hay login propio. Solo se invita a abrir Scaler Tool. -->
+  <section id="connect" class="empty">
+    <div class="empty-icon" aria-hidden="true">↻</div>
+    <p class="empty-title">Esperando tu sesión de Scaler Tool</p>
+    <p class="empty-text">Abrí Scaler Tool en esta ventana e iniciá sesión. La extensión se conecta sola con tu usuario.</p>
+    <button id="openAppBtn" class="sm" style="margin-top: 10px">Abrir Scaler Tool</button>
+  </section>
+
+  <!-- Proyecto y cola -->
+  <details id="setup" class="quick" open hidden>
+    <summary>
+      <span>Proyecto y escenas</span>
+      <span class="who-wrap"><span id="who" class="muted"></span></span>
+    </summary>
+    <div class="quick-body">
+      <!-- Proyecto abierto en Scaler Tool (detectado por app-bridge.js) o, si
+           estas en el inicio, el selector de siempre. -->
+      <div id="projectAuto" class="auto" hidden>
+        <div class="auto-text">
+          <span class="muted small">Proyecto abierto en Scaler Tool</span>
+          <div id="projectAutoName" class="auto-name"></div>
+        </div>
+        <button id="projectChange" class="link">Elegir otro</button>
+      </div>
+      <label id="projectPick">Proyecto <select id="project"></select></label>
+      <div class="fields">
+        <label>Generar
+          <select id="mediaType">
+            <option value="image">Imágenes</option>
+            <option value="video">Videos</option>
+          </select>
+        </label>
+        <label>Desde escena <input id="fromScene" type="number" min="1" value="1" /></label>
+        <label>Cantidad <input id="maxScenes" type="number" min="1" placeholder="todas" /></label>
+        <label>Reintentos <input id="retries" type="number" min="0" max="5" value="2" /></label>
+      </div>
+      <div class="checks">
+        <label class="check"><input id="onlyMissing" type="checkbox" /> Solo escenas sin visual</label>
+        <label class="check"><input id="randomPick" type="checkbox" /> Elegir al azar</label>
+      </div>
+      <button id="loadBtn" class="block">Cargar prompts del proyecto</button>
+      <p id="loadInfo" class="muted small"></p>
+    </div>
+  </details>
+
+  <!-- Sin corrida todavia -->
+  <section id="empty" class="empty" hidden>
+    <div class="empty-icon" aria-hidden="true">▶</div>
+    <p class="empty-title">No hay escenas en cola</p>
+    <p class="empty-text">Elegí el proyecto y tocá <b>Cargar prompts del proyecto</b>. Después abrí Google Flow, entrá a un proyecto con <b>16:9</b> y <b>x1</b>, y tocá <b>Empezar</b>.</p>
+  </section>
+
+  <!-- Corrida -->
+  <section id="runSection" class="run" hidden>
+    <div class="run-head">
+      <div class="run-head-text">
+        <div id="runTitle" class="run-title"></div>
+        <div id="runInfo" class="run-counts"></div>
+      </div>
+      <span id="runStatus" class="badge"></span>
+    </div>
+    <div class="progress"><span id="progFailed"></span><span id="progDone"></span></div>
+    <div class="actions">
+      <button id="startBtn">▶ Empezar</button>
+      <button id="pauseBtn" class="ghost">⏸ Pausar</button>
+      <button id="retryBtn" class="ghost">↻ Reintentar fallidas</button>
+      <button id="cancelBtn" class="danger">✕ Cancelar</button>
+    </div>
+    <p id="runError" class="msg bad" hidden></p>
+
+    <div class="items-bar">
+      <span class="muted small">Escenas</span>
+      <div id="viewFilter" class="seg" role="group" aria-label="Filtrar escenas">
+        <button type="button" data-filter="all" class="on">Todas</button>
+        <button type="button" data-filter="pending">Pendientes</button>
+        <button type="button" data-filter="error">Errores</button>
+      </div>
+    </div>
+    <div id="items" class="items"></div>
+  </section>
+
+  <details class="quick">
+    <summary><span>Avanzado</span></summary>
+    <div class="quick-body">
+      <div class="actions">
+        <button id="testBtn" class="ghost sm">Probar detección</button>
+        <button id="testSubmitBtn" class="ghost sm">Probar envío (1 imagen)</button>
+      </div>
+      <p id="testInfo" class="muted small"></p>
+      <label>Selector del cuadro de prompt <input id="selPrompt" placeholder="automático (editor de Flow)" /></label>
+      <label>Selector del botón generar <input id="selSubmit" placeholder="automático (flecha Iniciar generación)" /></label>
+      <label>Selector de resultados <input id="selResult" placeholder="automático (img / video)" /></label>
+      <div class="fields">
+        <label>Timeout (s) <input id="timeoutSec" type="number" min="30" placeholder="auto" /></label>
+        <label>Pausa entre escenas (s) <input id="delaySec" type="number" min="0" value="3" /></label>
+      </div>
+      <button id="saveAdvanced" class="ghost sm">Guardar</button>
+    </div>
+  </details>
+
+  <script src="popup.js"></script>
+</body>
+</html>

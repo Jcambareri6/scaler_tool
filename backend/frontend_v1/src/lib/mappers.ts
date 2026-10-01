@@ -116,6 +116,9 @@ interface SceneContent {
   endSeconds?: number;
   text?: string;
   visualPrompt?: string;
+  // Prompt de imagen para generar afuera (ej: Google Flow) -- lo arma
+  // scenes/image-prompts (sceneBatch.service.ts) y el usuario lo puede editar.
+  imagePrompt?: string;
   visualStatus?: SceneVisualStatus;
   duration?: string;
 }
@@ -139,6 +142,7 @@ export function mapScene(row: SceneRow, projectId: string): Scene {
     ...(typeof c.endSeconds === "number" ? { endSeconds: c.endSeconds } : {}),
     narrativeContent: c.text ?? "",
     visualPrompt: c.visualPrompt,
+    ...(c.imagePrompt ? { imagePrompt: c.imagePrompt } : {}),
     visualStatus: c.visualStatus ?? "PENDING",
     duration: c.duration ?? "0s",
   };
@@ -153,6 +157,7 @@ export function sceneToContent(scene: Partial<Scene>): SceneContent {
   if (scene.endSeconds !== undefined) content.endSeconds = scene.endSeconds;
   if (scene.narrativeContent !== undefined) content.text = scene.narrativeContent;
   if (scene.visualPrompt !== undefined) content.visualPrompt = scene.visualPrompt;
+  if (scene.imagePrompt !== undefined) content.imagePrompt = scene.imagePrompt;
   if (scene.visualStatus !== undefined) content.visualStatus = scene.visualStatus;
   if (scene.duration !== undefined) content.duration = scene.duration;
   return content;

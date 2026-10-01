@@ -49,6 +49,7 @@ export interface Scene {
   endSeconds?: number;
   narrativeContent: string;
   visualPrompt?: string;
+  imagePrompt?: string;
   visualStatus: SceneVisualStatus;
   duration: string;
 }
@@ -65,6 +66,16 @@ export interface Job {
 }
 
 export type AssetType = "AUDIO" | "VIDEO" | "IMAGE";
+
+// Prompt de imagen de una escena para generar afuera (ej: Google Flow).
+export interface SceneImagePrompt {
+  sceneId: string;
+  order: number;
+  text: string;
+  imagePrompt: string | null;
+  hasVisual: boolean;
+  error?: string;
+}
 
 export interface Asset {
   id: string;

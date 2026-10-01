@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/zip-extension.mjs",
     "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/zip-extension.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "format": "oxfmt"

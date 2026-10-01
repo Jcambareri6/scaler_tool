@@ -1,6 +1,6 @@
 import { api, ApiError } from "@/lib/api";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
-import type { VideoProject, Script, Scene, Job, Asset } from "@/types";
+import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt } from "@/types";
 
 function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -209,6 +209,56 @@ export const projectsService = {
     formData.append("file", file);
     const rows = await api.postForm<Parameters<typeof mapAsset>[0][]>(`/scenes/${sceneId}/upload-visual`, formData);
     return rows.map(mapAsset);
+  },
+
+  // Prompts de imagen por escena para generar afuera (ej: Google Flow, sin
+  // API) -- ver sceneBatch.service.ts::generateSceneImagePrompts. Solo genera
+  // los que faltan salvo regenerate (opcionalmente limitado a sceneIds).
+  async getSceneImagePrompts(
+    projectId: string,
+    options?: { regenerate?: boolean; sceneIds?: string[] }
+  ): Promise<SceneImagePrompt[]> {
+    const script = await this.getScript(projectId);
+    if (!script) throw new Error("El proyecto todavía no tiene guion");
+    const rows = await api.post<
+      { scene_id: string; order: number; text: string; image_prompt: string | null; has_visual: boolean; error?: string }[]
+    >(`/scripts/${script.id}/scenes/image-prompts`, {
+      ...(options?.regenerate ? { regenerate: true } : {}),
+      ...(options?.sceneIds ? { scene_ids: options.sceneIds } : {}),
+    });
+    return rows.map((r) => ({
+      sceneId: r.scene_id,
+      order: r.order,
+      text: r.text,
+      imagePrompt: r.image_prompt,
+      hasVisual: r.has_visual,
+      ...(r.error ? { error: r.error } : {}),
+    }));
+  },
+
+  // Carga en lote de visuales ya emparejados con su escena (una tanda chica
+  // por llamada, ver MAX_BATCH_FILES en sceneBatch.service.ts). Devuelve el
+  // resultado por archivo + los Assets nuevos de las escenas que salieron bien.
+  async uploadBatchSceneVisuals(
+    scriptId: string,
+    items: { sceneId: string; file: File }[]
+  ): Promise<{ results: { sceneId: string; fileName: string; ok: boolean; error?: string }[]; assets: Asset[] }> {
+    const formData = new FormData();
+    for (const item of items) formData.append("files", item.file);
+    formData.append("scene_ids", JSON.stringify(items.map((i) => i.sceneId)));
+    const data = await api.postForm<{
+      results: { scene_id: string; file_name: string; ok: boolean; error?: string }[];
+      assets: Parameters<typeof mapAsset>[0][];
+    }>(`/scripts/${scriptId}/scenes/batch-visuals`, formData);
+    return {
+      results: data.results.map((r) => ({
+        sceneId: r.scene_id,
+        fileName: r.file_name,
+        ok: r.ok,
+        ...(r.error ? { error: r.error } : {}),
+      })),
+      assets: data.assets.map(mapAsset),
+    };
   },
 
   // Ejecuta la Tool generate_script (mismo path que usaria el Agent via

@@ -12,6 +12,7 @@ import ProjectWorkspacePage from "@/pages/ProjectWorkspacePage";
 import ScriptStylesPage from "@/pages/ScriptStylesPage";
 import SettingsPage from "@/pages/SettingsPage";
 import WorkspacesPage from "@/pages/WorkspacesPage";
+import FlowExtensionPage from "@/pages/FlowExtensionPage";
 import AcceptInvitePage from "@/pages/AcceptInvitePage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="/script-styles" element={<ScriptStylesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
+              <Route path="/flow-extension" element={<FlowExtensionPage />} />
               <Route path="/invites/:token" element={<AcceptInvitePage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>

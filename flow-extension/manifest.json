@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Scaler Tool → Flow",
+  "version": "0.6.1",
+  "description": "Manda los prompts de cada escena a Google Flow, espera la imagen y la carga sola en su escena de Scaler Tool.",
+  "permissions": ["storage", "scripting", "tabs", "debugger", "sidePanel"],
+  "side_panel": { "default_path": "popup.html" },
+  "host_permissions": [
+    "https://flow.google.com/*",
+    "https://flow-content.google/*",
+    "https://labs.google/*",
+    "https://*.googleusercontent.com/*",
+    "https://storage.googleapis.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://flow.google.com/*", "https://labs.google/fx/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["app-bridge.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Scaler Tool → Flow" }
+}
