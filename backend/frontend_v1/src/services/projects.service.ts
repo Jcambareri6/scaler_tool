@@ -2,27 +2,6 @@ import { api, ApiError } from "@/lib/api";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
 import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt } from "@/types";
 
-export interface VisualBible {
-  text: string | null;
-  edited: boolean;
-  stale: boolean;
-  updatedAt: string | null;
-}
-
-interface VisualBibleRow {
-  text: string | null;
-  edited: boolean;
-  stale: boolean;
-  updated_at: string | null;
-}
-
-const mapVisualBible = (row: VisualBibleRow): VisualBible => ({
-  text: row.text,
-  edited: row.edited,
-  stale: row.stale,
-  updatedAt: row.updated_at,
-});
-
 function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
@@ -264,26 +243,6 @@ export const projectsService = {
       hasVisual: r.has_visual,
       ...(r.error ? { error: r.error } : {}),
     }));
-  },
-
-  // Biblia visual del video (personajes, lugares, epoca, paleta) con la que
-  // se arman todos los prompts de imagen -- ver sceneBatch.service.ts. Se
-  // arma sola la primera vez que se piden los prompts.
-  async getVisualBible(projectId: string): Promise<VisualBible> {
-    const script = await this.getScript(projectId);
-    if (!script) throw new Error("El proyecto todavía no tiene guion");
-    const row = await api.get<VisualBibleRow>(`/scripts/${script.id}/scenes/visual-bible`);
-    return mapVisualBible(row);
-  },
-
-  // { text } la guarda como editada a mano; { regenerate: true } la rehace
-  // con el guion y el diseño actuales. En los dos casos los prompts no
-  // editados se rehacen la proxima vez que se pidan.
-  async updateVisualBible(projectId: string, body: { text: string } | { regenerate: true }): Promise<VisualBible> {
-    const script = await this.getScript(projectId);
-    if (!script) throw new Error("El proyecto todavía no tiene guion");
-    const row = await api.put<VisualBibleRow>(`/scripts/${script.id}/scenes/visual-bible`, body);
-    return mapVisualBible(row);
   },
 
   // Carga en lote de visuales ya emparejados con su escena (una tanda chica

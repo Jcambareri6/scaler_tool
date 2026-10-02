@@ -6,8 +6,6 @@ import { mapWithConcurrency } from "../../lib/concurrency.js";
 import { runTool } from "../../tools/index.js";
 import { setUploadedVisualForScene, uploadSceneAssetFile } from "../../lib/stockSegments.js";
 import type {
-  GenerateVisualBibleInput,
-  GenerateVisualBibleOutput,
   GenerateImagePromptSequenceInput,
   GenerateImagePromptSequenceOutput,
   SequenceScene,
@@ -21,16 +19,16 @@ import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelS
 // se sube a su escena en tandas chicas.
 //
 // Continuidad visual: los prompts NO se arman escena por escena sueltas
-// (asi cada imagen salia distinta). Primero se arma la biblia visual del
-// video (guion completo + diseño visual del canal: personajes, lugares,
-// epoca, paleta) y despues los prompts por tramos de escenas consecutivas
-// siguiendo esa biblia -- ver tools/generateImagePromptSequence.tool.ts.
+// (asi cada imagen salia distinta): se arman por tramos de escenas
+// consecutivas, con el guion completo con timestamps y el diseño visual del
+// canal -- ver tools/generateImagePromptSequence.tool.ts. Los personajes los
+// aporta el usuario como ingredientes en Flow (extension).
 
 // Escenas por llamada al LLM: suficientes para que encadene un tramo de la
 // historia, pocas para que no se "olvide" de ninguna.
 const SEQUENCE_CHUNK_SIZE = 8;
-// Tramos en paralelo (cada uno ya lleva toda la biblia, asi que no pierden
-// consistencia entre si).
+// Tramos en paralelo (cada uno lleva el guion completo y el diseño del
+// canal, asi que no pierden consistencia entre si).
 const SEQUENCE_CONCURRENCY = 3;
 // Escenas vecinas que se pasan como contexto antes/despues de cada tramo.
 const CONTEXT_BEFORE = 2;
@@ -61,13 +59,6 @@ export interface SceneImagePrompt {
   error?: string;
 }
 
-interface StoredVisualBible {
-  text: string;
-  key: string;
-  edited: boolean;
-  updated_at: string;
-}
-
 function textOf(scene: SceneRow | undefined): string {
   const text = scene?.content?.text;
   return typeof text === "string" ? text : "";
@@ -95,18 +86,6 @@ function hashOf(...parts: string[]): string {
   return createHash("sha1").update(parts.join("\u0000")).digest("hex").slice(0, 12);
 }
 
-function missingColumnError(message: string): Error {
-  return /visual_bible|column/i.test(message)
-    ? new Error("Falta correr la migracion 20261002010000_workspace_defaults_visual_bible.sql en Supabase")
-    : new Error(message);
-}
-
-function readStoredBible(value: unknown): StoredVisualBible | null {
-  const v = value as Partial<StoredVisualBible> | null;
-  if (!v || typeof v.text !== "string") return null;
-  return { text: v.text, key: typeof v.key === "string" ? v.key : "", edited: v.edited === true, updated_at: v.updated_at ?? "" };
-}
-
 interface VisualContext {
   projectId: string;
   scriptId: string;
@@ -124,47 +103,6 @@ async function loadScenes(scriptId: string): Promise<SceneRow[]> {
     .order("order", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as SceneRow[];
-}
-
-// Huella de "con que guion y que diseño se armo la biblia": si cambia el
-// guion de las escenas o el diseño del canal, la biblia vieja ya no sirve.
-function bibleKeyFor(scenes: SceneRow[], visualStyle: string | null): string {
-  return hashOf(visualStyle ?? "", ...scenes.map((s) => `${s.order}:${textOf(s)}`));
-}
-
-async function saveBible(scriptId: string, bible: StoredVisualBible | null): Promise<void> {
-  const { error } = await supabase.from("scripts").update({ visual_bible: bible }).eq("id", scriptId);
-  if (error) throw missingColumnError(error.message);
-}
-
-// Devuelve la biblia vigente: la guardada si sigue valiendo (o si el usuario
-// la edito a mano), o una nueva generada con el guion completo.
-async function ensureVisualBible(
-  ctx: VisualContext,
-  scenes: SceneRow[],
-  options: { force?: boolean } = {}
-): Promise<StoredVisualBible> {
-  const { data: script, error } = await supabase.from("scripts").select("visual_bible").eq("id", ctx.scriptId).single();
-  if (error) throw missingColumnError(error.message);
-
-  const key = bibleKeyFor(scenes, ctx.visualStyle);
-  const stored = readStoredBible(script?.visual_bible);
-  if (stored && !options.force && (stored.edited || stored.key === key)) return stored;
-
-  const sequenceScenes: SequenceScene[] = scenes.filter((s) => textOf(s).trim()).map(sequenceSceneOf);
-  const { bible } = await runTool<GenerateVisualBibleInput, GenerateVisualBibleOutput>(
-    "generate_visual_bible",
-    {
-      scenes: sequenceScenes,
-      ...(ctx.videoTopic ? { video_topic: ctx.videoTopic } : {}),
-      ...(ctx.visualStyle ? { visual_style: ctx.visualStyle } : {}),
-      ...(ctx.contentPolicy ? { content_policy: ctx.contentPolicy } : {}),
-    },
-    { userId: ctx.userId }
-  );
-  const next: StoredVisualBible = { text: bible, key, edited: false, updated_at: new Date().toISOString() };
-  await saveBible(ctx.scriptId, next);
-  return next;
 }
 
 async function loadVisualContext(scriptId: string, videoProjectId: string, userId: string): Promise<VisualContext> {
@@ -216,10 +154,10 @@ function consecutiveChunks(scenes: SceneRow[], needs: Set<string>): number[][] {
 // y exportar de nuevo sin perderlos); solo se generan los que faltan, salvo
 // regenerate=true (opcionalmente limitado a scene_ids). Un fallo del LLM en
 // un tramo no corta el resto: esas escenas vuelven con `error`.
-// Cada prompt guarda la huella (imagePromptStyleKey) del diseño del canal +
-// biblia con que se armo: si cualquiera de los dos cambia, los prompts viejos
-// se rehacen solos -- salvo los editados a mano (imagePromptEdited), que no
-// se pisan nunca sin regenerate explicito.
+// Cada prompt guarda la huella (imagePromptStyleKey) del diseño del canal
+// con que se armo: si el diseño cambia, los prompts viejos se rehacen solos
+// -- salvo los editados a mano (imagePromptEdited), que no se pisan nunca
+// sin regenerate explicito.
 export async function generateSceneImagePrompts(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
@@ -251,15 +189,20 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       ? new Set(scene_ids.filter((id): id is string => typeof id === "string"))
       : null;
 
+    // Los prompts se arman solo con el diseño visual del canal + el guion
+    // completo con timestamps (el prompt del equipo, ver
+    // generateImagePromptSequence.tool.ts). Sin biblia visual: los personajes
+    // los aporta el usuario como ingredientes en Flow (extension), y una
+    // ficha de personajes inventada por la IA los contradecia.
     let ctx: VisualContext;
-    let bible: StoredVisualBible;
     try {
       ctx = await loadVisualContext(script.id, script.video_project_id, userId);
-      bible = await ensureVisualBible(ctx, sceneList);
     } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo armar la biblia visual" });
+      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo leer el diseño visual del canal" });
     }
-    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), bible.text);
+    // "sin-biblia": los prompts armados antes con biblia (y no editados a
+    // mano) se rehacen una vez sin ella.
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia");
 
     const errors = new Map<string, string>();
     const needs = new Set<string>();
@@ -296,7 +239,6 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
         const { prompts } = await runTool<GenerateImagePromptSequenceInput, GenerateImagePromptSequenceOutput>(
           "generate_image_prompt_sequence",
           {
-            bible: bible.text,
             scenes: chunkScenes.map(sequenceSceneOf),
             full_script: fullScript,
             context_before: before.map(neighbor),
@@ -361,65 +303,6 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
     });
 
     return res.status(200).json(result);
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-}
-
-// GET /scripts/:script_id/scenes/visual-bible
-// La biblia visual vigente del video (si no existe todavia, text null: se
-// arma sola la primera vez que se piden los prompts). `stale`: el guion o el
-// diseño del canal cambiaron desde que se armo.
-export async function getVisualBible(req: Request, res: Response) {
-  try {
-    const script = await getOwnedScript(req.params.script_id, req.user!.id, "viewer");
-    if (!script) return res.status(404).json({ error: "Script not found" });
-
-    const stored = readStoredBible((script as { visual_bible?: unknown }).visual_bible);
-    if (!stored) return res.status(200).json({ text: null, edited: false, stale: false, updated_at: null });
-
-    const ctx = await loadVisualContext(script.id, script.video_project_id, req.user!.id);
-    const scenes = await loadScenes(script.id);
-    return res.status(200).json({
-      text: stored.text,
-      edited: stored.edited,
-      stale: stored.key !== bibleKeyFor(scenes, ctx.visualStyle),
-      updated_at: stored.updated_at,
-    });
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-}
-
-// PUT /scripts/:script_id/scenes/visual-bible
-// Body: { text: string } -> la guarda como editada a mano (no se rehace sola)
-//       { regenerate: true } -> la vuelve a armar con el guion y el diseño actuales
-// En ambos casos los prompts no editados se rehacen la proxima vez que se
-// pidan (cambia la huella).
-export async function updateVisualBible(req: Request, res: Response) {
-  try {
-    const script = await getOwnedScript(req.params.script_id, req.user!.id);
-    if (!script) return res.status(404).json({ error: "Script not found" });
-    const { text, regenerate } = (req.body ?? {}) as { text?: unknown; regenerate?: unknown };
-
-    const scenes = await loadScenes(script.id);
-    const ctx = await loadVisualContext(script.id, script.video_project_id, req.user!.id);
-
-    let bible: StoredVisualBible;
-    try {
-      if (regenerate === true) {
-        bible = await ensureVisualBible(ctx, scenes, { force: true });
-      } else if (typeof text === "string" && text.trim()) {
-        bible = { text: text.trim().slice(0, 12000), key: bibleKeyFor(scenes, ctx.visualStyle), edited: true, updated_at: new Date().toISOString() };
-        await saveBible(script.id, bible);
-      } else {
-        return res.status(400).json({ error: "Mandá text o regenerate: true" });
-      }
-    } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo guardar la biblia visual" });
-    }
-
-    return res.status(200).json({ text: bible.text, edited: bible.edited, stale: false, updated_at: bible.updated_at });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

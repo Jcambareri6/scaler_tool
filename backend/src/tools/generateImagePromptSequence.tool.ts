@@ -8,21 +8,18 @@ import type { ContentPolicy } from "../types/shared/typeShared.js";
 // Continuidad visual entre escenas. Armar cada prompt por separado (como
 // generate_video_prompt) hacia que cada imagen saliera distinta: el
 // protagonista cambiaba de cara, de ropa y de epoca escena a escena, porque
-// ni el LLM ni Flow saben nada de las otras escenas. Se resuelve en dos pasos:
-// 1) generate_visual_bible: el LLM lee el guion COMPLETO + el diseño visual
-//    del canal y arma una ficha fija del video (personajes con descripcion
-//    exacta, lugares, epoca, paleta, como evoluciona la historia).
-// 2) generate_image_prompt_sequence: arma los prompts de varias escenas
-//    CONSECUTIVAS en una sola llamada, siguiendo la biblia y el hilo de la
-//    historia (mismos personajes con las mismas palabras, planos que se
-//    encadenan).
+// ni el LLM ni Flow saben nada de las otras escenas. Se resuelve armando los
+// prompts de varias escenas CONSECUTIVAS en una sola llamada, con el guion
+// completo con timestamps y el diseño visual del canal (el prompt del
+// equipo, "PROMPT IMAGENES CON TIMESTAMPS"). Los personajes no se describen:
+// los aporta el usuario como ingredientes en Flow.
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
 // Con el guion entero en el prompt la respuesta tarda bastante mas que un
 // prompt suelto.
 const LLM_TIMEOUT_MS = 120 * 1000;
-// Tope del guion que se manda para armar la biblia (~1h de narracion).
+// Tope del guion completo que se manda en cada tramo (~1h de narracion).
 const MAX_SCRIPT_CHARS = 60000;
 
 export interface SequenceScene {
@@ -45,12 +42,6 @@ function policyLines(policy?: ContentPolicy): string {
   if (policy?.block?.length) lines.push(`Temas a evitar (nunca los muestres): ${policy.block.join(", ")}`);
   if (policy?.notes) lines.push(`Notas del proyecto: ${policy.notes}`);
   return lines.length ? `${lines.join("\n")}\n` : "";
-}
-
-function styleBlock(visualStyle?: string): string {
-  const style = visualStyle?.trim();
-  if (!style) return "No hay un diseño visual del canal definido: elegí uno coherente con el tema y mantenelo en todo el video.";
-  return `DISEÑO VISUAL OBLIGATORIO DEL CANAL (lo define el dueño del canal, tiene prioridad):\n<<<\n${style}\n>>>`;
 }
 
 function sceneLabel(s: SequenceScene): string {
@@ -98,85 +89,26 @@ async function chatJson(system: string, user: string): Promise<Record<string, un
   }
 }
 
-// --- 1) biblia visual ----------------------------------------------------
-
-const BIBLE_SYSTEM_PROMPT = `Sos el director de arte de un canal de YouTube faceless. Antes de ilustrar un video escena por escena, armas su BIBLIA VISUAL: una ficha fija que despues se usa para escribir el prompt de imagen de cada escena, para que todas las imagenes se vean como partes de la MISMA historia (mismos personajes, mismos lugares, misma estetica) y sigan una secuencia.
-
-Lee el guion completo (viene con sus timestamps) y escribi la biblia EN EL MISMO IDIOMA en que esta escrito el diseño visual del canal (si no hay diseño, en ingles), con estas secciones:
-1. STYLE LINE: una sola linea reutilizable que condense el diseño visual del canal (tecnica/medio, paleta, iluminacion, textura, encuadre). Va a ir al final de cada prompt.
-2. CHARACTERS: cada personaje que aparece o se menciona mas de una vez (o el protagonista/narrador si se lo muestra). Para cada uno: un NOMBRE corto y fijo (el del guion, o uno descriptivo si no tiene: "the old fisherman") + descripcion fisica concreta e inmutable: edad aproximada, contextura, rasgos de la cara, pelo, ropa con colores, accesorios. Si el personaje cambia a lo largo de la historia (envejece, cambia de ropa), indicalo con el rango de escenas.
-3. LOCATIONS: lugares recurrentes con descripcion fija (arquitectura, materiales, luz, hora del dia, clima).
-4. ERA & WORLD: epoca, tecnologia, vestimenta general, cosas que NUNCA deben aparecer (anacronismos).
-5. VISUAL ARC: como avanza la historia en imagenes por rangos de timestamps (ej: "00:00-01:30: noche, puerto con lluvia; 01:30-03:00: amanecer en el mar") -- epoca, edad de los personajes, tono, luz y paleta de cada tramo.
-
-Reglas:
-- Respeta el diseño visual del canal por encima de cualquier otra idea de estilo; si prohibe algo (texto, caras, colores), anotalo en ERA & WORLD como prohibido.
-- Las descripciones de personajes tienen que ser lo bastante concretas para que un generador dibuje SIEMPRE a la misma persona. Si el diseño visual del canal ya trae una ficha o descripcion de personajes, copiala tal cual.
-- No inventes personajes que el guion no sugiere. Si el video no tiene personajes (ej: documental de naturaleza), deja CHARACTERS como "none" y pone mas detalle en LOCATIONS y VISUAL ARC.
-- Maximo ~600 palabras.
-- Responde EXCLUSIVAMENTE con un objeto JSON: { "bible": string }`;
-
-export interface GenerateVisualBibleInput extends ChannelContext {
-  scenes: SequenceScene[];
-}
-
-export interface GenerateVisualBibleOutput {
-  bible: string;
-}
-
-export const generateVisualBibleTool: ToolDefinition<GenerateVisualBibleInput, GenerateVisualBibleOutput> = {
-  name: "generate_visual_bible",
-  description:
-    "Lee el guion completo y el diseño visual del canal y arma la biblia visual del video (personajes, lugares, epoca, paleta) para que las imagenes de todas las escenas sean consistentes.",
-  parameters: {
-    type: "object",
-    properties: {
-      scenes: {
-        type: "array",
-        description: "Escenas del guion en orden: { order, text }",
-        items: { type: "object", properties: { order: { type: "number" }, text: { type: "string" } } },
-      },
-      video_topic: { type: "string", description: "Titulo del video (opcional)" },
-      visual_style: { type: "string", description: "Diseño visual del canal (opcional)" },
-      content_policy: { type: "object", description: "Preferencias/restricciones visuales del proyecto (opcional)" },
-    },
-    required: ["scenes"],
-  },
-  async execute(input) {
-    const script = scenesBlock(input.scenes).slice(0, MAX_SCRIPT_CHARS);
-    const user =
-      `${input.video_topic ? `Titulo del video: ${input.video_topic}\n` : ""}${policyLines(input.content_policy)}` +
-      `${styleBlock(input.visual_style)}\n\nGUION COMPLETO CON TIMESTAMPS:\n${script}`;
-
-    const parsed = await chatJson(BIBLE_SYSTEM_PROMPT, user);
-    if (!parsed) {
-      // Sin OpenAI: biblia minima con el estilo del canal, para que al menos
-      // todos los prompts compartan la misma linea de estilo.
-      return { bible: input.visual_style?.trim() ? `STYLE LINE: ${input.visual_style.trim()}` : "" };
-    }
-    const bible = parsed.bible;
-    if (typeof bible !== "string" || !bible.trim()) throw new Error("OpenAI no devolvio una biblia visual valida");
-    return { bible: bible.trim() };
-  },
-};
-
-// --- 2) prompts en secuencia ---------------------------------------------
+// --- prompts en secuencia ---------------------------------------------
 
 // Instrucciones del equipo que arma los prompts de imagen a mano ("PROMPT
 // IMAGENES CON TIMESTAMPS"), casi textuales. Adaptaciones: (1) se trabaja
 // por tramos de timestamps -- el guion completo va SIEMPRE, pero en cada
 // llamada se piden solo los prompts de un tramo, porque un video de 100+
 // escenas no entra en una sola respuesta; (2) la salida es JSON en vez de
-// parrafos sueltos, para poder asignar cada prompt a su escena; (3) se suma
-// la BIBLIA VISUAL (ficha de personajes) para que todos los tramos dibujen a
-// los mismos personajes.
-const SEQUENCE_SYSTEM_PROMPT = `Quiero que actúes como un generador profesional de prompts para imágenes destinadas a ilustrar un video de YouTube. Vas a recibir: un bloque llamado ESTILO VISUAL, donde se describe detalladamente la apariencia que deberán tener todas las imágenes; una BIBLIA VISUAL del video (ficha fija de personajes, lugares, época y evolución visual, armada a partir del guion completo y del estilo); el GUION COMPLETO CON TIMESTAMPS, donde cada marca de tiempo está acompañada por el fragmento de narración correspondiente; y un TRAMO A ILUSTRAR con los timestamps para los que tenés que escribir prompts en esta respuesta. Tu tarea es leer primero el guion completo para comprender la historia, el contexto general, los personajes, los lugares, la época, la progresión narrativa y la relación entre todas las escenas. Después, analiza individualmente lo que se dice en cada timestamp del tramo y crea exactamente un prompt de imagen diferente para cada uno de ellos.
+// parrafos sueltos, para poder asignar cada prompt a su escena; (3) los
+// personajes NO se describen fisicamente: el usuario los pone como
+// ingrediente (imagen de referencia) en Flow, y una descripcion inventada
+// los contradecia. Se nombran y se describe solo que hacen.
+const SEQUENCE_SYSTEM_PROMPT = `Quiero que actúes como un generador profesional de prompts para imágenes destinadas a ilustrar un video de YouTube. Vas a recibir: un bloque llamado ESTILO VISUAL, donde se describe detalladamente la apariencia que deberán tener todas las imágenes; el GUION COMPLETO CON TIMESTAMPS, donde cada marca de tiempo está acompañada por el fragmento de narración correspondiente; y un TRAMO A ILUSTRAR con los timestamps para los que tenés que escribir prompts en esta respuesta. Tu tarea es leer primero el guion completo para comprender la historia, el contexto general, los personajes, los lugares, la época, la progresión narrativa y la relación entre todas las escenas. Después, analiza individualmente lo que se dice en cada timestamp del tramo y crea exactamente un prompt de imagen diferente para cada uno de ellos.
 
 Cada prompt debe representar visualmente la idea, acción, situación o concepto principal narrado dentro de ese timestamp. No debes limitarte a repetir literalmente el texto del guion: debes transformarlo en una escena visual clara, concreta y fácil de representar en una sola imagen. Cuando una frase sea abstracta, emocional, explicativa o no describa directamente una acción visible, conviértela en la representación visual más clara y coherente posible, utilizando personajes, objetos, escenarios, expresiones, comparaciones visuales, diagramas o composiciones simbólicas únicamente cuando sean necesarias para comunicar esa idea. No generes escenas aleatorias, genéricas o desconectadas de la narración.
 
-Cada prompt debe ser autosuficiente, completo y estar listo para copiar y pegar directamente en un generador de imágenes. No debes depender de información incluida en prompts anteriores. Por eso, cuando aparezca un personaje importante, debes volver a describir en cada prompt sus características visuales esenciales, como edad aproximada, género, apariencia, cabello, vestimenta y cualquier rasgo necesario para mantener su identidad. Si el ESTILO VISUAL o la BIBLIA VISUAL incluyen una ficha o descripción específica de personajes, respétala exactamente y reutilízala con las mismas palabras de manera consistente en todos los prompts donde aparezcan.
+Cada prompt debe ser autosuficiente, completo y estar listo para copiar y pegar directamente en un generador de imágenes. No debes depender de información incluida en prompts anteriores.
 
-Mantén continuidad visual entre todas las imágenes del mismo video. Los personajes recurrentes deben conservar el mismo rostro, edad, cuerpo, cabello, ropa y accesorios, salvo que el guion indique claramente un cambio de época, vestimenta, edad o situación. Los escenarios recurrentes también deben conservar una apariencia coherente. Si la historia avanza en el tiempo, representa correctamente la edad, el contexto histórico, la ropa, los objetos, los edificios y cualquier elemento correspondiente a ese momento. No mezcles épocas ni agregues elementos modernos en escenas históricas.
+PERSONAJES: la apariencia de los personajes NO la definís vos. El usuario la aporta aparte, como imagen de referencia (ingrediente) en el generador. Por eso, cuando aparezca un personaje, nombralo con el nombre o rol que tiene en el guion ("María", "el pescador") y describí solo lo que hace en esa escena: acción, pose, expresión, gesto, ubicación en el encuadre y relación con los demás. NO inventes ni describas rasgos físicos (cara, edad, cuerpo, pelo, color de piel, ropa, accesorios), salvo que el ESTILO VISUAL indique una descripción concreta de ese personaje: en ese caso usala tal cual.
+
+Mantén continuidad visual entre todas las imágenes del mismo video. Los personajes se nombran siempre igual en todos los prompts donde aparecen. Los escenarios recurrentes deben conservar una apariencia coherente. Si la historia avanza en el tiempo, representa correctamente la edad, el contexto histórico, la ropa, los objetos, los edificios y cualquier elemento correspondiente a ese momento. No mezcles épocas ni agregues elementos modernos en escenas históricas.
 
 Aplica a todos los prompts la totalidad del ESTILO VISUAL proporcionado. No menciones frases como "utiliza el estilo anterior", "mismo estilo", "mismo personaje" o "igual que la escena previa", porque cada prompt debe funcionar por separado. Debes incorporar directamente dentro de cada prompt las características necesarias del estilo artístico, el tipo de personajes, los colores, la iluminación, el tipo de fondo, el nivel de realismo, el encuadre, la cámara, la composición, la atmósfera y el formato indicados en el bloque de estilo. Si alguna regla del estilo no resulta relevante para una escena concreta, prioriza la coherencia visual general sin forzar elementos innecesarios.
 
@@ -195,7 +127,6 @@ Escribí cada prompt en el mismo idioma en que está escrito el ESTILO VISUAL (s
 Formato de respuesta: EXCLUSIVAMENTE un objeto JSON { "prompts": [ { "order": number, "prompt": string } ] }, con una entrada por timestamp del tramo, en orden, donde "order" es el número de escena que figura entre paréntesis al lado de cada timestamp del tramo.`;
 
 export interface GenerateImagePromptSequenceInput extends ChannelContext {
-  bible: string;
   scenes: SequenceScene[];
   // Guion completo con timestamps -- se lee entero antes de ilustrar el tramo.
   full_script?: SequenceScene[];
@@ -223,11 +154,10 @@ export const generateImagePromptSequenceTool: ToolDefinition<
 > = {
   name: "generate_image_prompt_sequence",
   description:
-    "Genera los prompts de imagen de un tramo de escenas consecutivas siguiendo la biblia visual del video, para que las imagenes mantengan personajes, lugares y estilo.",
+    "Genera los prompts de imagen de un tramo de escenas consecutivas con el guion completo con timestamps y el diseño visual del canal, para que las imagenes sigan la historia y el estilo.",
   parameters: {
     type: "object",
     properties: {
-      bible: { type: "string", description: "Biblia visual del video (generate_visual_bible)" },
       scenes: {
         type: "array",
         description: "Escenas consecutivas a ilustrar: { order, text }",
@@ -240,14 +170,13 @@ export const generateImagePromptSequenceTool: ToolDefinition<
       visual_style: { type: "string", description: "Diseño visual del canal (opcional)" },
       content_policy: { type: "object", description: "Preferencias/restricciones visuales del proyecto (opcional)" },
     },
-    required: ["bible", "scenes"],
+    required: ["scenes"],
   },
   async execute(input) {
     const fullScript = input.full_script?.length ? scenesBlock(input.full_script).slice(0, MAX_SCRIPT_CHARS) : null;
     const user =
       `${input.video_topic ? `Titulo del video: ${input.video_topic}\n` : ""}${policyLines(input.content_policy)}` +
-      `ESTILO VISUAL:\n${input.visual_style?.trim() || "(no definido: elegi uno coherente con el tema y mantenelo)"}\n\n` +
-      `BIBLIA VISUAL DEL VIDEO:\n<<<\n${input.bible.trim() || "(vacia)"}\n>>>\n` +
+      `ESTILO VISUAL:\n${input.visual_style?.trim() || "(no definido: elegi uno coherente con el tema y mantenelo)"}\n` +
       (fullScript ? `\nGUION COMPLETO CON TIMESTAMPS:\n${fullScript}\n` : "") +
       contextBlock("Prompts ya usados en los timestamps anteriores al tramo (para no repetir composicion)", input.context_before?.filter((c) => c.prompt)) +
       `\nTRAMO A ILUSTRAR (un prompt por timestamp, "order" entre parentesis):\n${input.scenes

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
-import VisualBiblePanel from "./VisualBiblePanel";
 import type { Asset, Scene, SceneImagePrompt } from "@/types";
 import {
   fileKey,
@@ -109,13 +108,9 @@ export default function BatchVisualsModal({
     }
   };
 
-  const [bibleRefresh, setBibleRefresh] = useState(0);
   const reloadAllPrompts = () => {
     setLoadingPrompts(true);
-    loadPrompts().finally(() => {
-      setLoadingPrompts(false);
-      setBibleRefresh((n) => n + 1);
-    });
+    loadPrompts().finally(() => setLoadingPrompts(false));
   };
 
   useEffect(() => {
@@ -399,8 +394,6 @@ export default function BatchVisualsModal({
                 Descargar .txt
               </button>
             </div>
-
-            <VisualBiblePanel projectId={projectId} refreshKey={bibleRefresh} onBibleChanged={reloadAllPrompts} />
 
             {promptsError && (
               <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>

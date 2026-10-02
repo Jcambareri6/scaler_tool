@@ -12,10 +12,7 @@ import {
 } from "./scene.service.js";
 import {
   generateSceneImagePrompts,
-  uploadBatchSceneVisuals,
-  getVisualBible,
-  updateVisualBible,
-  MAX_BATCH_FILES,
+  uploadBatchSceneVisuals,  MAX_BATCH_FILES,
 } from "./sceneBatch.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
@@ -33,8 +30,6 @@ sceneListRouter.post("/", authMiddleware, createScene);
 sceneListRouter.get("/", authMiddleware, listScenes);
 sceneListRouter.patch("/reorder", authMiddleware, reorderScenes);
 sceneListRouter.post("/image-prompts", authMiddleware, generateSceneImagePrompts);
-sceneListRouter.get("/visual-bible", authMiddleware, getVisualBible);
-sceneListRouter.put("/visual-bible", authMiddleware, updateVisualBible);
 sceneListRouter.post(
   "/batch-visuals",
   authMiddleware,
