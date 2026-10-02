@@ -10,7 +10,10 @@ import {
   regenerateSceneVisual,
   uploadSceneVisual,
 } from "./scene.service.js";
-import { generateSceneImagePrompts, uploadBatchSceneVisuals, MAX_BATCH_FILES } from "./sceneBatch.service.js";
+import {
+  generateSceneImagePrompts,
+  uploadBatchSceneVisuals,  MAX_BATCH_FILES,
+} from "./sceneBatch.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 // Mismo criterio que files/file.route.ts (memoria, sin tocar disco), pero

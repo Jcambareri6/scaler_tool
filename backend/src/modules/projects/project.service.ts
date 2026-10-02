@@ -4,6 +4,7 @@ import type { Scene } from "../../types/shared/typeShared.js";
 import type { ProjectDetail } from "./projects.types.js"
 import { getOwnedProject, getWorkspaceRole, getMemberWorkspaceIds, roleAtLeast } from "../../lib/ownership.js";
 import { ensurePersonalWorkspace } from "../workspaces/workspace.service.js";
+import { getChannelSettingsForProject, getChannelSettingsForWorkspace } from "../../lib/channelSettings.js";
 
 export async function createProject(req: Request, res: Response) {
   try {
@@ -22,6 +23,11 @@ export async function createProject(req: Request, res: Response) {
       workspaceId = await ensurePersonalWorkspace(userId, req.user!.email);
     }
 
+    // Plantilla del canal: lo que no se eligio al crear (undefined) sale del
+    // workspace -- estilo de narracion y voz. Un null explicito ("sin
+    // estilo") se respeta.
+    const channel = await getChannelSettingsForWorkspace(workspaceId);
+
     const { data, error } = await supabase
       .from("video_projects")
       .insert({
@@ -31,8 +37,8 @@ export async function createProject(req: Request, res: Response) {
         description,
         target_duration,
         content_policy,
-        script_style_id,
-        voice_id,
+        script_style_id: script_style_id === undefined ? channel.script_style_id : script_style_id || null,
+        voice_id: voice_id === undefined ? channel.voice_id : voice_id || null,
         ...(visual_source ? { visual_source } : {}),
         ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
         ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
@@ -333,5 +339,17 @@ export async function updateProject(req: Request, res: Response) {
     return res.status(500).json({
       error: "Internal server error",
     });
+  }
+}
+// Recursos compartidos del canal que aplican a ESTE proyecto (los de su
+// workspace) -- el panel de guion los usa para mostrar el idioma del canal
+// como default.
+export async function getProjectChannelSettings(req: Request, res: Response) {
+  try {
+    const access = await getOwnedProject(req.params.project_id, req.user!.id, "viewer");
+    if (!access) return res.status(404).json({ error: "Project not found" });
+    return res.status(200).json(await getChannelSettingsForProject(access.id));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
   }
 }

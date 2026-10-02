@@ -24,11 +24,18 @@ export const projectsService = {
     }
   },
 
-  async createProject(title: string, description?: string, scriptStyleId?: string, workspaceId?: string): Promise<VideoProject> {
+  // scriptStyleId: undefined = el del workspace (plantilla del canal, lo
+  // resuelve el backend); null = "sin estilo" explicito.
+  async createProject(
+    title: string,
+    description?: string,
+    scriptStyleId?: string | null,
+    workspaceId?: string
+  ): Promise<VideoProject> {
     const row = await api.post<Parameters<typeof mapProject>[0]>("/projects", {
       title,
       description,
-      ...(scriptStyleId ? { script_style_id: scriptStyleId } : {}),
+      ...(scriptStyleId !== undefined ? { script_style_id: scriptStyleId } : {}),
       ...(workspaceId ? { workspace_id: workspaceId } : {}),
     });
     return mapProject(row);
@@ -221,7 +228,7 @@ export const projectsService = {
     const script = await this.getScript(projectId);
     if (!script) throw new Error("El proyecto todavía no tiene guion");
     const rows = await api.post<
-      { scene_id: string; order: number; text: string; image_prompt: string | null; has_visual: boolean; error?: string }[]
+      { scene_id: string; order: number; text: string; image_prompt: string | null; image_prompt_style_key?: string | null; image_prompt_edited?: boolean; has_visual: boolean; error?: string }[]
     >(`/scripts/${script.id}/scenes/image-prompts`, {
       ...(options?.regenerate ? { regenerate: true } : {}),
       ...(options?.sceneIds ? { scene_ids: options.sceneIds } : {}),
@@ -231,6 +238,8 @@ export const projectsService = {
       order: r.order,
       text: r.text,
       imagePrompt: r.image_prompt,
+      imagePromptStyleKey: r.image_prompt_style_key ?? null,
+      imagePromptEdited: r.image_prompt_edited === true,
       hasVisual: r.has_visual,
       ...(r.error ? { error: r.error } : {}),
     }));

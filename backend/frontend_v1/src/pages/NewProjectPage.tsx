@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
-import { workspacesService } from "@/services/workspaces.service";
+import { workspacesService, type ChannelSettings } from "@/services/workspaces.service";
 import type { ScriptStyle, Workspace } from "@/types";
 
 const starters = [
@@ -24,6 +24,9 @@ export default function NewProjectPage() {
   const [scriptStyleId, setScriptStyleId] = useState("");
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
+  // Plantilla del canal del workspace elegido: preselecciona su estilo de
+  // narracion (la voz y el idioma los aplica el backend / el panel de guion).
+  const [channel, setChannel] = useState<ChannelSettings | null>(null);
 
   useEffect(() => {
     scriptStylesService.list().then(setStyles).catch(() => setStyles([]));
@@ -34,6 +37,32 @@ export default function NewProjectPage() {
       .catch(() => setWorkspaces([]));
   }, []);
 
+  const effectiveWorkspaceId = workspaceId || workspaces.find((ws) => ws.isPersonal)?.id || "";
+  useEffect(() => {
+    if (!effectiveWorkspaceId) return;
+    let cancelled = false;
+    workspacesService
+      .channelSettings(effectiveWorkspaceId)
+      .then((settings) => {
+        if (cancelled) return;
+        setChannel(settings);
+        setScriptStyleId(settings.scriptStyleId);
+      })
+      .catch(() => {
+        if (!cancelled) setChannel(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveWorkspaceId]);
+
+  // El estilo compartido del workspace puede ser de otro miembro.
+  const styleOptions = useMemo(() => {
+    const list = styles.map((s) => ({ id: s.id, name: s.name, status: s.status as string }));
+    if (channel?.scriptStyle && !list.some((s) => s.id === channel.scriptStyle!.id)) list.unshift(channel.scriptStyle);
+    return list;
+  }, [styles, channel]);
+
   const handleCreate = async () => {
     if (!title.trim()) return;
     setCreating(true);
@@ -42,7 +71,8 @@ export default function NewProjectPage() {
       const project = await projectsService.createProject(
         title.trim(),
         content.trim() || undefined,
-        scriptStyleId || undefined,
+        // null = "Sin estilo" elegido a proposito (no se pisa con el del canal).
+        scriptStyleId || null,
         workspaceId || undefined
       );
       navigate(`/projects/${project.id}`);
@@ -154,7 +184,7 @@ export default function NewProjectPage() {
             </div>
           )}
 
-          {styles.length > 0 && (
+          {styleOptions.length > 0 && (
             <div>
               <label className="block text-[11px] font-medium uppercase tracking-widest mb-1.5" style={{ color: "var(--muted-foreground)" }}>
                 Estilo de guion (opcional)
@@ -165,12 +195,26 @@ export default function NewProjectPage() {
                 className="input-glass w-full rounded-xl px-4 py-3 text-sm"
               >
                 <option value="">Sin estilo</option>
-                {styles.map((s) => (
+                {styleOptions.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} {s.status !== "READY" ? `(${s.status})` : ""}
+                    {s.id === channel?.scriptStyleId ? " · del canal" : ""}
                   </option>
                 ))}
               </select>
+              {channel && (channel.voiceId || channel.channelLanguage || channel.visualStylePrompt) && (
+                <p className="text-[11px] mt-1.5" style={{ color: "var(--muted-foreground)" }}>
+                  Este workspace también aplica su plantilla del canal:
+                  {[
+                    channel.channelLanguage && ` idioma ${channel.channelLanguage}`,
+                    channel.voiceId && " voz",
+                    channel.visualStylePrompt && " diseño visual",
+                  ]
+                    .filter(Boolean)
+                    .join(",")}
+                  .
+                </p>
+              )}
             </div>
           )}
 

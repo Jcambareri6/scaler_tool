@@ -4,6 +4,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { getOwnedProject, getOwnedScriptStyle } from "../lib/ownership.js";
+import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { supabase } from "../lib/supabase.js";
 import { fetchWithTimeout } from "../lib/http.js";
 
@@ -89,6 +90,13 @@ function buildLanguageInstruction(language?: string): string {
   const trimmed = language?.trim();
   if (!trimmed) return "";
   return `\n\nIDIOMA OBLIGATORIO: escribi el titulo y el guion completo en ${trimmed}, aunque la idea, el guion de referencia o las instrucciones anteriores esten en otro idioma. Adapta expresiones y ejemplos para que suenen naturales en ${trimmed}, no traduzcas literal.`;
+}
+
+// Va antes del idioma (que tiene la ultima palabra) pero despues del Prompt
+// Maestro: es una regla del canal que aplica a todos sus guiones.
+function buildNarrationStyleInstruction(narrationStyle: string | null): string {
+  if (!narrationStyle) return "";
+  return `\n\nESTILO DE NARRACION DEL CANAL (obligatorio, aplica a todos los guiones del canal):\n<<<\n${narrationStyle}\n>>>\nRespeta este tono, ritmo y forma de narrar en todo el guion. Si choca con instrucciones genericas anteriores, manda este estilo; el formato de salida pedido no cambia.`;
 }
 
 const ANTHROPIC_FORMAT_INSTRUCTIONS =`Ademas de todas las reglas anteriores, entrega el resultado exclusivamente a traves de la tool "${RETURN_SCRIPT_TOOL_NAME}".`;
@@ -416,9 +424,15 @@ export const generateScriptTool: ToolDefinition<
     if (script_style_id) {
       // En un workspace compartido el estilo suele ser del creador del
       // proyecto, no del miembro que dispara la generacion.
+      // Y si es el estilo compartido del workspace, lo puede usar cualquier
+      // miembro con acceso al proyecto aunque lo haya creado otro.
+      const channelForStyle = await getChannelSettingsForProject(video_project_id);
       const style =
         (await getOwnedScriptStyle(script_style_id, ctx.userId)) ??
-        (await getOwnedScriptStyle(script_style_id, project.user_id));
+        (await getOwnedScriptStyle(script_style_id, project.user_id)) ??
+        (channelForStyle.script_style_id === script_style_id
+          ? (await supabase.from("script_styles").select("*").eq("id", script_style_id).maybeSingle()).data
+          : null);
       if (!style) {
         throw new Error("Script style not found");
       }
@@ -434,7 +448,12 @@ export const generateScriptTool: ToolDefinition<
       targetChars = input.approx_chars ?? defaultApproxChars;
       userPrompt = buildStyledUserPrompt(input, defaultApproxChars);
     }
-    systemPrompt += buildLanguageInstruction(input.language);
+    // Recursos compartidos del canal (workspace): el estilo de narracion se
+    // suma a lo anterior (prompt generico o Prompt Maestro), y el idioma del
+    // canal es el default cuando no se eligio uno para este guion.
+    const channel = await getChannelSettingsForProject(video_project_id);
+    systemPrompt += buildNarrationStyleInstruction(channel.narration_style);
+    systemPrompt += buildLanguageInstruction(input.language?.trim() || channel.channel_language || undefined);
 
     const generated =
       provider === "openai"

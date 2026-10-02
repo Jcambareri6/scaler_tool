@@ -10,6 +10,7 @@ import { syncProjectStatus } from "../lib/projectStatus.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
+import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import type { ContentPolicy, VisualSource, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
 import type {
@@ -222,6 +223,8 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   const contentPolicy = (project.content_policy as ContentPolicy | null) ?? undefined;
   const videoTopic = (project as { title?: string }).title;
+  // Diseño visual del canal (recursos compartidos del workspace).
+  const { visual_style_prompt: visualStyle } = await getChannelSettingsForProject(projectId);
   const visualSource = ((project as { visual_source?: VisualSource }).visual_source ?? "stock") as VisualSource;
   const sceneRows = (scenes ?? []) as SceneRow[];
 
@@ -289,6 +292,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
         scene_text: sceneText,
         ...(videoTopic ? { video_topic: videoTopic } : {}),
         ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+        ...(visualStyle ? { visual_style: visualStyle } : {}),
       },
       toolCtx
     );

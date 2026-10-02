@@ -1,24 +1,38 @@
 import type { Request, Response } from "express";
+import { createHash } from "crypto";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedScript } from "../../lib/ownership.js";
 import { mapWithConcurrency } from "../../lib/concurrency.js";
 import { runTool } from "../../tools/index.js";
 import { setUploadedVisualForScene, uploadSceneAssetFile } from "../../lib/stockSegments.js";
 import type {
-  GenerateVideoPromptInput,
-  GenerateVideoPromptOutput,
-} from "../../tools/generateVideoPrompt.tool.js";
+  GenerateImagePromptSequenceInput,
+  GenerateImagePromptSequenceOutput,
+  SequenceScene,
+} from "../../tools/generateImagePromptSequence.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
+import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
-// exporta numerados; 2) el usuario genera en la herramienta externa y sube
-// todo junto -- el frontend empareja cada archivo con su escena (por numero
-// en el nombre o por orden) y lo manda aca en tandas chicas.
+// exporta numerados (o la extension los manda sola a Flow); 2) el resultado
+// se sube a su escena en tandas chicas.
+//
+// Continuidad visual: los prompts NO se arman escena por escena sueltas
+// (asi cada imagen salia distinta): se arman por tramos de escenas
+// consecutivas, con el guion completo con timestamps y el diseño visual del
+// canal -- ver tools/generateImagePromptSequence.tool.ts. Los personajes los
+// aporta el usuario como ingredientes en Flow (extension).
 
-// Pedidos simultaneos al LLM al armar los prompts -- mismo orden de
-// magnitud que el pipeline (ver orchestrator.ts).
-const PROMPT_CONCURRENCY = 4;
+// Escenas por llamada al LLM: suficientes para que encadene un tramo de la
+// historia, pocas para que no se "olvide" de ninguna.
+const SEQUENCE_CHUNK_SIZE = 8;
+// Tramos en paralelo (cada uno lleva el guion completo y el diseño del
+// canal, asi que no pierden consistencia entre si).
+const SEQUENCE_CONCURRENCY = 3;
+// Escenas vecinas que se pasan como contexto antes/despues de cada tramo.
+const CONTEXT_BEFORE = 2;
+const CONTEXT_AFTER = 1;
 // Subidas a Storage simultaneas dentro de una tanda.
 const UPLOAD_CONCURRENCY = 3;
 // Tope de archivos por request: el frontend manda tandas chicas (los
@@ -38,7 +52,99 @@ export interface SceneImagePrompt {
   text: string;
   image_prompt: string | null;
   has_visual: boolean;
+  // Para que el frontend los conserve al guardar la escena (el PATCH
+  // reemplaza content entero).
+  image_prompt_style_key: string | null;
+  image_prompt_edited: boolean;
   error?: string;
+}
+
+function textOf(scene: SceneRow | undefined): string {
+  const text = scene?.content?.text;
+  return typeof text === "string" ? text : "";
+}
+
+// "00:12 - 00:20" a partir de timeStart/timeEnd (los arma build_scenes).
+function timeOf(scene: SceneRow): string | undefined {
+  const start = scene.content?.timeStart;
+  const end = scene.content?.timeEnd;
+  if (typeof start !== "string" || !start) return undefined;
+  return typeof end === "string" && end ? `${start} - ${end}` : start;
+}
+
+function sequenceSceneOf(scene: SceneRow): SequenceScene {
+  const time = timeOf(scene);
+  return { order: scene.order, text: textOf(scene), ...(time ? { time } : {}) };
+}
+
+function promptOf(scene: SceneRow | undefined): string | null {
+  const prompt = scene?.content?.imagePrompt;
+  return typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
+}
+
+function hashOf(...parts: string[]): string {
+  return createHash("sha1").update(parts.join("\u0000")).digest("hex").slice(0, 12);
+}
+
+interface VisualContext {
+  projectId: string;
+  scriptId: string;
+  videoTopic?: string;
+  contentPolicy?: ContentPolicy;
+  visualStyle: string | null;
+  userId: string;
+}
+
+async function loadScenes(scriptId: string): Promise<SceneRow[]> {
+  const { data, error } = await supabase
+    .from("scenes")
+    .select("id, order, content")
+    .eq("script_id", scriptId)
+    .order("order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SceneRow[];
+}
+
+async function loadVisualContext(scriptId: string, videoProjectId: string, userId: string): Promise<VisualContext> {
+  const { data: project, error } = await supabase
+    .from("video_projects")
+    .select("id, title, content_policy")
+    .eq("id", videoProjectId)
+    .single();
+  if (error || !project) throw new Error("Project not found");
+  const channel = await getChannelSettingsForProject(project.id);
+  const videoTopic = (project as { title?: string }).title;
+  const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+  return {
+    projectId: project.id,
+    scriptId,
+    ...(videoTopic ? { videoTopic } : {}),
+    ...(contentPolicy ? { contentPolicy } : {}),
+    visualStyle: channel.visual_style_prompt,
+    userId,
+  };
+}
+
+// Corta las escenas a generar en tramos de escenas CONSECUTIVAS (un hueco
+// -- una escena que no se regenera -- corta el tramo), de a lo sumo
+// SEQUENCE_CHUNK_SIZE.
+function consecutiveChunks(scenes: SceneRow[], needs: Set<string>): number[][] {
+  const chunks: number[][] = [];
+  let current: number[] = [];
+  scenes.forEach((scene, index) => {
+    if (needs.has(scene.id)) {
+      current.push(index);
+      if (current.length >= SEQUENCE_CHUNK_SIZE) {
+        chunks.push(current);
+        current = [];
+      }
+    } else if (current.length) {
+      chunks.push(current);
+      current = [];
+    }
+  });
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 // POST /scripts/:script_id/scenes/image-prompts
@@ -47,7 +153,11 @@ export interface SceneImagePrompt {
 // scene.content.imagePrompt se reusan (asi el usuario puede editarlos a mano
 // y exportar de nuevo sin perderlos); solo se generan los que faltan, salvo
 // regenerate=true (opcionalmente limitado a scene_ids). Un fallo del LLM en
-// una escena no corta el resto: esa escena vuelve con `error`.
+// un tramo no corta el resto: esas escenas vuelven con `error`.
+// Cada prompt guarda la huella (imagePromptStyleKey) del diseño del canal
+// con que se armo: si el diseño cambia, los prompts viejos se rehacen solos
+// -- salvo los editados a mano (imagePromptEdited), que no se pisan nunca
+// sin regenerate explicito.
 export async function generateSceneImagePrompts(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
@@ -59,23 +169,7 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       return res.status(404).json({ error: "Script not found" });
     }
 
-    const { data: project, error: projectError } = await supabase
-      .from("video_projects")
-      .select("id, title, content_policy")
-      .eq("id", script.video_project_id)
-      .single();
-    if (projectError || !project) {
-      return res.status(404).json({ error: "Project not found" });
-    }
-
-    const { data: scenes, error: scenesError } = await supabase
-      .from("scenes")
-      .select("id, order, content")
-      .eq("script_id", script_id)
-      .order("order", { ascending: true });
-    if (scenesError) return res.status(400).json({ error: scenesError.message });
-
-    const sceneList = (scenes ?? []) as SceneRow[];
+    const sceneList = await loadScenes(script.id);
     if (sceneList.length === 0) {
       return res.status(400).json({ error: "El guion todavia no tiene escenas" });
     }
@@ -94,54 +188,118 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
     const onlyIds = Array.isArray(scene_ids)
       ? new Set(scene_ids.filter((id): id is string => typeof id === "string"))
       : null;
-    const videoTopic = (project as { title?: string }).title;
-    const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
 
-    const result = await mapWithConcurrency(sceneList, PROMPT_CONCURRENCY, async (scene): Promise<SceneImagePrompt> => {
-      const content = scene.content ?? {};
-      const text = typeof content.text === "string" ? content.text : "";
-      const existing =
-        typeof content.imagePrompt === "string" && content.imagePrompt.trim() ? content.imagePrompt.trim() : null;
-      const base = {
-        scene_id: scene.id,
-        order: scene.order,
-        text,
-        has_visual: scenesWithVisual.has(scene.id),
-      };
+    // Los prompts se arman solo con el diseño visual del canal + el guion
+    // completo con timestamps (el prompt del equipo, ver
+    // generateImagePromptSequence.tool.ts). Sin biblia visual: los personajes
+    // los aporta el usuario como ingredientes en Flow (extension), y una
+    // ficha de personajes inventada por la IA los contradecia.
+    let ctx: VisualContext;
+    try {
+      ctx = await loadVisualContext(script.id, script.video_project_id, userId);
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo leer el diseño visual del canal" });
+    }
+    // "sin-biblia": los prompts armados antes con biblia (y no editados a
+    // mano) se rehacen una vez sin ella.
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia");
 
-      const shouldGenerate = regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing;
-      if (!shouldGenerate) return { ...base, image_prompt: existing };
-      if (!text.trim()) {
-        return { ...base, image_prompt: existing, error: "La escena no tiene narrativa para derivar el prompt" };
+    const errors = new Map<string, string>();
+    const needs = new Set<string>();
+    for (const scene of sceneList) {
+      const existing = promptOf(scene);
+      const storedKey = typeof scene.content?.imagePromptStyleKey === "string" ? scene.content.imagePromptStyleKey : "none";
+      const editedByUser = scene.content?.imagePromptEdited === true;
+      const stale = !!existing && !editedByUser && storedKey !== contextKey;
+      const wanted = regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing || stale;
+      if (!wanted) continue;
+      if (!textOf(scene).trim()) {
+        errors.set(scene.id, "La escena no tiene narrativa para derivar el prompt");
+        continue;
       }
+      needs.add(scene.id);
+    }
+
+    const fullScript = sceneList.filter((s) => textOf(s).trim()).map(sequenceSceneOf);
+    const generated = new Map<string, string>();
+    await mapWithConcurrency(consecutiveChunks(sceneList, needs), SEQUENCE_CONCURRENCY, async (indexes) => {
+      const chunkScenes = indexes.map((i) => sceneList[i]!);
+      const first = indexes[0]!;
+      const last = indexes[indexes.length - 1]!;
+      const neighbor = (scene: SceneRow) => {
+        // El prompt viejo de una vecina sirve de referencia solo si no se
+        // esta rehaciendo en esta misma corrida.
+        const prompt = needs.has(scene.id) ? null : promptOf(scene);
+        return { ...sequenceSceneOf(scene), ...(prompt ? { prompt } : {}) };
+      };
+      const before = sceneList.slice(Math.max(0, first - CONTEXT_BEFORE), first).filter((s) => textOf(s).trim());
+      const after = sceneList.slice(last + 1, last + 1 + CONTEXT_AFTER).filter((s) => textOf(s).trim());
 
       try {
-        const { prompt } = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
-          "generate_video_prompt",
+        const { prompts } = await runTool<GenerateImagePromptSequenceInput, GenerateImagePromptSequenceOutput>(
+          "generate_image_prompt_sequence",
           {
-            scene_text: text,
-            ...(videoTopic ? { video_topic: videoTopic } : {}),
-            ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+            scenes: chunkScenes.map(sequenceSceneOf),
+            full_script: fullScript,
+            context_before: before.map(neighbor),
+            context_after: after.map(neighbor),
+            ...(ctx.videoTopic ? { video_topic: ctx.videoTopic } : {}),
+            ...(ctx.visualStyle ? { visual_style: ctx.visualStyle } : {}),
+            ...(ctx.contentPolicy ? { content_policy: ctx.contentPolicy } : {}),
           },
           { userId }
         );
-        // Se relee content justo antes de escribir: entre la lectura inicial
-        // y aca pueden haber pasado varios segundos de LLM, y el UPDATE pisa
-        // el JSON entero.
-        const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
-        const { error: updateError } = await supabase
-          .from("scenes")
-          .update({ content: { ...((fresh?.content as Record<string, unknown> | null) ?? content), imagePrompt: prompt } })
-          .eq("id", scene.id);
-        if (updateError) throw new Error(updateError.message);
-        return { ...base, image_prompt: prompt };
+        const byOrder = new Map(prompts.map((p) => [p.order, p.prompt]));
+        for (const scene of chunkScenes) {
+          const prompt = byOrder.get(scene.order);
+          if (!prompt) {
+            errors.set(scene.id, "La IA no devolvio prompt para esta escena (proba con 'Otro prompt')");
+            continue;
+          }
+          // Se relee content justo antes de escribir: entre la lectura
+          // inicial y aca pueden haber pasado varios segundos de LLM, y el
+          // UPDATE pisa el JSON entero.
+          const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
+          const { error: updateError } = await supabase
+            .from("scenes")
+            .update({
+              content: {
+                ...((fresh?.content as Record<string, unknown> | null) ?? scene.content ?? {}),
+                imagePrompt: prompt,
+                imagePromptStyleKey: contextKey,
+                imagePromptEdited: false,
+              },
+            })
+            .eq("id", scene.id);
+          if (updateError) {
+            errors.set(scene.id, updateError.message);
+            continue;
+          }
+          generated.set(scene.id, prompt);
+        }
       } catch (err) {
-        return {
-          ...base,
-          image_prompt: existing,
-          error: err instanceof Error ? err.message : "No se pudo generar el prompt",
-        };
+        const message = err instanceof Error ? err.message : "No se pudo generar el prompt";
+        for (const scene of chunkScenes) errors.set(scene.id, message);
       }
+    });
+
+    const result: SceneImagePrompt[] = sceneList.map((scene) => {
+      const fresh = generated.get(scene.id);
+      const error = errors.get(scene.id);
+      return {
+        scene_id: scene.id,
+        order: scene.order,
+        text: textOf(scene),
+        has_visual: scenesWithVisual.has(scene.id),
+        image_prompt: fresh ?? promptOf(scene),
+        image_prompt_style_key: fresh
+          ? contextKey
+          : typeof scene.content?.imagePromptStyleKey === "string"
+            ? scene.content.imagePromptStyleKey
+            : null,
+        image_prompt_edited: fresh ? false : scene.content?.imagePromptEdited === true,
+        ...(error ? { error } : {}),
+      };
     });
 
     return res.status(200).json(result);

@@ -119,6 +119,11 @@ interface SceneContent {
   // Prompt de imagen para generar afuera (ej: Google Flow) -- lo arma
   // scenes/image-prompts (sceneBatch.service.ts) y el usuario lo puede editar.
   imagePrompt?: string;
+  // Huella del diseño visual del canal con el que se armo imagePrompt, y si
+  // el usuario lo edito a mano (ver sceneBatch.service.ts). Hay que
+  // conservarlos al guardar: el PATCH reemplaza content entero.
+  imagePromptStyleKey?: string;
+  imagePromptEdited?: boolean;
   visualStatus?: SceneVisualStatus;
   duration?: string;
 }
@@ -143,6 +148,8 @@ export function mapScene(row: SceneRow, projectId: string): Scene {
     narrativeContent: c.text ?? "",
     visualPrompt: c.visualPrompt,
     ...(c.imagePrompt ? { imagePrompt: c.imagePrompt } : {}),
+    ...(c.imagePromptStyleKey ? { imagePromptStyleKey: c.imagePromptStyleKey } : {}),
+    ...(c.imagePromptEdited !== undefined ? { imagePromptEdited: c.imagePromptEdited } : {}),
     visualStatus: c.visualStatus ?? "PENDING",
     duration: c.duration ?? "0s",
   };
@@ -158,6 +165,8 @@ export function sceneToContent(scene: Partial<Scene>): SceneContent {
   if (scene.narrativeContent !== undefined) content.text = scene.narrativeContent;
   if (scene.visualPrompt !== undefined) content.visualPrompt = scene.visualPrompt;
   if (scene.imagePrompt !== undefined) content.imagePrompt = scene.imagePrompt;
+  if (scene.imagePromptStyleKey !== undefined) content.imagePromptStyleKey = scene.imagePromptStyleKey;
+  if (scene.imagePromptEdited !== undefined) content.imagePromptEdited = scene.imagePromptEdited;
   if (scene.visualStatus !== undefined) content.visualStatus = scene.visualStatus;
   if (scene.duration !== undefined) content.duration = scene.duration;
   return content;

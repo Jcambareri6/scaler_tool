@@ -81,7 +81,65 @@ export const ROLE_DESCRIPTIONS: Record<WorkspaceRole, string> = {
   viewer: "Solo ve proyectos y previews",
 };
 
+// Recursos compartidos del canal (ver backend lib/channelSettings.ts).
+// La "plantilla del canal": los proyectos nuevos del workspace traen
+// precargados el estilo de narracion, la voz y el idioma.
+export interface ChannelSettings {
+  channelLanguage: string;
+  narrationStyle: string;
+  visualStylePrompt: string;
+  scriptStyleId: string;
+  // Resumen del estilo compartido (los miembros que no lo crearon no lo
+  // tienen en su lista de estilos).
+  scriptStyle: { id: string; name: string; status: string } | null;
+  voiceId: string;
+  canEdit: boolean;
+}
+
+export type ChannelSettingsPatch = Partial<
+  Pick<ChannelSettings, "channelLanguage" | "narrationStyle" | "visualStylePrompt" | "scriptStyleId" | "voiceId">
+>;
+
+interface ChannelSettingsRow {
+  channel_language: string | null;
+  narration_style: string | null;
+  visual_style_prompt: string | null;
+  script_style_id?: string | null;
+  script_style?: { id: string; name: string; status: string } | null;
+  voice_id?: string | null;
+  can_edit?: boolean;
+}
+
+const mapChannelSettings = (row: ChannelSettingsRow): ChannelSettings => ({
+  channelLanguage: row.channel_language ?? "",
+  narrationStyle: row.narration_style ?? "",
+  visualStylePrompt: row.visual_style_prompt ?? "",
+  scriptStyleId: row.script_style_id ?? "",
+  scriptStyle: row.script_style ?? null,
+  voiceId: row.voice_id ?? "",
+  canEdit: !!row.can_edit,
+});
+
 export const workspacesService = {
+  async channelSettings(id: string): Promise<ChannelSettings> {
+    return mapChannelSettings(await api.get<ChannelSettingsRow>(`/workspaces/${id}/channel-settings`));
+  },
+
+  async updateChannelSettings(id: string, patch: ChannelSettingsPatch): Promise<ChannelSettings> {
+    const body: Record<string, string | null> = {};
+    if (patch.channelLanguage !== undefined) body.channel_language = patch.channelLanguage;
+    if (patch.narrationStyle !== undefined) body.narration_style = patch.narrationStyle;
+    if (patch.visualStylePrompt !== undefined) body.visual_style_prompt = patch.visualStylePrompt;
+    if (patch.scriptStyleId !== undefined) body.script_style_id = patch.scriptStyleId || null;
+    if (patch.voiceId !== undefined) body.voice_id = patch.voiceId;
+    return mapChannelSettings(await api.patch<ChannelSettingsRow>(`/workspaces/${id}/channel-settings`, body));
+  },
+
+  // Los que aplican a un proyecto puntual (los de su workspace).
+  async projectChannelSettings(projectId: string): Promise<ChannelSettings> {
+    return mapChannelSettings(await api.get<ChannelSettingsRow>(`/projects/${projectId}/channel-settings`));
+  },
+
   async list(): Promise<Workspace[]> {
     const rows = await api.get<WorkspaceRow[]>("/workspaces");
     return rows.map(mapWorkspace);

@@ -12,6 +12,17 @@ export interface GenerateVideoPromptInput {
   scene_text: string;
   video_topic?: string;
   content_policy?: ContentPolicy;
+  // Diseño visual del canal (recursos compartidos del workspace, ver
+  // lib/channelSettings.ts). Cada prompt tiene que traerlo incorporado:
+  // Flow y los generadores no recuerdan nada entre un prompt y el otro.
+  visual_style?: string;
+  // Narrativa de las escenas vecinas, para que la imagen siga el hilo del
+  // guion (mismos personajes/lugar) en vez de ilustrar el fragmento suelto.
+  previous_scene_text?: string;
+  next_scene_text?: string;
+  // "image" cuando el prompt va a un generador de imagenes (Flow, Imagen
+  // con IA): sin movimientos de camara, una sola composicion fija.
+  target?: "video" | "image";
 }
 
 export interface GenerateVideoPromptOutput {
@@ -35,6 +46,35 @@ Reglas:
 - Si el mensaje incluye preferencias visuales del proyecto, inclinate hacia eso cuando tenga sentido con el fragmento.
 - Si el mensaje incluye temas a evitar, el prompt nunca debe describir esos temas.
 - Responde EXCLUSIVAMENTE con un objeto JSON: { "prompt": string }`;
+
+const SCENE_CONTEXT_MAX = 600;
+
+function buildUserPromptWithContext(input: GenerateVideoPromptInput): string {
+  const base = buildUserPrompt(input.scene_text, input.video_topic, input.content_policy);
+  const prev = input.previous_scene_text?.trim().slice(-SCENE_CONTEXT_MAX);
+  const next = input.next_scene_text?.trim().slice(0, SCENE_CONTEXT_MAX);
+  if (!prev && !next) return base;
+  return `${base}\n\nContexto del guion (solo para continuidad, NO lo ilustres):${prev ? `\n- Escena anterior: ${prev}` : ""}${next ? `\n- Escena siguiente: ${next}` : ""}`;
+}
+
+function buildSystemPrompt(input: GenerateVideoPromptInput): string {
+  let prompt = SYSTEM_PROMPT;
+  if (input.target === "image") {
+    prompt += `\n\nEl prompt es para un generador de IMAGENES (no de video): describi UNA sola composicion fija -- sin movimientos de camara ni acciones en secuencia.`;
+  }
+  if (input.visual_style?.trim()) {
+    prompt += `\n\nESTILO VISUAL OBLIGATORIO DEL CANAL (lo define el dueño del canal, tiene prioridad sobre cualquier otra idea de estilo):
+<<<
+${input.visual_style.trim()}
+>>>
+Reglas del estilo:
+- Cada prompt se usa SOLO, sin memoria de los anteriores: tiene que traer incorporados los rasgos clave del estilo (tecnica/medio, paleta, iluminacion, encuadre, nivel de detalle, personajes recurrentes si los define) para que todas las escenas del video se vean del mismo canal.
+- Primero el contenido de la escena (sujeto, accion, lugar) y despues los rasgos del estilo, en un solo parrafo.
+- Si el estilo prohibe algo (texto en pantalla, caras, colores, etc.), el prompt nunca lo pide.
+- El prompt sigue siendo EN INGLES aunque el estilo este escrito en otro idioma.`;
+  }
+  return prompt;
+}
 
 function buildUserPrompt(sceneText: string, videoTopic?: string, contentPolicy?: ContentPolicy): string {
   const topicLine = videoTopic ? `Tema general del video: ${videoTopic}\n` : "";
@@ -66,15 +106,22 @@ export const generateVideoPromptTool: ToolDefinition<
         type: "object",
         description: "Preferencias/restricciones visuales del proyecto (prefer/block/notes), opcional",
       },
+      visual_style: { type: "string", description: "Diseño visual del canal a respetar en el prompt (opcional)" },
+      previous_scene_text: { type: "string", description: "Narrativa de la escena anterior, para continuidad (opcional)" },
+      next_scene_text: { type: "string", description: "Narrativa de la escena siguiente, para continuidad (opcional)" },
+      target: { type: "string", enum: ["video", "image"], description: "Generador destino (default: video)" },
     },
     required: ["scene_text"],
   },
-  async execute({ scene_text, video_topic, content_policy }) {
+  async execute(input) {
+    const { scene_text } = input;
     const provider = await getActiveProvider("openai");
     if (!provider?.api_key) {
       // Sin OpenAI configurado, se cae a una descripcion generica derivada
-      // del texto tal cual -- peor calidad, pero no rompe el pipeline.
-      return { prompt: `Cinematic B-roll footage illustrating: ${scene_text}`.slice(0, 500) };
+      // del texto tal cual -- peor calidad, pero no rompe el pipeline. El
+      // estilo del canal va igual (pegado al final) para no perderlo.
+      const base = `${input.target === "image" ? "Illustration of" : "Cinematic B-roll footage illustrating"}: ${scene_text}`.slice(0, 500);
+      return { prompt: input.visual_style?.trim() ? `${base}\n\nStyle: ${input.visual_style.trim()}` : base };
     }
 
     const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_MODEL;
@@ -90,8 +137,8 @@ export const generateVideoPromptTool: ToolDefinition<
           model,
           response_format: { type: "json_object" },
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: buildUserPrompt(scene_text, video_topic, content_policy) },
+            { role: "system", content: buildSystemPrompt(input) },
+            { role: "user", content: buildUserPromptWithContext(input) },
           ],
         }),
       });

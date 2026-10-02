@@ -83,11 +83,17 @@ export default function BatchVisualsModal({
       for (const row of rows) next[row.sceneId] = row.imagePrompt ?? "";
       return next;
     });
-    const promptById = new Map(rows.map((r) => [r.sceneId, r.imagePrompt]));
+    const rowById = new Map(rows.map((r) => [r.sceneId, r]));
     onScenesUpdated(
       scenesRef.current.map((s) => {
-        const prompt = promptById.get(s.id);
-        return prompt ? { ...s, imagePrompt: prompt } : s;
+        const row = rowById.get(s.id);
+        if (!row?.imagePrompt) return s;
+        return {
+          ...s,
+          imagePrompt: row.imagePrompt,
+          imagePromptEdited: row.imagePromptEdited,
+          ...(row.imagePromptStyleKey ? { imagePromptStyleKey: row.imagePromptStyleKey } : {}),
+        };
       })
     );
   };
@@ -102,9 +108,13 @@ export default function BatchVisualsModal({
     }
   };
 
-  useEffect(() => {
+  const reloadAllPrompts = () => {
     setLoadingPrompts(true);
     loadPrompts().finally(() => setLoadingPrompts(false));
+  };
+
+  useEffect(() => {
+    reloadAllPrompts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -125,7 +135,7 @@ export default function BatchVisualsModal({
     const current = prompts.find((p) => p.sceneId === sceneId);
     if (!scene || !text || text === (current?.imagePrompt ?? "")) return;
     try {
-      const updated = await projectsService.updateScene(sceneId, projectId, { ...scene, imagePrompt: text });
+      const updated = await projectsService.updateScene(sceneId, projectId, { ...scene, imagePrompt: text, imagePromptEdited: true });
       onScenesUpdated(scenesRef.current.map((s) => (s.id === sceneId ? updated : s)));
       setPrompts((prev) => prev.map((p) => (p.sceneId === sceneId ? { ...p, imagePrompt: text, error: undefined } : p)));
     } catch (err) {
@@ -396,7 +406,7 @@ export default function BatchVisualsModal({
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
                   <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
                   <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                    Armando los prompts de {scenes.length} escenas...
+                    Leyendo el guion completo y armando los prompts de {scenes.length} escenas en secuencia...
                   </p>
                 </div>
               ) : (
