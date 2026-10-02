@@ -41,6 +41,15 @@ corrida sigue con la próxima. Al final: **↻ Reintentar fallidas**. Si querés
 cambiar el prompt de una que falló, editalo en la app y volvé a *Cargar
 prompts* con *Solo escenas sin visual*.
 
+## Diseño visual del canal
+
+Los prompts que manda la extensión ya traen incorporado el **diseño visual
+del canal** que se configura en la app (Equipo → *Recursos compartidos del
+canal*), además de lo que cuenta cada escena y las escenas de al lado. Si
+cambiás el diseño, al volver a tocar *Cargar prompts del proyecto* se rehacen
+solos los prompts armados con el diseño anterior (los que editaste a mano en
+la app no se tocan; para esos usá *Otro prompt*).
+
 ## Si Flow cambia y deja de andar
 
 Flow no tiene API: la extensión "maneja" la página como lo harías vos. Si

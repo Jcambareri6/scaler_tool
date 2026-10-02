@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { randomBytes } from "crypto";
 import { supabase } from "../../lib/supabase.js";
 import { getWorkspaceRole, roleAtLeast, type WorkspaceRole } from "../../lib/ownership.js";
+import { CHANNEL_TEXT_MAX } from "../../lib/channelSettings.js";
 
 // Modelo copiado de Drive (unidades compartidas) / Figma teams / Frame.io:
 // cada usuario tiene un workspace personal que se crea solo, y puede crear
@@ -420,6 +421,68 @@ export async function acceptInvite(req: Request, res: Response) {
       .eq("id", invite.id);
 
     return res.status(200).json({ workspace_id: invite.workspace_id, role: existingRole ?? invite.role });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// --- recursos compartidos del canal ---------------------------------------
+// Idioma, estilo de narracion y diseño visual del canal (ver
+// lib/channelSettings.ts). Los ve cualquier miembro; los cambia admin+,
+// mismo criterio que renombrar el workspace.
+
+const CHANNEL_FIELDS = ["channel_language", "narration_style", "visual_style_prompt"] as const;
+
+export async function getChannelSettings(req: Request, res: Response) {
+  try {
+    const { workspace_id } = req.params;
+    const role = await getWorkspaceRole(workspace_id, req.user!.id);
+    if (!roleAtLeast(role, "viewer")) return res.status(404).json({ error: "Workspace not found" });
+
+    const { data, error } = await supabase
+      .from("workspaces")
+      .select("id, channel_language, narration_style, visual_style_prompt")
+      .eq("id", workspace_id as string)
+      .single();
+    if (error || !data) return res.status(404).json({ error: "Workspace not found" });
+
+    return res.status(200).json({ ...data, can_edit: roleAtLeast(role, "admin") });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+export async function updateChannelSettings(req: Request, res: Response) {
+  try {
+    const { workspace_id } = req.params;
+    const role = await getWorkspaceRole(workspace_id, req.user!.id);
+    if (!roleAtLeast(role, "admin")) return res.status(404).json({ error: "Workspace not found" });
+
+    // Solo se tocan los campos que vienen; "" o null borra el campo.
+    const patch: Record<string, string | null> = {};
+    for (const field of CHANNEL_FIELDS) {
+      if (!(field in (req.body ?? {}))) continue;
+      const value = req.body[field];
+      if (value !== null && typeof value !== "string") {
+        return res.status(400).json({ error: `${field} debe ser texto` });
+      }
+      const trimmed = typeof value === "string" ? value.trim() : "";
+      if (trimmed.length > CHANNEL_TEXT_MAX) {
+        return res.status(400).json({ error: `${field} supera ${CHANNEL_TEXT_MAX} caracteres` });
+      }
+      patch[field] = trimmed || null;
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: "Nada para actualizar" });
+
+    const { data, error } = await supabase
+      .from("workspaces")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", workspace_id as string)
+      .select("id, channel_language, narration_style, visual_style_prompt")
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+
+    return res.status(200).json({ ...data, can_edit: true });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

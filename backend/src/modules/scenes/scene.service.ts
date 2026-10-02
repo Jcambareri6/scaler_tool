@@ -24,6 +24,7 @@ import type {
 } from "../../tools/generateVideoPrompt.tool.js";
 import type { GenerateImageInput, GenerateImageOutput } from "../../tools/generateImage.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
+import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 
 // Tope de seguridad, mismo criterio que orchestrator.ts::generateAiVisual --
 // evita gasto descontrolado si generate_video devolviera duration_seconds 0.
@@ -254,12 +255,15 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
         }
         const videoTopic = (project as { title?: string }).title;
         const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+        const { visual_style_prompt: visualStyle } = await getChannelSettingsForProject(project.id);
         const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
           "generate_video_prompt",
           {
             scene_text: sceneText,
+            target: source === "ai_image" ? "image" : "video",
             ...(videoTopic ? { video_topic: videoTopic } : {}),
             ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+            ...(visualStyle ? { visual_style: visualStyle } : {}),
           },
           { userId }
         );

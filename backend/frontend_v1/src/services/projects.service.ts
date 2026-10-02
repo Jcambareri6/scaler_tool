@@ -221,7 +221,7 @@ export const projectsService = {
     const script = await this.getScript(projectId);
     if (!script) throw new Error("El proyecto todavía no tiene guion");
     const rows = await api.post<
-      { scene_id: string; order: number; text: string; image_prompt: string | null; has_visual: boolean; error?: string }[]
+      { scene_id: string; order: number; text: string; image_prompt: string | null; image_prompt_style_key?: string | null; image_prompt_edited?: boolean; has_visual: boolean; error?: string }[]
     >(`/scripts/${script.id}/scenes/image-prompts`, {
       ...(options?.regenerate ? { regenerate: true } : {}),
       ...(options?.sceneIds ? { scene_ids: options.sceneIds } : {}),
@@ -231,6 +231,8 @@ export const projectsService = {
       order: r.order,
       text: r.text,
       imagePrompt: r.image_prompt,
+      imagePromptStyleKey: r.image_prompt_style_key ?? null,
+      imagePromptEdited: r.image_prompt_edited === true,
       hasVisual: r.has_visual,
       ...(r.error ? { error: r.error } : {}),
     }));

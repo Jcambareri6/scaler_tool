@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
 import { filesService } from "@/services/files.service";
+import { workspacesService } from "@/services/workspaces.service";
+import { LANGUAGES, languageLabel } from "@/lib/languages";
 import type { Script, VideoProject, ScriptStyle } from "@/types";
 
 interface Props {
@@ -17,17 +19,9 @@ interface Props {
 // panel. Aca solo queda elegir CUAL estilo (ya creado) usar para el guion
 // de este proyecto puntual, que si es un concern de Script.
 
-// El value es lo que recibe el LLM ("escribi el guion en <value>"); vacio =
-// automatico (el idioma de la idea / del estilo, como antes).
-const LANGUAGES = [
-  { value: "", label: "Automático" },
-  { value: "español", label: "Español" },
-  { value: "inglés", label: "Inglés" },
-  { value: "portugués", label: "Portugués" },
-  { value: "francés", label: "Francés" },
-  { value: "italiano", label: "Italiano" },
-  { value: "alemán", label: "Alemán" },
-];
+// Idioma vacio = el del canal (recursos compartidos del workspace) si esta
+// configurado; si no, el de la idea / del estilo, como antes. El backend
+// resuelve ese default solo (generateScript.tool.ts).
 
 export default function ScriptPanel({ projectId, project }: Props) {
   const [script, setScript] = useState<Script | null>(null);
@@ -52,6 +46,20 @@ export default function ScriptPanel({ projectId, project }: Props) {
   const [referenceScript, setReferenceScript] = useState("");
   const [keyPoints, setKeyPoints] = useState("");
   const [language, setLanguage] = useState("");
+  const [channelLanguage, setChannelLanguage] = useState<string | null>(null);
+  const [hasNarrationStyle, setHasNarrationStyle] = useState(false);
+
+  useEffect(() => {
+    workspacesService
+      .projectChannelSettings(projectId)
+      .then((settings) => {
+        setChannelLanguage(settings.channelLanguage || null);
+        setHasNarrationStyle(!!settings.narrationStyle);
+      })
+      .catch(() => {
+        // No bloqueante: sin esto el selector queda en "Automático" como antes.
+      });
+  }, [projectId]);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Muestra el editor vacio para escribir/pegar un guion propio sin tener
@@ -287,10 +295,19 @@ export default function ScriptPanel({ projectId, project }: Props) {
           >
             {LANGUAGES.map((l) => (
               <option key={l.value} value={l.value}>
-                {l.label}
+                {!l.value && channelLanguage ? `Del canal (${languageLabel(channelLanguage)})` : l.label}
               </option>
             ))}
           </select>
+          {hasNarrationStyle && (
+            <span
+              className="text-[11px]"
+              style={{ color: "var(--muted-foreground)" }}
+              title="Configurado en Equipo → Recursos compartidos del canal"
+            >
+              · Usa el estilo de narración del canal
+            </span>
+          )}
           <Link
             to="/script-styles"
             className="text-[11px] transition-opacity hover:opacity-80"

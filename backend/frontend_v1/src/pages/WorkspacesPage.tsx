@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/authContext";
 import { useToast } from "@/lib/toastContext";
 import ConfirmModal from "@/components/ConfirmModal";
+import ChannelResourcesPanel from "@/features/workspaces/ChannelResourcesPanel";
 import { workspacesService, ROLE_LABELS, ROLE_DESCRIPTIONS } from "@/services/workspaces.service";
 import type { Workspace, WorkspaceMember, WorkspaceInvite, WorkspaceRole, MyInvite } from "@/types";
 
@@ -277,6 +278,8 @@ export default function WorkspacesPage() {
                 )}
               </div>
             </div>
+
+            <ChannelResourcesPanel workspaceId={selected.id} />
 
             {canManage && (
               <div className="rounded-2xl p-5 space-y-3" style={cardStyle}>

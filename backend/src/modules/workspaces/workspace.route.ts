@@ -12,6 +12,8 @@ import {
   listMyInvites,
   getInvite,
   acceptInvite,
+  getChannelSettings,
+  updateChannelSettings,
 } from "./workspace.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
@@ -24,6 +26,8 @@ workspaceRouter.delete("/:workspace_id", authMiddleware, deleteWorkspace);
 workspaceRouter.get("/:workspace_id/members", authMiddleware, listMembers);
 workspaceRouter.patch("/:workspace_id/members/:user_id", authMiddleware, updateMemberRole);
 workspaceRouter.delete("/:workspace_id/members/:user_id", authMiddleware, removeMember);
+workspaceRouter.get("/:workspace_id/channel-settings", authMiddleware, getChannelSettings);
+workspaceRouter.patch("/:workspace_id/channel-settings", authMiddleware, updateChannelSettings);
 workspaceRouter.post("/:workspace_id/invites", authMiddleware, createInvite);
 workspaceRouter.delete("/:workspace_id/invites/:invite_id", authMiddleware, revokeInvite);
 

@@ -83,11 +83,17 @@ export default function BatchVisualsModal({
       for (const row of rows) next[row.sceneId] = row.imagePrompt ?? "";
       return next;
     });
-    const promptById = new Map(rows.map((r) => [r.sceneId, r.imagePrompt]));
+    const rowById = new Map(rows.map((r) => [r.sceneId, r]));
     onScenesUpdated(
       scenesRef.current.map((s) => {
-        const prompt = promptById.get(s.id);
-        return prompt ? { ...s, imagePrompt: prompt } : s;
+        const row = rowById.get(s.id);
+        if (!row?.imagePrompt) return s;
+        return {
+          ...s,
+          imagePrompt: row.imagePrompt,
+          imagePromptEdited: row.imagePromptEdited,
+          ...(row.imagePromptStyleKey ? { imagePromptStyleKey: row.imagePromptStyleKey } : {}),
+        };
       })
     );
   };
@@ -125,7 +131,7 @@ export default function BatchVisualsModal({
     const current = prompts.find((p) => p.sceneId === sceneId);
     if (!scene || !text || text === (current?.imagePrompt ?? "")) return;
     try {
-      const updated = await projectsService.updateScene(sceneId, projectId, { ...scene, imagePrompt: text });
+      const updated = await projectsService.updateScene(sceneId, projectId, { ...scene, imagePrompt: text, imagePromptEdited: true });
       onScenesUpdated(scenesRef.current.map((s) => (s.id === sceneId ? updated : s)));
       setPrompts((prev) => prev.map((p) => (p.sceneId === sceneId ? { ...p, imagePrompt: text, error: undefined } : p)));
     } catch (err) {

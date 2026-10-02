@@ -50,6 +50,8 @@ export interface Scene {
   narrativeContent: string;
   visualPrompt?: string;
   imagePrompt?: string;
+  imagePromptStyleKey?: string;
+  imagePromptEdited?: boolean;
   visualStatus: SceneVisualStatus;
   duration: string;
 }
@@ -73,6 +75,8 @@ export interface SceneImagePrompt {
   order: number;
   text: string;
   imagePrompt: string | null;
+  imagePromptStyleKey: string | null;
+  imagePromptEdited: boolean;
   hasVisual: boolean;
   error?: string;
 }

@@ -9,6 +9,7 @@ import type {
   GenerateVideoPromptOutput,
 } from "../../tools/generateVideoPrompt.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
+import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
@@ -38,7 +39,16 @@ export interface SceneImagePrompt {
   text: string;
   image_prompt: string | null;
   has_visual: boolean;
+  // Para que el frontend los conserve al guardar la escena (el PATCH
+  // reemplaza content entero).
+  image_prompt_style_key: string | null;
+  image_prompt_edited: boolean;
   error?: string;
+}
+
+function textOf(scene: SceneRow | undefined): string {
+  const text = scene?.content?.text;
+  return typeof text === "string" ? text : "";
 }
 
 // POST /scripts/:script_id/scenes/image-prompts
@@ -48,6 +58,11 @@ export interface SceneImagePrompt {
 // y exportar de nuevo sin perderlos); solo se generan los que faltan, salvo
 // regenerate=true (opcionalmente limitado a scene_ids). Un fallo del LLM en
 // una escena no corta el resto: esa escena vuelve con `error`.
+// Diseño visual del canal: cada prompt guarda la huella del estilo con el
+// que se armo (imagePromptStyleKey). Si el estilo del workspace cambia, los
+// prompts armados con otro estilo se regeneran solos -- salvo los que el
+// usuario edito a mano (imagePromptEdited), que no se pisan nunca sin
+// regenerate explicito.
 export async function generateSceneImagePrompts(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
@@ -96,8 +111,11 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       : null;
     const videoTopic = (project as { title?: string }).title;
     const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+    const channel = await getChannelSettingsForProject(project.id);
+    const visualStyle = channel.visual_style_prompt;
+    const styleKey = visualStyleKey(visualStyle);
 
-    const result = await mapWithConcurrency(sceneList, PROMPT_CONCURRENCY, async (scene): Promise<SceneImagePrompt> => {
+    const result = await mapWithConcurrency(sceneList, PROMPT_CONCURRENCY, async (scene, index): Promise<SceneImagePrompt> => {
       const content = scene.content ?? {};
       const text = typeof content.text === "string" ? content.text : "";
       const existing =
@@ -107,9 +125,16 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
         order: scene.order,
         text,
         has_visual: scenesWithVisual.has(scene.id),
+        image_prompt_style_key: typeof content.imagePromptStyleKey === "string" ? content.imagePromptStyleKey : null,
+        image_prompt_edited: content.imagePromptEdited === true,
       };
 
-      const shouldGenerate = regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing;
+      // Prompts viejos (sin huella) se consideran armados "sin estilo".
+      const storedKey = typeof content.imagePromptStyleKey === "string" ? content.imagePromptStyleKey : "none";
+      const editedByUser = content.imagePromptEdited === true;
+      const staleStyle = !!existing && !editedByUser && storedKey !== styleKey;
+      const shouldGenerate =
+        regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing || staleStyle;
       if (!shouldGenerate) return { ...base, image_prompt: existing };
       if (!text.trim()) {
         return { ...base, image_prompt: existing, error: "La escena no tiene narrativa para derivar el prompt" };
@@ -120,8 +145,12 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
           "generate_video_prompt",
           {
             scene_text: text,
+            target: "image",
             ...(videoTopic ? { video_topic: videoTopic } : {}),
             ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+            ...(visualStyle ? { visual_style: visualStyle } : {}),
+            ...(textOf(sceneList[index - 1]) ? { previous_scene_text: textOf(sceneList[index - 1]) } : {}),
+            ...(textOf(sceneList[index + 1]) ? { next_scene_text: textOf(sceneList[index + 1]) } : {}),
           },
           { userId }
         );
@@ -131,10 +160,17 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
         const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
         const { error: updateError } = await supabase
           .from("scenes")
-          .update({ content: { ...((fresh?.content as Record<string, unknown> | null) ?? content), imagePrompt: prompt } })
+          .update({
+            content: {
+              ...((fresh?.content as Record<string, unknown> | null) ?? content),
+              imagePrompt: prompt,
+              imagePromptStyleKey: styleKey,
+              imagePromptEdited: false,
+            },
+          })
           .eq("id", scene.id);
         if (updateError) throw new Error(updateError.message);
-        return { ...base, image_prompt: prompt };
+        return { ...base, image_prompt: prompt, image_prompt_style_key: styleKey, image_prompt_edited: false };
       } catch (err) {
         return {
           ...base,

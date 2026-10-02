@@ -4,6 +4,7 @@ import type { Scene } from "../../types/shared/typeShared.js";
 import type { ProjectDetail } from "./projects.types.js"
 import { getOwnedProject, getWorkspaceRole, getMemberWorkspaceIds, roleAtLeast } from "../../lib/ownership.js";
 import { ensurePersonalWorkspace } from "../workspaces/workspace.service.js";
+import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 
 export async function createProject(req: Request, res: Response) {
   try {
@@ -333,5 +334,17 @@ export async function updateProject(req: Request, res: Response) {
     return res.status(500).json({
       error: "Internal server error",
     });
+  }
+}
+// Recursos compartidos del canal que aplican a ESTE proyecto (los de su
+// workspace) -- el panel de guion los usa para mostrar el idioma del canal
+// como default.
+export async function getProjectChannelSettings(req: Request, res: Response) {
+  try {
+    const access = await getOwnedProject(req.params.project_id, req.user!.id, "viewer");
+    if (!access) return res.status(404).json({ error: "Project not found" });
+    return res.status(200).json(await getChannelSettingsForProject(access.id));
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
   }
 }

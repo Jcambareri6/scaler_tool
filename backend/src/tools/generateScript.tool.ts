@@ -4,6 +4,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { getOwnedProject, getOwnedScriptStyle } from "../lib/ownership.js";
+import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { supabase } from "../lib/supabase.js";
 import { fetchWithTimeout } from "../lib/http.js";
 
@@ -89,6 +90,13 @@ function buildLanguageInstruction(language?: string): string {
   const trimmed = language?.trim();
   if (!trimmed) return "";
   return `\n\nIDIOMA OBLIGATORIO: escribi el titulo y el guion completo en ${trimmed}, aunque la idea, el guion de referencia o las instrucciones anteriores esten en otro idioma. Adapta expresiones y ejemplos para que suenen naturales en ${trimmed}, no traduzcas literal.`;
+}
+
+// Va antes del idioma (que tiene la ultima palabra) pero despues del Prompt
+// Maestro: es una regla del canal que aplica a todos sus guiones.
+function buildNarrationStyleInstruction(narrationStyle: string | null): string {
+  if (!narrationStyle) return "";
+  return `\n\nESTILO DE NARRACION DEL CANAL (obligatorio, aplica a todos los guiones del canal):\n<<<\n${narrationStyle}\n>>>\nRespeta este tono, ritmo y forma de narrar en todo el guion. Si choca con instrucciones genericas anteriores, manda este estilo; el formato de salida pedido no cambia.`;
 }
 
 const ANTHROPIC_FORMAT_INSTRUCTIONS =`Ademas de todas las reglas anteriores, entrega el resultado exclusivamente a traves de la tool "${RETURN_SCRIPT_TOOL_NAME}".`;
@@ -434,7 +442,12 @@ export const generateScriptTool: ToolDefinition<
       targetChars = input.approx_chars ?? defaultApproxChars;
       userPrompt = buildStyledUserPrompt(input, defaultApproxChars);
     }
-    systemPrompt += buildLanguageInstruction(input.language);
+    // Recursos compartidos del canal (workspace): el estilo de narracion se
+    // suma a lo anterior (prompt generico o Prompt Maestro), y el idioma del
+    // canal es el default cuando no se eligio uno para este guion.
+    const channel = await getChannelSettingsForProject(video_project_id);
+    systemPrompt += buildNarrationStyleInstruction(channel.narration_style);
+    systemPrompt += buildLanguageInstruction(input.language?.trim() || channel.channel_language || undefined);
 
     const generated =
       provider === "openai"

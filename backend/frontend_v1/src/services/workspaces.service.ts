@@ -81,7 +81,49 @@ export const ROLE_DESCRIPTIONS: Record<WorkspaceRole, string> = {
   viewer: "Solo ve proyectos y previews",
 };
 
+// Recursos compartidos del canal (ver backend lib/channelSettings.ts).
+export interface ChannelSettings {
+  channelLanguage: string;
+  narrationStyle: string;
+  visualStylePrompt: string;
+  canEdit: boolean;
+}
+
+interface ChannelSettingsRow {
+  channel_language: string | null;
+  narration_style: string | null;
+  visual_style_prompt: string | null;
+  can_edit?: boolean;
+}
+
+const mapChannelSettings = (row: ChannelSettingsRow): ChannelSettings => ({
+  channelLanguage: row.channel_language ?? "",
+  narrationStyle: row.narration_style ?? "",
+  visualStylePrompt: row.visual_style_prompt ?? "",
+  canEdit: !!row.can_edit,
+});
+
 export const workspacesService = {
+  async channelSettings(id: string): Promise<ChannelSettings> {
+    return mapChannelSettings(await api.get<ChannelSettingsRow>(`/workspaces/${id}/channel-settings`));
+  },
+
+  async updateChannelSettings(
+    id: string,
+    patch: Partial<Pick<ChannelSettings, "channelLanguage" | "narrationStyle" | "visualStylePrompt">>
+  ): Promise<ChannelSettings> {
+    const body: Record<string, string> = {};
+    if (patch.channelLanguage !== undefined) body.channel_language = patch.channelLanguage;
+    if (patch.narrationStyle !== undefined) body.narration_style = patch.narrationStyle;
+    if (patch.visualStylePrompt !== undefined) body.visual_style_prompt = patch.visualStylePrompt;
+    return mapChannelSettings(await api.patch<ChannelSettingsRow>(`/workspaces/${id}/channel-settings`, body));
+  },
+
+  // Los que aplican a un proyecto puntual (los de su workspace).
+  async projectChannelSettings(projectId: string): Promise<ChannelSettings> {
+    return mapChannelSettings(await api.get<ChannelSettingsRow>(`/projects/${projectId}/channel-settings`));
+  },
+
   async list(): Promise<Workspace[]> {
     const rows = await api.get<WorkspaceRow[]>("/workspaces");
     return rows.map(mapWorkspace);
