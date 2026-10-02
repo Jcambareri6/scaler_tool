@@ -1,6 +1,9 @@
 import type { Request, Response, NextFunction } from "express";
 import type { User } from "@supabase/supabase-js";
-import { supabase } from "../lib/supabase.js";
+import { createAuthClient } from "../lib/supabase.js";
+
+// getUser(token) solo valida el token, no guarda sesion: alcanza con uno.
+const authClient = createAuthClient();
 
 // Bypass de auth SOLO para desarrollo local -- mismo criterio que
 // MOCK_PROVIDERS (lib/mock.ts): requiere un env var EXPLICITO, nunca se
@@ -37,7 +40,9 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     }
     const token = authHeader.replace("Bearer ", "");
-    const { data : {user},error } = await supabase.auth.getUser(token);
+    // Cliente de sesion aparte (ver lib/supabase.ts): el del backend nunca
+    // toca auth, asi ninguna sesion de usuario se le queda pegada.
+    const { data : {user},error } = await authClient.auth.getUser(token);
     if (error  || !user ){
         return res.status(401).json({ error: "invalid or expired token" });
     }
