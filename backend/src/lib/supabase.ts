@@ -37,5 +37,8 @@ export const supabase = createClient(
 export function createAuthClient() {
   return createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    // Igual que el cliente del backend: en Node < 22 supabase-js tira error
+    // al crear el cliente si no le pasan un WebSocket (aunque no use realtime).
+    realtime: { transport: ws as any },
   });
 }
