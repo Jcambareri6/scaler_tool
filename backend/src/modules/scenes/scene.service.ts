@@ -255,7 +255,14 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
         }
         const videoTopic = (project as { title?: string }).title;
         const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
-        const { visual_style_prompt: visualStyle } = await getChannelSettingsForProject(project.id);
+        const { visual_style_prompt: channelStyle } = await getChannelSettingsForProject(project.id);
+        // Si el video ya tiene biblia visual (personajes/lugares fijos, ver
+        // sceneBatch.service.ts), va junto al diseño del canal para que esta
+        // escena no salga distinta al resto.
+        const bibleText = ((script as { visual_bible?: { text?: unknown } | null }).visual_bible?.text as string | undefined)?.trim();
+        const visualStyle = [channelStyle, bibleText ? `Biblia visual del video:\n${bibleText}` : null]
+          .filter(Boolean)
+          .join("\n\n") || null;
         const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
           "generate_video_prompt",
           {

@@ -11,6 +11,13 @@ export interface ChannelSettings {
   channel_language: string | null;
   narration_style: string | null;
   visual_style_prompt: string | null;
+  // Estilo de narracion (Prompt Maestro de script_styles) y voz por defecto
+  // del canal: los proyectos nuevos del workspace los traen precargados.
+  script_style_id: string | null;
+  voice_id: string | null;
+  // Resumen del estilo para mostrarlo a miembros que no son sus dueños
+  // (script_styles es por usuario, ver CLAUDE.md).
+  script_style: { id: string; name: string; status: string } | null;
 }
 
 const EMPTY: ChannelSettings = {
@@ -18,9 +25,12 @@ const EMPTY: ChannelSettings = {
   channel_language: null,
   narration_style: null,
   visual_style_prompt: null,
+  script_style_id: null,
+  voice_id: null,
+  script_style: null,
 };
 
-const COLUMNS = "id, channel_language, narration_style, visual_style_prompt";
+const COLUMNS = "id, channel_language, narration_style, visual_style_prompt, script_style_id, voice_id";
 
 // Topes para no mandarle al LLM un texto gigante en cada escena.
 export const CHANNEL_TEXT_MAX = 6000;
@@ -31,14 +41,28 @@ function clean(value: unknown): string | null {
   return trimmed ? trimmed.slice(0, CHANNEL_TEXT_MAX) : null;
 }
 
-function toSettings(row: Record<string, unknown> | null): ChannelSettings {
+async function toSettings(row: Record<string, unknown> | null): Promise<ChannelSettings> {
   if (!row) return EMPTY;
+  const scriptStyleId = typeof row.script_style_id === "string" ? row.script_style_id : null;
+  let scriptStyle: ChannelSettings["script_style"] = null;
+  if (scriptStyleId) {
+    const { data } = await supabase.from("script_styles").select("id, name, status").eq("id", scriptStyleId).maybeSingle();
+    if (data) scriptStyle = { id: data.id as string, name: data.name as string, status: data.status as string };
+  }
   return {
     workspace_id: (row.id as string) ?? null,
     channel_language: clean(row.channel_language),
     narration_style: clean(row.narration_style),
     visual_style_prompt: clean(row.visual_style_prompt),
+    script_style_id: scriptStyle ? scriptStyleId : null,
+    voice_id: typeof row.voice_id === "string" && row.voice_id ? row.voice_id : null,
+    script_style: scriptStyle,
   };
+}
+
+export async function getChannelSettingsForWorkspace(workspaceId: string): Promise<ChannelSettings> {
+  const { data } = await supabase.from("workspaces").select(COLUMNS).eq("id", workspaceId).maybeSingle();
+  return toSettings(data);
 }
 
 // No valida acceso: el caller ya resolvio el proyecto con getOwnedProject.
@@ -50,10 +74,7 @@ export async function getChannelSettingsForProject(projectId: string): Promise<C
     .single();
   if (!project) return EMPTY;
 
-  if (project.workspace_id) {
-    const { data } = await supabase.from("workspaces").select(COLUMNS).eq("id", project.workspace_id).maybeSingle();
-    return toSettings(data);
-  }
+  if (project.workspace_id) return getChannelSettingsForWorkspace(project.workspace_id);
 
   const { data } = await supabase
     .from("workspaces")

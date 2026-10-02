@@ -1,25 +1,40 @@
 import type { Request, Response } from "express";
+import { createHash } from "crypto";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedScript } from "../../lib/ownership.js";
 import { mapWithConcurrency } from "../../lib/concurrency.js";
 import { runTool } from "../../tools/index.js";
 import { setUploadedVisualForScene, uploadSceneAssetFile } from "../../lib/stockSegments.js";
 import type {
-  GenerateVideoPromptInput,
-  GenerateVideoPromptOutput,
-} from "../../tools/generateVideoPrompt.tool.js";
+  GenerateVisualBibleInput,
+  GenerateVisualBibleOutput,
+  GenerateImagePromptSequenceInput,
+  GenerateImagePromptSequenceOutput,
+  SequenceScene,
+} from "../../tools/generateImagePromptSequence.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
 import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
-// exporta numerados; 2) el usuario genera en la herramienta externa y sube
-// todo junto -- el frontend empareja cada archivo con su escena (por numero
-// en el nombre o por orden) y lo manda aca en tandas chicas.
+// exporta numerados (o la extension los manda sola a Flow); 2) el resultado
+// se sube a su escena en tandas chicas.
+//
+// Continuidad visual: los prompts NO se arman escena por escena sueltas
+// (asi cada imagen salia distinta). Primero se arma la biblia visual del
+// video (guion completo + diseño visual del canal: personajes, lugares,
+// epoca, paleta) y despues los prompts por tramos de escenas consecutivas
+// siguiendo esa biblia -- ver tools/generateImagePromptSequence.tool.ts.
 
-// Pedidos simultaneos al LLM al armar los prompts -- mismo orden de
-// magnitud que el pipeline (ver orchestrator.ts).
-const PROMPT_CONCURRENCY = 4;
+// Escenas por llamada al LLM: suficientes para que encadene un tramo de la
+// historia, pocas para que no se "olvide" de ninguna.
+const SEQUENCE_CHUNK_SIZE = 8;
+// Tramos en paralelo (cada uno ya lleva toda la biblia, asi que no pierden
+// consistencia entre si).
+const SEQUENCE_CONCURRENCY = 3;
+// Escenas vecinas que se pasan como contexto antes/despues de cada tramo.
+const CONTEXT_BEFORE = 2;
+const CONTEXT_AFTER = 1;
 // Subidas a Storage simultaneas dentro de una tanda.
 const UPLOAD_CONCURRENCY = 3;
 // Tope de archivos por request: el frontend manda tandas chicas (los
@@ -46,9 +61,152 @@ export interface SceneImagePrompt {
   error?: string;
 }
 
+interface StoredVisualBible {
+  text: string;
+  key: string;
+  edited: boolean;
+  updated_at: string;
+}
+
 function textOf(scene: SceneRow | undefined): string {
   const text = scene?.content?.text;
   return typeof text === "string" ? text : "";
+}
+
+// "00:12 - 00:20" a partir de timeStart/timeEnd (los arma build_scenes).
+function timeOf(scene: SceneRow): string | undefined {
+  const start = scene.content?.timeStart;
+  const end = scene.content?.timeEnd;
+  if (typeof start !== "string" || !start) return undefined;
+  return typeof end === "string" && end ? `${start} - ${end}` : start;
+}
+
+function sequenceSceneOf(scene: SceneRow): SequenceScene {
+  const time = timeOf(scene);
+  return { order: scene.order, text: textOf(scene), ...(time ? { time } : {}) };
+}
+
+function promptOf(scene: SceneRow | undefined): string | null {
+  const prompt = scene?.content?.imagePrompt;
+  return typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
+}
+
+function hashOf(...parts: string[]): string {
+  return createHash("sha1").update(parts.join("\u0000")).digest("hex").slice(0, 12);
+}
+
+function missingColumnError(message: string): Error {
+  return /visual_bible|column/i.test(message)
+    ? new Error("Falta correr la migracion 20261002010000_workspace_defaults_visual_bible.sql en Supabase")
+    : new Error(message);
+}
+
+function readStoredBible(value: unknown): StoredVisualBible | null {
+  const v = value as Partial<StoredVisualBible> | null;
+  if (!v || typeof v.text !== "string") return null;
+  return { text: v.text, key: typeof v.key === "string" ? v.key : "", edited: v.edited === true, updated_at: v.updated_at ?? "" };
+}
+
+interface VisualContext {
+  projectId: string;
+  scriptId: string;
+  videoTopic?: string;
+  contentPolicy?: ContentPolicy;
+  visualStyle: string | null;
+  userId: string;
+}
+
+async function loadScenes(scriptId: string): Promise<SceneRow[]> {
+  const { data, error } = await supabase
+    .from("scenes")
+    .select("id, order, content")
+    .eq("script_id", scriptId)
+    .order("order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SceneRow[];
+}
+
+// Huella de "con que guion y que diseño se armo la biblia": si cambia el
+// guion de las escenas o el diseño del canal, la biblia vieja ya no sirve.
+function bibleKeyFor(scenes: SceneRow[], visualStyle: string | null): string {
+  return hashOf(visualStyle ?? "", ...scenes.map((s) => `${s.order}:${textOf(s)}`));
+}
+
+async function saveBible(scriptId: string, bible: StoredVisualBible | null): Promise<void> {
+  const { error } = await supabase.from("scripts").update({ visual_bible: bible }).eq("id", scriptId);
+  if (error) throw missingColumnError(error.message);
+}
+
+// Devuelve la biblia vigente: la guardada si sigue valiendo (o si el usuario
+// la edito a mano), o una nueva generada con el guion completo.
+async function ensureVisualBible(
+  ctx: VisualContext,
+  scenes: SceneRow[],
+  options: { force?: boolean } = {}
+): Promise<StoredVisualBible> {
+  const { data: script, error } = await supabase.from("scripts").select("visual_bible").eq("id", ctx.scriptId).single();
+  if (error) throw missingColumnError(error.message);
+
+  const key = bibleKeyFor(scenes, ctx.visualStyle);
+  const stored = readStoredBible(script?.visual_bible);
+  if (stored && !options.force && (stored.edited || stored.key === key)) return stored;
+
+  const sequenceScenes: SequenceScene[] = scenes.filter((s) => textOf(s).trim()).map(sequenceSceneOf);
+  const { bible } = await runTool<GenerateVisualBibleInput, GenerateVisualBibleOutput>(
+    "generate_visual_bible",
+    {
+      scenes: sequenceScenes,
+      ...(ctx.videoTopic ? { video_topic: ctx.videoTopic } : {}),
+      ...(ctx.visualStyle ? { visual_style: ctx.visualStyle } : {}),
+      ...(ctx.contentPolicy ? { content_policy: ctx.contentPolicy } : {}),
+    },
+    { userId: ctx.userId }
+  );
+  const next: StoredVisualBible = { text: bible, key, edited: false, updated_at: new Date().toISOString() };
+  await saveBible(ctx.scriptId, next);
+  return next;
+}
+
+async function loadVisualContext(scriptId: string, videoProjectId: string, userId: string): Promise<VisualContext> {
+  const { data: project, error } = await supabase
+    .from("video_projects")
+    .select("id, title, content_policy")
+    .eq("id", videoProjectId)
+    .single();
+  if (error || !project) throw new Error("Project not found");
+  const channel = await getChannelSettingsForProject(project.id);
+  const videoTopic = (project as { title?: string }).title;
+  const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
+  return {
+    projectId: project.id,
+    scriptId,
+    ...(videoTopic ? { videoTopic } : {}),
+    ...(contentPolicy ? { contentPolicy } : {}),
+    visualStyle: channel.visual_style_prompt,
+    userId,
+  };
+}
+
+// Corta las escenas a generar en tramos de escenas CONSECUTIVAS (un hueco
+// -- una escena que no se regenera -- corta el tramo), de a lo sumo
+// SEQUENCE_CHUNK_SIZE.
+function consecutiveChunks(scenes: SceneRow[], needs: Set<string>): number[][] {
+  const chunks: number[][] = [];
+  let current: number[] = [];
+  scenes.forEach((scene, index) => {
+    if (needs.has(scene.id)) {
+      current.push(index);
+      if (current.length >= SEQUENCE_CHUNK_SIZE) {
+        chunks.push(current);
+        current = [];
+      }
+    } else if (current.length) {
+      chunks.push(current);
+      current = [];
+    }
+  });
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 // POST /scripts/:script_id/scenes/image-prompts
@@ -57,12 +215,11 @@ function textOf(scene: SceneRow | undefined): string {
 // scene.content.imagePrompt se reusan (asi el usuario puede editarlos a mano
 // y exportar de nuevo sin perderlos); solo se generan los que faltan, salvo
 // regenerate=true (opcionalmente limitado a scene_ids). Un fallo del LLM en
-// una escena no corta el resto: esa escena vuelve con `error`.
-// Diseño visual del canal: cada prompt guarda la huella del estilo con el
-// que se armo (imagePromptStyleKey). Si el estilo del workspace cambia, los
-// prompts armados con otro estilo se regeneran solos -- salvo los que el
-// usuario edito a mano (imagePromptEdited), que no se pisan nunca sin
-// regenerate explicito.
+// un tramo no corta el resto: esas escenas vuelven con `error`.
+// Cada prompt guarda la huella (imagePromptStyleKey) del diseño del canal +
+// biblia con que se armo: si cualquiera de los dos cambia, los prompts viejos
+// se rehacen solos -- salvo los editados a mano (imagePromptEdited), que no
+// se pisan nunca sin regenerate explicito.
 export async function generateSceneImagePrompts(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
@@ -74,23 +231,7 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       return res.status(404).json({ error: "Script not found" });
     }
 
-    const { data: project, error: projectError } = await supabase
-      .from("video_projects")
-      .select("id, title, content_policy")
-      .eq("id", script.video_project_id)
-      .single();
-    if (projectError || !project) {
-      return res.status(404).json({ error: "Project not found" });
-    }
-
-    const { data: scenes, error: scenesError } = await supabase
-      .from("scenes")
-      .select("id, order, content")
-      .eq("script_id", script_id)
-      .order("order", { ascending: true });
-    if (scenesError) return res.status(400).json({ error: scenesError.message });
-
-    const sceneList = (scenes ?? []) as SceneRow[];
+    const sceneList = await loadScenes(script.id);
     if (sceneList.length === 0) {
       return res.status(400).json({ error: "El guion todavia no tiene escenas" });
     }
@@ -109,78 +250,176 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
     const onlyIds = Array.isArray(scene_ids)
       ? new Set(scene_ids.filter((id): id is string => typeof id === "string"))
       : null;
-    const videoTopic = (project as { title?: string }).title;
-    const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
-    const channel = await getChannelSettingsForProject(project.id);
-    const visualStyle = channel.visual_style_prompt;
-    const styleKey = visualStyleKey(visualStyle);
 
-    const result = await mapWithConcurrency(sceneList, PROMPT_CONCURRENCY, async (scene, index): Promise<SceneImagePrompt> => {
-      const content = scene.content ?? {};
-      const text = typeof content.text === "string" ? content.text : "";
-      const existing =
-        typeof content.imagePrompt === "string" && content.imagePrompt.trim() ? content.imagePrompt.trim() : null;
-      const base = {
-        scene_id: scene.id,
-        order: scene.order,
-        text,
-        has_visual: scenesWithVisual.has(scene.id),
-        image_prompt_style_key: typeof content.imagePromptStyleKey === "string" ? content.imagePromptStyleKey : null,
-        image_prompt_edited: content.imagePromptEdited === true,
-      };
+    let ctx: VisualContext;
+    let bible: StoredVisualBible;
+    try {
+      ctx = await loadVisualContext(script.id, script.video_project_id, userId);
+      bible = await ensureVisualBible(ctx, sceneList);
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo armar la biblia visual" });
+    }
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), bible.text);
 
-      // Prompts viejos (sin huella) se consideran armados "sin estilo".
-      const storedKey = typeof content.imagePromptStyleKey === "string" ? content.imagePromptStyleKey : "none";
-      const editedByUser = content.imagePromptEdited === true;
-      const staleStyle = !!existing && !editedByUser && storedKey !== styleKey;
-      const shouldGenerate =
-        regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing || staleStyle;
-      if (!shouldGenerate) return { ...base, image_prompt: existing };
-      if (!text.trim()) {
-        return { ...base, image_prompt: existing, error: "La escena no tiene narrativa para derivar el prompt" };
+    const errors = new Map<string, string>();
+    const needs = new Set<string>();
+    for (const scene of sceneList) {
+      const existing = promptOf(scene);
+      const storedKey = typeof scene.content?.imagePromptStyleKey === "string" ? scene.content.imagePromptStyleKey : "none";
+      const editedByUser = scene.content?.imagePromptEdited === true;
+      const stale = !!existing && !editedByUser && storedKey !== contextKey;
+      const wanted = regenerate === true ? !onlyIds || onlyIds.has(scene.id) : !existing || stale;
+      if (!wanted) continue;
+      if (!textOf(scene).trim()) {
+        errors.set(scene.id, "La escena no tiene narrativa para derivar el prompt");
+        continue;
       }
+      needs.add(scene.id);
+    }
+
+    const fullScript = sceneList.filter((s) => textOf(s).trim()).map(sequenceSceneOf);
+    const generated = new Map<string, string>();
+    await mapWithConcurrency(consecutiveChunks(sceneList, needs), SEQUENCE_CONCURRENCY, async (indexes) => {
+      const chunkScenes = indexes.map((i) => sceneList[i]!);
+      const first = indexes[0]!;
+      const last = indexes[indexes.length - 1]!;
+      const neighbor = (scene: SceneRow) => {
+        // El prompt viejo de una vecina sirve de referencia solo si no se
+        // esta rehaciendo en esta misma corrida.
+        const prompt = needs.has(scene.id) ? null : promptOf(scene);
+        return { ...sequenceSceneOf(scene), ...(prompt ? { prompt } : {}) };
+      };
+      const before = sceneList.slice(Math.max(0, first - CONTEXT_BEFORE), first).filter((s) => textOf(s).trim());
+      const after = sceneList.slice(last + 1, last + 1 + CONTEXT_AFTER).filter((s) => textOf(s).trim());
 
       try {
-        const { prompt } = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
-          "generate_video_prompt",
+        const { prompts } = await runTool<GenerateImagePromptSequenceInput, GenerateImagePromptSequenceOutput>(
+          "generate_image_prompt_sequence",
           {
-            scene_text: text,
-            target: "image",
-            ...(videoTopic ? { video_topic: videoTopic } : {}),
-            ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-            ...(visualStyle ? { visual_style: visualStyle } : {}),
-            ...(textOf(sceneList[index - 1]) ? { previous_scene_text: textOf(sceneList[index - 1]) } : {}),
-            ...(textOf(sceneList[index + 1]) ? { next_scene_text: textOf(sceneList[index + 1]) } : {}),
+            bible: bible.text,
+            scenes: chunkScenes.map(sequenceSceneOf),
+            full_script: fullScript,
+            context_before: before.map(neighbor),
+            context_after: after.map(neighbor),
+            ...(ctx.videoTopic ? { video_topic: ctx.videoTopic } : {}),
+            ...(ctx.visualStyle ? { visual_style: ctx.visualStyle } : {}),
+            ...(ctx.contentPolicy ? { content_policy: ctx.contentPolicy } : {}),
           },
           { userId }
         );
-        // Se relee content justo antes de escribir: entre la lectura inicial
-        // y aca pueden haber pasado varios segundos de LLM, y el UPDATE pisa
-        // el JSON entero.
-        const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
-        const { error: updateError } = await supabase
-          .from("scenes")
-          .update({
-            content: {
-              ...((fresh?.content as Record<string, unknown> | null) ?? content),
-              imagePrompt: prompt,
-              imagePromptStyleKey: styleKey,
-              imagePromptEdited: false,
-            },
-          })
-          .eq("id", scene.id);
-        if (updateError) throw new Error(updateError.message);
-        return { ...base, image_prompt: prompt, image_prompt_style_key: styleKey, image_prompt_edited: false };
+        const byOrder = new Map(prompts.map((p) => [p.order, p.prompt]));
+        for (const scene of chunkScenes) {
+          const prompt = byOrder.get(scene.order);
+          if (!prompt) {
+            errors.set(scene.id, "La IA no devolvio prompt para esta escena (proba con 'Otro prompt')");
+            continue;
+          }
+          // Se relee content justo antes de escribir: entre la lectura
+          // inicial y aca pueden haber pasado varios segundos de LLM, y el
+          // UPDATE pisa el JSON entero.
+          const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
+          const { error: updateError } = await supabase
+            .from("scenes")
+            .update({
+              content: {
+                ...((fresh?.content as Record<string, unknown> | null) ?? scene.content ?? {}),
+                imagePrompt: prompt,
+                imagePromptStyleKey: contextKey,
+                imagePromptEdited: false,
+              },
+            })
+            .eq("id", scene.id);
+          if (updateError) {
+            errors.set(scene.id, updateError.message);
+            continue;
+          }
+          generated.set(scene.id, prompt);
+        }
       } catch (err) {
-        return {
-          ...base,
-          image_prompt: existing,
-          error: err instanceof Error ? err.message : "No se pudo generar el prompt",
-        };
+        const message = err instanceof Error ? err.message : "No se pudo generar el prompt";
+        for (const scene of chunkScenes) errors.set(scene.id, message);
       }
     });
 
+    const result: SceneImagePrompt[] = sceneList.map((scene) => {
+      const fresh = generated.get(scene.id);
+      const error = errors.get(scene.id);
+      return {
+        scene_id: scene.id,
+        order: scene.order,
+        text: textOf(scene),
+        has_visual: scenesWithVisual.has(scene.id),
+        image_prompt: fresh ?? promptOf(scene),
+        image_prompt_style_key: fresh
+          ? contextKey
+          : typeof scene.content?.imagePromptStyleKey === "string"
+            ? scene.content.imagePromptStyleKey
+            : null,
+        image_prompt_edited: fresh ? false : scene.content?.imagePromptEdited === true,
+        ...(error ? { error } : {}),
+      };
+    });
+
     return res.status(200).json(result);
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// GET /scripts/:script_id/scenes/visual-bible
+// La biblia visual vigente del video (si no existe todavia, text null: se
+// arma sola la primera vez que se piden los prompts). `stale`: el guion o el
+// diseño del canal cambiaron desde que se armo.
+export async function getVisualBible(req: Request, res: Response) {
+  try {
+    const script = await getOwnedScript(req.params.script_id, req.user!.id, "viewer");
+    if (!script) return res.status(404).json({ error: "Script not found" });
+
+    const stored = readStoredBible((script as { visual_bible?: unknown }).visual_bible);
+    if (!stored) return res.status(200).json({ text: null, edited: false, stale: false, updated_at: null });
+
+    const ctx = await loadVisualContext(script.id, script.video_project_id, req.user!.id);
+    const scenes = await loadScenes(script.id);
+    return res.status(200).json({
+      text: stored.text,
+      edited: stored.edited,
+      stale: stored.key !== bibleKeyFor(scenes, ctx.visualStyle),
+      updated_at: stored.updated_at,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// PUT /scripts/:script_id/scenes/visual-bible
+// Body: { text: string } -> la guarda como editada a mano (no se rehace sola)
+//       { regenerate: true } -> la vuelve a armar con el guion y el diseño actuales
+// En ambos casos los prompts no editados se rehacen la proxima vez que se
+// pidan (cambia la huella).
+export async function updateVisualBible(req: Request, res: Response) {
+  try {
+    const script = await getOwnedScript(req.params.script_id, req.user!.id);
+    if (!script) return res.status(404).json({ error: "Script not found" });
+    const { text, regenerate } = (req.body ?? {}) as { text?: unknown; regenerate?: unknown };
+
+    const scenes = await loadScenes(script.id);
+    const ctx = await loadVisualContext(script.id, script.video_project_id, req.user!.id);
+
+    let bible: StoredVisualBible;
+    try {
+      if (regenerate === true) {
+        bible = await ensureVisualBible(ctx, scenes, { force: true });
+      } else if (typeof text === "string" && text.trim()) {
+        bible = { text: text.trim().slice(0, 12000), key: bibleKeyFor(scenes, ctx.visualStyle), edited: true, updated_at: new Date().toISOString() };
+        await saveBible(script.id, bible);
+      } else {
+        return res.status(400).json({ error: "Mandá text o regenerate: true" });
+      }
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo guardar la biblia visual" });
+    }
+
+    return res.status(200).json({ text: bible.text, edited: bible.edited, stale: false, updated_at: bible.updated_at });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

@@ -1,8 +1,8 @@
 import type { Request, Response } from "express";
 import { randomBytes } from "crypto";
 import { supabase } from "../../lib/supabase.js";
-import { getWorkspaceRole, roleAtLeast, type WorkspaceRole } from "../../lib/ownership.js";
-import { CHANNEL_TEXT_MAX } from "../../lib/channelSettings.js";
+import { getWorkspaceRole, roleAtLeast, getOwnedScriptStyle, type WorkspaceRole } from "../../lib/ownership.js";
+import { CHANNEL_TEXT_MAX, getChannelSettingsForWorkspace } from "../../lib/channelSettings.js";
 
 // Modelo copiado de Drive (unidades compartidas) / Figma teams / Frame.io:
 // cada usuario tiene un workspace personal que se crea solo, y puede crear
@@ -427,11 +427,11 @@ export async function acceptInvite(req: Request, res: Response) {
 }
 
 // --- recursos compartidos del canal ---------------------------------------
-// Idioma, estilo de narracion y diseño visual del canal (ver
-// lib/channelSettings.ts). Los ve cualquier miembro; los cambia admin+,
-// mismo criterio que renombrar el workspace.
+// La "plantilla del canal": idioma, estilo de narracion (Prompt Maestro +
+// notas), voz y diseño visual (ver lib/channelSettings.ts). Los ve cualquier
+// miembro; los cambia admin+, mismo criterio que renombrar el workspace.
 
-const CHANNEL_FIELDS = ["channel_language", "narration_style", "visual_style_prompt"] as const;
+const CHANNEL_TEXT_FIELDS = ["channel_language", "narration_style", "visual_style_prompt", "voice_id"] as const;
 
 export async function getChannelSettings(req: Request, res: Response) {
   try {
@@ -439,14 +439,8 @@ export async function getChannelSettings(req: Request, res: Response) {
     const role = await getWorkspaceRole(workspace_id, req.user!.id);
     if (!roleAtLeast(role, "viewer")) return res.status(404).json({ error: "Workspace not found" });
 
-    const { data, error } = await supabase
-      .from("workspaces")
-      .select("id, channel_language, narration_style, visual_style_prompt")
-      .eq("id", workspace_id as string)
-      .single();
-    if (error || !data) return res.status(404).json({ error: "Workspace not found" });
-
-    return res.status(200).json({ ...data, can_edit: roleAtLeast(role, "admin") });
+    const settings = await getChannelSettingsForWorkspace(workspace_id as string);
+    return res.status(200).json({ ...settings, can_edit: roleAtLeast(role, "admin") });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -455,14 +449,16 @@ export async function getChannelSettings(req: Request, res: Response) {
 export async function updateChannelSettings(req: Request, res: Response) {
   try {
     const { workspace_id } = req.params;
-    const role = await getWorkspaceRole(workspace_id, req.user!.id);
+    const userId = req.user!.id;
+    const role = await getWorkspaceRole(workspace_id, userId);
     if (!roleAtLeast(role, "admin")) return res.status(404).json({ error: "Workspace not found" });
+    const body = (req.body ?? {}) as Record<string, unknown>;
 
     // Solo se tocan los campos que vienen; "" o null borra el campo.
     const patch: Record<string, string | null> = {};
-    for (const field of CHANNEL_FIELDS) {
-      if (!(field in (req.body ?? {}))) continue;
-      const value = req.body[field];
+    for (const field of CHANNEL_TEXT_FIELDS) {
+      if (!(field in body)) continue;
+      const value = body[field];
       if (value !== null && typeof value !== "string") {
         return res.status(400).json({ error: `${field} debe ser texto` });
       }
@@ -472,17 +468,39 @@ export async function updateChannelSettings(req: Request, res: Response) {
       }
       patch[field] = trimmed || null;
     }
+
+    // Compartir un Prompt Maestro con el workspace: tiene que ser uno PROPIO
+    // (script_styles es por usuario) -- a partir de ahi lo usan todos los
+    // miembros en los proyectos del workspace (ver generateScript.tool.ts).
+    if ("script_style_id" in body) {
+      const styleId = body.script_style_id;
+      if (styleId === null || styleId === "") {
+        patch.script_style_id = null;
+      } else {
+        const current = await getChannelSettingsForWorkspace(workspace_id as string);
+        const owned = await getOwnedScriptStyle(styleId as string, userId);
+        if (!owned && current.script_style_id !== styleId) {
+          return res.status(400).json({ error: "Solo podés compartir un estilo de narración que hayas creado vos" });
+        }
+        patch.script_style_id = styleId as string;
+      }
+    }
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: "Nada para actualizar" });
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("workspaces")
       .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq("id", workspace_id as string)
-      .select("id, channel_language, narration_style, visual_style_prompt")
-      .single();
-    if (error) return res.status(400).json({ error: error.message });
+      .eq("id", workspace_id as string);
+    if (error) {
+      return res.status(400).json({
+        error: /column/i.test(error.message)
+          ? "Falta correr las migraciones de recursos del canal en Supabase (20261002*.sql)"
+          : error.message,
+      });
+    }
 
-    return res.status(200).json({ ...data, can_edit: true });
+    const settings = await getChannelSettingsForWorkspace(workspace_id as string);
+    return res.status(200).json({ ...settings, can_edit: true });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });
   }

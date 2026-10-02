@@ -424,9 +424,15 @@ export const generateScriptTool: ToolDefinition<
     if (script_style_id) {
       // En un workspace compartido el estilo suele ser del creador del
       // proyecto, no del miembro que dispara la generacion.
+      // Y si es el estilo compartido del workspace, lo puede usar cualquier
+      // miembro con acceso al proyecto aunque lo haya creado otro.
+      const channelForStyle = await getChannelSettingsForProject(video_project_id);
       const style =
         (await getOwnedScriptStyle(script_style_id, ctx.userId)) ??
-        (await getOwnedScriptStyle(script_style_id, project.user_id));
+        (await getOwnedScriptStyle(script_style_id, project.user_id)) ??
+        (channelForStyle.script_style_id === script_style_id
+          ? (await supabase.from("script_styles").select("*").eq("id", script_style_id).maybeSingle()).data
+          : null);
       if (!style) {
         throw new Error("Script style not found");
       }
