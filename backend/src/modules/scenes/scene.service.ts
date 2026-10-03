@@ -24,7 +24,7 @@ import type {
 } from "../../tools/generateVideoPrompt.tool.js";
 import type { GenerateImageInput, GenerateImageOutput } from "../../tools/generateImage.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
+import { getChannelSettingsForProject, withChannelStyle } from "../../lib/channelSettings.js";
 
 // Tope de seguridad, mismo criterio que orchestrator.ts::generateAiVisual --
 // evita gasto descontrolado si generate_video devolviera duration_seconds 0.
@@ -270,7 +270,9 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
           },
           { userId }
         );
-        visualPrompt = promptResult.prompt;
+        // El diseño del canal pegado al final (ver withChannelStyle): el LLM
+        // no siempre lo incorpora solo.
+        visualPrompt = withChannelStyle(promptResult.prompt, visualStyle);
       }
 
       if (source === "ai_image") {

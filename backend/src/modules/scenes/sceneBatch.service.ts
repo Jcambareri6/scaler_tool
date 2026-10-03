@@ -11,7 +11,7 @@ import type {
   SequenceScene,
 } from "../../tools/generateImagePromptSequence.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
+import { getChannelSettingsForProject, visualStyleKey, withChannelStyle } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
@@ -200,9 +200,10 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo leer el diseño visual del canal" });
     }
-    // "sin-biblia": los prompts armados antes con biblia (y no editados a
-    // mano) se rehacen una vez sin ella.
-    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia");
+    // La huella cambia cuando cambia el diseño del canal o la forma de armar
+    // los prompts ("estilo-pegado": desde que el diseño se pega al final de
+    // cada prompt): los no editados a mano se rehacen solos una vez.
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia", "estilo-pegado");
 
     const errors = new Map<string, string>();
     const needs = new Set<string>();
@@ -251,7 +252,8 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
         );
         const byOrder = new Map(prompts.map((p) => [p.order, p.prompt]));
         for (const scene of chunkScenes) {
-          const prompt = byOrder.get(scene.order);
+          const raw = byOrder.get(scene.order);
+          const prompt = raw ? withChannelStyle(raw, ctx.visualStyle) : undefined;
           if (!prompt) {
             errors.set(scene.id, "La IA no devolvio prompt para esta escena (proba con 'Otro prompt')");
             continue;

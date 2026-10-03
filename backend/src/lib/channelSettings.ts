@@ -92,3 +92,17 @@ export function visualStyleKey(visualStyle: string | null): string {
   if (!visualStyle) return "none";
   return createHash("sha1").update(visualStyle).digest("hex").slice(0, 12);
 }
+
+// El diseño visual del canal va SIEMPRE al final de cada prompt, pegado tal
+// cual. El prompt del equipo le pide al LLM que lo incorpore, pero
+// gpt-4o-mini con un diseño largo + el guion completo lo salteaba (visto en
+// produccion: prompts sin una palabra del estilo de acuarela y Flow sacaba
+// fotos realistas). Si el LLM ya lo copio textual, no se duplica.
+export function withChannelStyle(prompt: string, visualStyle: string | null): string {
+  const base = prompt.trim();
+  const style = visualStyle?.trim();
+  if (!style) return base;
+  const probe = style.slice(0, 80).replace(/\s+/g, " ").toLowerCase();
+  if (base.replace(/\s+/g, " ").toLowerCase().includes(probe)) return base;
+  return `${base}\n\n${style}`;
+}
