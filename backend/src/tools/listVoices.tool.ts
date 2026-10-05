@@ -3,7 +3,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { fetchWithTimeout } from "../lib/http.js";
-import { AI33_BASE_URL } from "../lib/ai33.js";
+import { AI33_BASE_URL, ai33Keys } from "../lib/ai33.js";
 import { EDGE_TTS_VOICES, isEdgeTtsEnabled } from "../lib/edgeTts.js";
 
 export interface ListVoicesInput {
@@ -104,7 +104,9 @@ export const listVoicesTool: ToolDefinition<ListVoicesInput, ListVoicesOutput> =
     }
 
     const results = await Promise.all(
-      AI33_PROVIDERS.map((engine) => fetchVoicesForProvider(engine, provider.api_key!))
+      // api_key puede traer varias keys (una por cuenta, ver lib/ai33.ts):
+      // para listar voces alcanza con la primera.
+      AI33_PROVIDERS.map((engine) => fetchVoicesForProvider(engine, ai33Keys(provider.api_key!)[0]!))
     );
 
     // Si TODOS los motores de ai33 fallaron (ej. api key invalida), es un

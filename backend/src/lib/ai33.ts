@@ -117,23 +117,13 @@ export async function pollAi33Task(taskId: string, apiKey: string): Promise<Ai33
   throw new Error("ai33.pro TTS task timed out");
 }
 
-// Genera audio con ai33.pro y lo sube a nuestro propio Storage bajo
-// `${storageKey}.mp3` -- storageKey puede ser un script_id (audio final,
-// generateVoice.tool.ts) o una key sintetica tipo `previews/xxx`
-// (previewVoice.tool.ts). No depende de que el audio siga vivo en el CDN
-// de ai33.pro despues de generado.
-export async function generateWithAi33(
-  storageKey: string,
-  text: string,
-  apiKey: string,
-  voiceId: string
-): Promise<Ai33VoiceResult> {
-  const formData = new FormData();
-  formData.append("text", text);
-  formData.append("voice_id", voiceId);
-  formData.append("with_transcript", "true");
-
-  const submitted = await withRetry(async () => {
+async function submitAi33(text: string, voiceId: string, apiKey: string): Promise<{ success: boolean; task_id: string }> {
+  return withRetry(async () => {
+    // FormData nuevo por intento: el body de un fetch no se puede reusar.
+    const formData = new FormData();
+    formData.append("text", text);
+    formData.append("voice_id", voiceId);
+    formData.append("with_transcript", "true");
     const submitResponse = await fetchWithTimeout(`${AI33_BASE_URL}/v3/text-to-speech`, {
       method: "POST",
       headers: { "xi-api-key": apiKey },
@@ -144,7 +134,90 @@ export async function generateWithAi33(
     }
     return (await submitResponse.json()) as { success: boolean; task_id: string };
   });
-  if (!submitted.task_id) {
+}
+
+// Genera audio con ai33.pro y lo sube a nuestro propio Storage bajo
+// `${storageKey}.mp3` -- storageKey puede ser un script_id (audio final,
+// generateVoice.tool.ts) o una key sintetica tipo `previews/xxx`
+// (previewVoice.tool.ts). No depende de que el audio siga vivo en el CDN
+// de ai33.pro despues de generado.
+// --- varias cuentas de ai33 -------------------------------------------------
+// El api_key del provider "ai33" puede traer VARIAS keys separadas por coma
+// (una por cuenta). Para cada voz se usa la primera que tenga creditos
+// suficientes para el texto; si ai33 igual responde "sin creditos" (402), se
+// prueba con la siguiente. Asi se puede sumar una cuenta con saldo sin sacar
+// la otra.
+
+export function ai33Keys(raw: string): string[] {
+  return raw
+    .split(/[\s,;]+/)
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+
+// Saldo de una cuenta (null si no se pudo consultar: no se descarta la key).
+async function ai33Credits(apiKey: string): Promise<number | null> {
+  try {
+    const res = await fetchWithTimeout(`${AI33_BASE_URL}/v1/credits`, { headers: { "xi-api-key": apiKey } }, 15000);
+    if (!res.ok) return null;
+    const data = (await res.json()) as { credits?: unknown };
+    return typeof data.credits === "number" ? data.credits : null;
+  } catch {
+    return null;
+  }
+}
+
+const keyTag = (key: string) => `…${key.slice(-4)}`;
+
+// ai33 cobra la voz por caracter del texto: se pide al menos eso de saldo.
+async function orderKeysByCredits(keys: string[], needed: number): Promise<{ usable: string[]; balances: string[] }> {
+  const checked = await Promise.all(keys.map(async (key) => ({ key, credits: await ai33Credits(key) })));
+  const enough = checked.filter((c) => c.credits !== null && c.credits >= needed).map((c) => c.key);
+  const unknown = checked.filter((c) => c.credits === null).map((c) => c.key);
+  return {
+    usable: [...enough, ...unknown],
+    balances: checked.map((c, i) => `cuenta ${i + 1} (${keyTag(c.key)}): ${c.credits ?? "sin dato"}`),
+  };
+}
+
+const isInsufficientCredits = (err: unknown) =>
+  err instanceof Error && /\(402\)|insufficient_credits|not enough credits/i.test(err.message);
+
+export async function generateWithAi33(
+  storageKey: string,
+  text: string,
+  apiKeys: string,
+  voiceId: string
+): Promise<Ai33VoiceResult> {
+  const keys = ai33Keys(apiKeys);
+  if (keys.length === 0) throw new Error("No hay ninguna key de ai33.pro configurada");
+  const needed = text.length;
+  const { usable, balances } = keys.length > 1 ? await orderKeysByCredits(keys, needed) : { usable: keys, balances: [] };
+  if (usable.length === 0) {
+    throw new Error(
+      `Ninguna cuenta de ai33.pro tiene créditos suficientes: este texto necesita unos ${needed} créditos (${balances.join(", ")}). Cargá saldo en alguna.`
+    );
+  }
+
+  let submitted: { task_id: string } | null = null;
+  let apiKey = usable[0]!;
+  for (const [i, key] of usable.entries()) {
+    apiKey = key;
+    try {
+      submitted = await submitAi33(text, voiceId, key);
+      if (i > 0) console.log(`[ai33] usando la cuenta ${keyTag(key)} (las anteriores no tenian creditos)`);
+      break;
+    } catch (err) {
+      const last = i === usable.length - 1;
+      if (!isInsufficientCredits(err) || last) {
+        if (isInsufficientCredits(err) && balances.length) {
+          throw new Error(`Ninguna cuenta de ai33.pro tiene créditos suficientes (${balances.join(", ")}; hacen falta unos ${needed}).`);
+        }
+        throw err;
+      }
+    }
+  }
+  if (!submitted?.task_id) {
     throw new Error("ai33.pro no devolvio task_id para el pedido de voz");
   }
 
