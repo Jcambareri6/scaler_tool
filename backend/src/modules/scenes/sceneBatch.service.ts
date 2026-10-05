@@ -203,7 +203,7 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
     // La huella cambia cuando cambia el diseño del canal o la forma de armar
     // los prompts ("estilo-pegado": desde que el diseño se pega al final de
     // cada prompt): los no editados a mano se rehacen solos una vez.
-    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia", "estilo-pegado");
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia", "estilo-plantilla");
 
     const errors = new Map<string, string>();
     const needs = new Set<string>();

@@ -93,16 +93,26 @@ export function visualStyleKey(visualStyle: string | null): string {
   return createHash("sha1").update(visualStyle).digest("hex").slice(0, 12);
 }
 
-// El diseño visual del canal va SIEMPRE al final de cada prompt, pegado tal
-// cual. El prompt del equipo le pide al LLM que lo incorpore, pero
-// gpt-4o-mini con un diseño largo + el guion completo lo salteaba (visto en
-// produccion: prompts sin una palabra del estilo de acuarela y Flow sacaba
-// fotos realistas). Si el LLM ya lo copio textual, no se duplica.
+// Lugar marcado para la escena dentro del diseño, si el diseño es una
+// plantilla: "[describe aquí lo que pasa]", "[escena]", "[SCENE]", "{escena}".
+const SCENE_PLACEHOLDER = /[[{][^\]}]*(describ|escena|scene|aqu[ií])[^\]}]*[\]}]/i;
+
+// El diseño visual del canal va SIEMPRE en cada prompt, tal cual. El prompt
+// del equipo le pide al LLM que lo incorpore, pero gpt-4o-mini con un diseño
+// largo + el guion completo lo salteaba (visto en produccion: prompts sin una
+// palabra del estilo de acuarela y Flow sacaba fotos realistas).
+//  - Si el diseño es una PLANTILLA (trae un lugar para la escena, ej.
+//    "ESCENA: [describe aquí lo que pasa]"), la escena va ahi adentro: queda
+//    diseño primero y escena al final, como lo arma el equipo. Pegarlo
+//    despues dejaba el placeholder sin completar al final del prompt.
+//  - Si no, el diseño va pegado al final.
+// Si el LLM ya lo copio textual, no se duplica.
 export function withChannelStyle(prompt: string, visualStyle: string | null): string {
   const base = prompt.trim();
   const style = visualStyle?.trim();
   if (!style) return base;
   const probe = style.slice(0, 80).replace(/\s+/g, " ").toLowerCase();
   if (base.replace(/\s+/g, " ").toLowerCase().includes(probe)) return base;
+  if (SCENE_PLACEHOLDER.test(style)) return style.replace(SCENE_PLACEHOLDER, () => base);
   return `${base}\n\n${style}`;
 }
