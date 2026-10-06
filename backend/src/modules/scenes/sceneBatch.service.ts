@@ -4,7 +4,7 @@ import { supabase } from "../../lib/supabase.js";
 import { getOwnedScript } from "../../lib/ownership.js";
 import { mapWithConcurrency } from "../../lib/concurrency.js";
 import { runTool } from "../../tools/index.js";
-import { setUploadedVisualForScene, uploadSceneAssetFile } from "../../lib/stockSegments.js";
+import { normalizeUpload, setUploadedVisualForScene, uploadSceneAssetFile } from "../../lib/stockSegments.js";
 import type {
   GenerateImagePromptSequenceInput,
   GenerateImagePromptSequenceOutput,
@@ -372,13 +372,13 @@ export async function uploadBatchSceneVisuals(req: Request, res: Response) {
       const base = { scene_id: sceneId, file_name: file.originalname };
       if (!ownedIds.has(sceneId)) return { ...base, ok: false, error: "Scene not found" };
 
-      const isVideo = file.mimetype.startsWith("video/");
-      const isImage = file.mimetype.startsWith("image/");
+      const { mimetype, extension } = normalizeUpload(file.originalname, file.mimetype);
+      const isVideo = mimetype.startsWith("video/");
+      const isImage = mimetype.startsWith("image/");
       if (!isVideo && !isImage) return { ...base, ok: false, error: "El archivo debe ser un video o una imagen" };
 
       try {
-        const extension = (file.originalname.split(".").pop() || (isVideo ? "mp4" : "png")).toLowerCase();
-        const storageKey = await uploadSceneAssetFile(file.buffer, file.mimetype, extension);
+        const storageKey = await uploadSceneAssetFile(file.buffer, mimetype, extension);
         await setUploadedVisualForScene(script.video_project_id, sceneId, {
           storage_key: storageKey,
           type: isVideo ? "VIDEO" : "IMAGE",

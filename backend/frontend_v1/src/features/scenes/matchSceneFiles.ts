@@ -38,6 +38,33 @@ export function isVisualFile(file: File): boolean {
   return file.type.startsWith("image/") || file.type.startsWith("video/");
 }
 
+// Variantes de JPEG que algunos navegadores/descargas usan (Chrome en
+// Windows guarda imagenes como .jfif) y que el navegador a veces informa sin
+// tipo. Son JPEG comunes: se renombran a .jpg con tipo image/jpeg para que
+// el resto (backend, Storage, render) las trate como cualquier JPG.
+const JPEG_VARIANTS = /\.(jfif|jpe|pjpeg|pjp)$/i;
+const TYPE_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+};
+
+export function normalizeVisualFile(file: File): File {
+  if (JPEG_VARIANTS.test(file.name)) {
+    return new File([file], file.name.replace(JPEG_VARIANTS, ".jpg"), { type: "image/jpeg", lastModified: file.lastModified });
+  }
+  if (!file.type) {
+    const type = TYPE_BY_EXTENSION[file.name.split(".").pop()?.toLowerCase() ?? ""];
+    if (type) return new File([file], file.name, { type, lastModified: file.lastModified });
+  }
+  return file;
+}
+
 export function matchFilesToScenes(
   files: File[],
   scenes: SceneSlot[],

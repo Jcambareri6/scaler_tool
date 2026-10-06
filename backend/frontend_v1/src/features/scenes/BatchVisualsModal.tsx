@@ -5,6 +5,7 @@ import {
   fileKey,
   isVisualFile,
   matchFilesToScenes,
+  normalizeVisualFile,
   type FileMatch,
 } from "./matchSceneFiles";
 
@@ -217,7 +218,7 @@ export default function BatchVisualsModal({
   useEffect(() => () => Object.values(previewUrls).forEach((u) => URL.revokeObjectURL(u)), [previewUrls]);
 
   const addFiles = (list: FileList | File[]) => {
-    const incoming = Array.from(list).filter(isVisualFile);
+    const incoming = Array.from(list).map(normalizeVisualFile).filter(isVisualFile);
     if (incoming.length === 0) {
       setUploadError("Solo se aceptan imágenes o videos");
       return;
@@ -499,7 +500,7 @@ export default function BatchVisualsModal({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*,video/*"
+                accept="image/*,video/*,.jfif,.jpe,.pjpeg,.pjp"
                 multiple
                 className="hidden"
                 onChange={(e) => {

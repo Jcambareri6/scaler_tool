@@ -123,6 +123,31 @@ export function readStockHistory(content: Record<string, unknown> | null): strin
 
 const SCENE_UPLOADS_BUCKET = "scene-uploads";
 
+// Tipo y extension con que se guarda un archivo subido a mano. Variantes de
+// JPEG (.jfif, el formato con que Chrome en Windows guarda muchas imagenes)
+// se guardan como .jpg/image/jpeg; un archivo que llega sin tipo
+// (application/octet-stream) toma el de su extension.
+const JPEG_VARIANTS = new Set(["jfif", "jpe", "pjpeg", "pjp"]);
+const TYPE_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+};
+
+export function normalizeUpload(originalName: string, mimetype: string): { mimetype: string; extension: string } {
+  let extension = (originalName.includes(".") ? originalName.split(".").pop() ?? "" : "").toLowerCase();
+  if (JPEG_VARIANTS.has(extension)) return { mimetype: "image/jpeg", extension: "jpg" };
+  let type = mimetype;
+  if (!type || type === "application/octet-stream") type = TYPE_BY_EXTENSION[extension] ?? type;
+  if (!extension) extension = type.startsWith("video/") ? "mp4" : "png";
+  return { mimetype: type, extension };
+}
+
 async function ensureSceneUploadsBucket(): Promise<void> {
   const { error } = await supabase.storage.createBucket(SCENE_UPLOADS_BUCKET, { public: true });
   if (error && !/already exists/i.test(error.message)) {

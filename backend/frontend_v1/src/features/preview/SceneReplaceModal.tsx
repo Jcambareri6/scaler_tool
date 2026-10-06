@@ -152,7 +152,7 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
             <input
               ref={fileInputRef}
               type="file"
-              accept="video/*,image/*"
+              accept="video/*,image/*,.jfif,.jpe,.pjpeg,.pjp"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               className="hidden"
             />

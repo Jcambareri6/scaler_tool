@@ -8,6 +8,7 @@ import {
   setAiImageForScene,
   setUploadedVisualForScene,
   uploadSceneAssetFile,
+  normalizeUpload,
   appendStockHistory,
   readStockHistory,
   type AiVideoSegment,
@@ -484,8 +485,10 @@ export async function uploadSceneVisual(req: Request, res: Response) {
       return res.status(400).json({ error: "file is required" });
     }
 
-    const isVideo = file.mimetype.startsWith("video/");
-    const isImage = file.mimetype.startsWith("image/");
+    // .jfif u otras variantes de JPEG, o un archivo sin tipo: ver normalizeUpload.
+    const { mimetype, extension } = normalizeUpload(file.originalname, file.mimetype);
+    const isVideo = mimetype.startsWith("video/");
+    const isImage = mimetype.startsWith("image/");
     if (!isVideo && !isImage) {
       return res.status(400).json({ error: "El archivo debe ser un video o una imagen" });
     }
@@ -504,8 +507,7 @@ export async function uploadSceneVisual(req: Request, res: Response) {
       return res.status(404).json({ error: "Scene not found" });
     }
 
-    const extension = (file.originalname.split(".").pop() || (isVideo ? "mp4" : "png")).toLowerCase();
-    const storageKey = await uploadSceneAssetFile(file.buffer, file.mimetype, extension);
+    const storageKey = await uploadSceneAssetFile(file.buffer, mimetype, extension);
 
     await setUploadedVisualForScene(script.video_project_id, scene_id as string, {
       storage_key: storageKey,
