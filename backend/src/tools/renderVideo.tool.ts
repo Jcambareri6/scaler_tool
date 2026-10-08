@@ -24,6 +24,7 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
+import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -221,7 +222,9 @@ const DOWNLOAD_CONCURRENCY = envInt("RENDER_DOWNLOAD_CONCURRENCY", 5);
 // over 4GB)" visto en produccion).
 async function downloadTo(url: string, destPath: string): Promise<void> {
   await withRetry(async () => {
-    const response = await fetchWithTimeout(url, {}, DOWNLOAD_TIMEOUT_MS);
+    // upload.wikimedia.org rechaza (403) el User-Agent default de Node.
+    const init: RequestInit = url.includes("wikimedia.org") ? { headers: { "User-Agent": WIKIMEDIA_USER_AGENT } } : {};
+    const response = await fetchWithTimeout(url, init, DOWNLOAD_TIMEOUT_MS);
     if (!response.ok || !response.body) {
       throw new Error(`No se pudo descargar ${url} (${response.status})`);
     }

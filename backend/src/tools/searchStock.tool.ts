@@ -71,6 +71,11 @@ export interface SearchStockOutput {
 const PEXELS_VIDEO_SEARCH_URL = "https://api.pexels.com/videos/search";
 const PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/";
 const COVERR_VIDEO_SEARCH_URL = "https://api.coverr.co/videos";
+const WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php";
+// La politica de Wikimedia exige un User-Agent descriptivo con contacto --
+// con el default de Node ("node") la API y upload.wikimedia.org pueden
+// devolver 403.
+export const WIKIMEDIA_USER_AGENT = "ScalerTool/1.0 (https://github.com/jcambareri6/scaler_tool)";
 const RESULTS_PER_KEYWORD = 5;
 
 interface PexelsVideoFile {
@@ -218,6 +223,86 @@ async function searchCoverr(apiKey: string, keyword: string, block: string[]): P
     }));
 }
 
+interface WikimediaDerivative {
+  src: string;
+  width?: number;
+  type?: string;
+  transcodekey?: string;
+}
+
+interface WikimediaPage {
+  pageid: number;
+  title: string;
+  videoinfo?: Array<{
+    url: string;
+    descriptionurl: string;
+    width?: number;
+    duration?: number;
+    mediatype?: string;
+    derivatives?: WikimediaDerivative[];
+    extmetadata?: Record<string, { value?: string }>;
+  }>;
+}
+
+// Wikimedia Commons no requiere API key. El original puede ser un 4K de
+// cientos de MB, asi que se prefiere el transcode (webm) mas chico que ya
+// cubra TARGET_MIN_WIDTH, con el mismo criterio que selectPexelsVideoFile.
+// Ojo licencias: la mayoria es CC BY / CC BY-SA (requiere atribucion) --
+// `url` apunta a la pagina del archivo en Commons, donde estan autor y
+// licencia para armar los creditos.
+async function searchWikimedia(keyword: string, block: string[]): Promise<StockCandidate[]> {
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    formatversion: "2",
+    generator: "search",
+    gsrsearch: `${keyword} filetype:video`,
+    gsrnamespace: "6",
+    gsrlimit: String(RESULTS_PER_KEYWORD),
+    prop: "videoinfo",
+    viprop: "url|size|mediatype|derivatives|extmetadata",
+    viextmetadatafilter: "ImageDescription|ObjectName|Categories|LicenseShortName|Artist",
+    origin: "*",
+  });
+  const data = await withRetry(async () => {
+    const response = await fetchWithTimeout(`${WIKIMEDIA_API_URL}?${params}`, {
+      headers: { "User-Agent": WIKIMEDIA_USER_AGENT },
+    });
+    if (!response.ok) {
+      throw new Error(`Wikimedia API error (${response.status}): ${await response.text()}`);
+    }
+    return (await response.json()) as { query?: { pages?: WikimediaPage[] } };
+  });
+
+  return (data.query?.pages ?? []).flatMap((page): StockCandidate[] => {
+    const info = page.videoinfo?.[0];
+    if (!info || info.mediatype !== "VIDEO") return [];
+    const meta = info.extmetadata ?? {};
+    const text = [page.title, meta.ImageDescription?.value, meta.ObjectName?.value, meta.Categories?.value]
+      .filter(Boolean)
+      .join(" ");
+    if (matchesAny(text, block)) return [];
+
+    const transcodes = (info.derivatives ?? [])
+      .filter((d) => d.transcodekey && d.width)
+      .sort((a, b) => a.width! - b.width!);
+    const file = transcodes.find((d) => d.width! >= TARGET_MIN_WIDTH)?.src ?? info.url;
+
+    return [
+      {
+        provider: "wikimedia",
+        external_id: String(page.pageid),
+        url: info.descriptionurl,
+        preview_url: file,
+        ...(info.duration !== undefined && { duration_seconds: info.duration }),
+      },
+    ];
+  });
+}
+
+// Proveedores que no necesitan api_key en la fila `providers`.
+const KEYLESS_PROVIDERS = new Set(["wikimedia"]);
+
 // Dispatch por slug -- agregar un proveedor nuevo de stock de video es:
 // 1) fila en `providers` con type='stock_video', 2) un cliente ac  y
 // registrarlo aca. search_stock en si no vuelve a tocarse (lee
@@ -227,6 +312,7 @@ const PROVIDER_CLIENTS: Record<string, StockClient> = {
   pexels: (apiKey, keyword) => searchPexels(apiKey, keyword),
   pixabay: (apiKey, keyword, block) => searchPixabay(apiKey, keyword, block),
   coverr: (apiKey, keyword, block) => searchCoverr(apiKey, keyword, block),
+  wikimedia: (_apiKey, keyword, block) => searchWikimedia(keyword, block),
 };
 
 // Gap #2/#3 del LEEME: el filtrado final cruza los candidatos con
@@ -267,7 +353,9 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
   },
   async execute({ keywords, content_policy, min_duration_seconds, exclude_keys }, ctx) {
     const providers: Provider[] = await getActiveProvidersByType("stock_video");
-    const usableProviders = providers.filter((p) => p.api_key && PROVIDER_CLIENTS[p.slug]);
+    const usableProviders = providers.filter(
+      (p) => (p.api_key || KEYLESS_PROVIDERS.has(p.slug)) && PROVIDER_CLIENTS[p.slug]
+    );
 
     if (usableProviders.length === 0 && !isMockMode()) {
       throw new ProviderNotConfiguredError("search_stock");
@@ -325,7 +413,7 @@ export const searchStockTool: ToolDefinition<SearchStockInput, SearchStockOutput
         // -- se sigue con lo que hayan devuelto los demas.
         const results = await Promise.allSettled(
           usableProviders.map((provider) =>
-            PROVIDER_CLIENTS[provider.slug]!(provider.api_key!, keyword, block)
+            PROVIDER_CLIENTS[provider.slug]!(provider.api_key ?? "", keyword, block)
           )
         );
         const found = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
