@@ -84,6 +84,35 @@ async function findUploadedAudioAsset(projectId: string): Promise<GenerateVoiceO
   };
 }
 
+// "Regenerar" con imagenes ya cargadas (Flow, subidas a mano, IA): si el
+// guion NO cambio desde que se armaron las escenas y alguna ya tiene visual,
+// las escenas se conservan tal cual (con sus imagenes y prompts) en vez de
+// que build_scenes las borre y rearme -- antes se perdia todo lo cargado.
+// Devuelve las escenas que ya tienen visual, o null si hay que rearmarlas
+// (guion distinto, sin escenas o ninguna con visual).
+async function scenesToPreserve(scriptId: string, scriptText: string): Promise<Set<string> | null> {
+  const { data: scenes } = await supabase
+    .from("scenes")
+    .select("id, content")
+    .eq("script_id", scriptId)
+    .order("order", { ascending: true });
+  if (!scenes?.length) return null;
+
+  // Las escenas son el guion partido en orden: si al juntarlas no dan el
+  // mismo texto, el guion se edito y las escenas viejas ya no corresponden.
+  const squash = (s: string) => s.replace(/\s+/g, "").toLowerCase();
+  const scenesText = scenes.map((s) => ((s.content as { text?: string } | null)?.text) ?? "").join("");
+  if (squash(scenesText) !== squash(scriptText)) return null;
+
+  const { data: visuals } = await supabase
+    .from("assets")
+    .select("scene_id")
+    .in("scene_id", scenes.map((s) => s.id))
+    .in("type", ["VIDEO", "IMAGE"]);
+  const withVisual = new Set((visuals ?? []).map((a) => a.scene_id as string));
+  return withVisual.size > 0 ? withVisual : null;
+}
+
 // El pipeline lo puede disparar cualquier editor del workspace, no solo el
 // creador -- el acceso se resuelve con getOwnedProject (rol >= editor).
 async function getProjectOrThrow(projectId: string, userId: string) {
@@ -205,13 +234,25 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   // 4. Armar las escenas (LEEME seccion 5: recien ahora, con audio real +
   // transcripcion, no antes) -- reemplaza cualquier escena vieja del
-  // guion anterior.
-  await reportJobProgress(ctx.jobId, 25, "Armando las escenas...", { force: true });
-  await runTool<BuildScenesInput, BuildScenesOutput>(
-    "build_scenes",
-    { video_project_id: projectId },
-    toolCtx
-  );
+  // guion anterior. Salvo que el guion no haya cambiado y ya haya imagenes
+  // cargadas (ver scenesToPreserve): ahi se conservan las escenas tal cual
+  // y build_timeline (paso 7) las vuelve a sincronizar con el audio.
+  const preservedVisuals = await scenesToPreserve(script.id, scriptText);
+  if (preservedVisuals) {
+    await reportJobProgress(
+      ctx.jobId,
+      25,
+      `Conservando las escenas y las ${preservedVisuals.size} imágenes ya cargadas...`,
+      { force: true }
+    );
+  } else {
+    await reportJobProgress(ctx.jobId, 25, "Armando las escenas...", { force: true });
+    await runTool<BuildScenesInput, BuildScenesOutput>(
+      "build_scenes",
+      { video_project_id: projectId },
+      toolCtx
+    );
+  }
 
   // 5-6. Stock + overlay por escena
   const { data: scenes, error: scenesError } = await supabase
@@ -226,7 +267,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // Diseño visual del canal (recursos compartidos del workspace).
   const { visual_style_prompt: visualStyle } = await getChannelSettingsForProject(projectId);
   const visualSource = ((project as { visual_source?: VisualSource }).visual_source ?? "stock") as VisualSource;
-  const sceneRows = (scenes ?? []) as SceneRow[];
+  // Escenas a las que hay que buscarles visual: todas, salvo que se esten
+  // conservando las que ya tienen (paso 4) -- esas no se tocan.
+  const sceneRows = ((scenes ?? []) as SceneRow[]).filter((s) => !preservedVisuals?.has(s.id));
 
   // Compartido entre todas las escenas de esta corrida -- evita que dos
   // escenas distintas terminen usando el mismo clip de stock (ver

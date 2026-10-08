@@ -357,6 +357,12 @@ const OUTPUT_FPS = 30;
 // resolucion extra sumaba bastante sin aportar demasiado a la nitidez
 // percibida en un output final de 1280x720.
 const KEN_BURNS_UPSCALE = 1.4;
+// Cuanto acerca el Ken Burns al final de la escena (1.08 = 8%). Antes era
+// 1.3 a velocidad fija y anclado en la esquina superior izquierda: en
+// escenas largas llegaba al tope enseguida y el personaje (casi siempre al
+// centro o a un costado) quedaba fuera de cuadro. Ahora es centrado y el
+// zoom se reparte en toda la duracion de la escena.
+const KEN_BURNS_MAX_ZOOM = 1.08;
 
 // Cuantos segmentos entran en CADA ffmpeg individual antes de armar el
 // video final. Procesar TODOS los segmentos en un solo ffmpeg (como se
@@ -448,10 +454,24 @@ function buildFfmpegArgsForBatch(
       // su reescalado interno, pero a mayor resolucion (menos perdida
       // relativa), y el downscale real al tamaño final de salida se hace
       // aparte con lanczos justo despues (ver `scale=...lanczos` mas abajo).
+      // Encuadre SIN recortar: la imagen entra entera (scale ...decrease) sobre
+      // un fondo con la misma imagen agrandada y desenfocada. Antes se
+      // recortaba para llenar el 16:9 (scale ...increase + crop) y en una
+      // imagen cuadrada o vertical el personaje podia quedar afuera antes
+      // incluso del zoom. Con una imagen 16:9 (las de Flow) el resultado es
+      // el mismo de siempre: el fondo queda totalmente tapado.
+      // Zoom: lineal de 1 a KEN_BURNS_MAX_ZOOM a lo largo de TODA la escena
+      // (on = numero de frame de salida) y centrado (x/y fijan la esquina de
+      // la ventana para que el centro quede siempre en el centro).
+      const zoomStep = (KEN_BURNS_MAX_ZOOM - 1) / Math.max(1, totalFrames - 1);
       filterParts.push(
-        `[${i}:v]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=lanczos,` +
-          `crop=${upscaledWidth}:${upscaledHeight},` +
-          `zoompan=z='min(zoom+0.0015,1.3)':d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
+        `[${i}:v]split=2[kbsrc${i}][kbfit${i}];` +
+          `[kbsrc${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=bilinear,` +
+          `crop=${upscaledWidth}:${upscaledHeight},boxblur=24:2[kbbg${i}];` +
+          `[kbfit${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=decrease:flags=lanczos[kbfg${i}];` +
+          `[kbbg${i}][kbfg${i}]overlay=(W-w)/2:(H-h)/2,` +
+          `zoompan=z='1+${zoomStep.toFixed(8)}*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+          `:d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
           `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v${i}]`
       );
     } else {
