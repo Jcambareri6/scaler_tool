@@ -247,9 +247,22 @@ interface WikimediaPage {
 // Wikimedia Commons no requiere API key. El original puede ser un 4K de
 // cientos de MB, asi que se prefiere el transcode (webm) mas chico que ya
 // cubra TARGET_MIN_WIDTH, con el mismo criterio que selectPexelsVideoFile.
-// Ojo licencias: la mayoria es CC BY / CC BY-SA (requiere atribucion) --
-// `url` apunta a la pagina del archivo en Commons, donde estan autor y
-// licencia para armar los creditos.
+// Solo se aceptan clips de dominio publico / CC0: la mayoria de Commons es
+// CC BY / CC BY-SA, que obligan a dar creditos al autor, y la herramienta no
+// arma creditos. `License` es el codigo de licencia legible por maquina
+// ("pd", "cc0", "cc-by-sa-4.0", ...); AttributionRequired se chequea igual
+// como red extra por si algun archivo PD viene marcado con atribucion.
+const WIKIMEDIA_ALLOWED_LICENSES = new Set(["pd", "cc0"]);
+// Como el filtro de licencia descarta buena parte de los resultados, se
+// piden mas a la API y despues se recorta a RESULTS_PER_KEYWORD.
+const WIKIMEDIA_SEARCH_LIMIT = 30;
+
+function isWikimediaPublicDomain(meta: Record<string, { value?: string }>): boolean {
+  const license = (meta.License?.value ?? "").trim().toLowerCase();
+  const attributionRequired = (meta.AttributionRequired?.value ?? "").trim().toLowerCase();
+  return WIKIMEDIA_ALLOWED_LICENSES.has(license) && attributionRequired !== "true";
+}
+
 async function searchWikimedia(keyword: string, block: string[]): Promise<StockCandidate[]> {
   const params = new URLSearchParams({
     action: "query",
@@ -258,10 +271,10 @@ async function searchWikimedia(keyword: string, block: string[]): Promise<StockC
     generator: "search",
     gsrsearch: `${keyword} filetype:video`,
     gsrnamespace: "6",
-    gsrlimit: String(RESULTS_PER_KEYWORD),
+    gsrlimit: String(WIKIMEDIA_SEARCH_LIMIT),
     prop: "videoinfo",
     viprop: "url|size|mediatype|derivatives|extmetadata",
-    viextmetadatafilter: "ImageDescription|ObjectName|Categories|LicenseShortName|Artist",
+    viextmetadatafilter: "ImageDescription|ObjectName|Categories|License|AttributionRequired",
     origin: "*",
   });
   const data = await withRetry(async () => {
@@ -281,6 +294,7 @@ async function searchWikimedia(keyword: string, block: string[]): Promise<StockC
     const text = [page.title, meta.ImageDescription?.value, meta.ObjectName?.value, meta.Categories?.value]
       .filter(Boolean)
       .join(" ");
+    if (!isWikimediaPublicDomain(meta)) return [];
     if (matchesAny(text, block)) return [];
 
     const transcodes = (info.derivatives ?? [])
@@ -297,7 +311,7 @@ async function searchWikimedia(keyword: string, block: string[]): Promise<StockC
         ...(info.duration !== undefined && { duration_seconds: info.duration }),
       },
     ];
-  });
+  }).slice(0, RESULTS_PER_KEYWORD);
 }
 
 // Proveedores que no necesitan api_key en la fila `providers`.
