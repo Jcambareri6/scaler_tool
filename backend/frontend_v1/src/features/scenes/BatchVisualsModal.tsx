@@ -180,6 +180,18 @@ export default function BatchVisualsModal({
   // Viral DNA y similares: el numero del archivo es el orden de descarga.
   const [ignoreNumbers, setIgnoreNumbers] = useState(false);
   const [startOrder, setStartOrder] = useState(1);
+  // Escenas que Flow no genero ("7, 40"): se saltean al repartir por orden.
+  const [failedInput, setFailedInput] = useState("");
+  const failedOrders = useMemo(
+    () =>
+      [...new Set((failedInput.match(/\d+/g) ?? []).map(Number))]
+        .filter((n) => scenes.some((s) => s.order === n))
+        .sort((a, b) => a - b),
+    [failedInput, scenes]
+  );
+  // Archivos subidos desde el lugar de una escena fallada: van directo ahi.
+  const forcedRef = useRef(new Map<string, string>());
+  const failedInputRefs = useRef(new Map<number, HTMLInputElement>());
   const [statuses, setStatuses] = useState<Record<string, UploadStatus>>({});
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -200,7 +212,7 @@ export default function BatchVisualsModal({
   matchesRef.current = matches;
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
-  const modeKey = `${onlyMissingUpload}|${ignoreNumbers}|${startOrder}`;
+  const modeKey = `${onlyMissingUpload}|${ignoreNumbers}|${startOrder}|${failedOrders.join(",")}`;
   const lastModeRef = useRef(modeKey);
   useEffect(() => {
     const modeChanged = lastModeRef.current !== modeKey;
@@ -214,10 +226,14 @@ export default function BatchVisualsModal({
         )
         .map((m) => [m.key, m])
     );
+    for (const file of files) {
+      const sceneId = forcedRef.current.get(fileKey(file));
+      if (sceneId && !keep.has(fileKey(file))) keep.set(fileKey(file), { key: fileKey(file), file, sceneId, reason: "manual" });
+    }
     const fresh = matchFilesToScenes(
       files.filter((f) => !keep.has(fileKey(f))),
       sceneSlots.filter((s) => ![...keep.values()].some((m) => m.sceneId === s.id)),
-      { onlyMissing: onlyMissingUpload, ignoreNumbers, startOrder }
+      { onlyMissing: onlyMissingUpload, ignoreNumbers, startOrder, skipOrders: failedOrders }
     );
     setMatches([...keep.values()].filter((m) => files.some((f) => fileKey(f) === m.key)).concat(fresh));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -251,7 +267,20 @@ export default function BatchVisualsModal({
     });
   };
 
+  // La imagen de una escena fallada, generada a mano en Flow.
+  const addFileForScene = (sceneId: string, raw: File) => {
+    const file = normalizeVisualFile(raw);
+    if (!isVisualFile(file)) {
+      setUploadError("Solo se aceptan imágenes o videos");
+      return;
+    }
+    setUploadError(null);
+    forcedRef.current.set(fileKey(file), sceneId);
+    setFiles((prev) => (prev.some((f) => fileKey(f) === fileKey(file)) ? prev : [...prev, file]));
+  };
+
   const removeFile = (key: string) => {
+    forcedRef.current.delete(key);
     setFiles((prev) => prev.filter((f) => fileKey(f) !== key));
     setStatuses((prev) => {
       const next = { ...prev };
@@ -534,7 +563,7 @@ export default function BatchVisualsModal({
                 Con número en el nombre (escena_07.png, 7.jpg) van a esa escena; el resto, en orden.
               </p>
               <p className="text-[11px] mt-1" style={{ color: "var(--muted-foreground)" }}>
-                ¿Flow falló una y las siguientes quedaron corridas (aunque tengan número)? En la primera imagen corrida tocá <span className="font-mono">+1 ↓</span>: esa y todas las siguientes avanzan una escena, y la que faltó queda libre para subirla sola.
+                ¿Flow falló alguna? Escribí su número en "Escenas que fallaron en Flow": se saltea, el resto cae en su lugar y te queda un espacio para subir esa sola.
               </p>
               <input
                 ref={fileInputRef}
@@ -553,6 +582,17 @@ export default function BatchVisualsModal({
               <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
                 <input type="checkbox" checked={ignoreNumbers} onChange={(e) => setIgnoreNumbers(e.target.checked)} />
                 El número del archivo es orden de descarga (Viral DNA: 0, 1, 2...), no la escena
+              </label>
+              <label className="flex items-center gap-2 text-xs w-full" style={{ color: "var(--foreground)" }}>
+                Escenas que fallaron en Flow
+                <input
+                  type="text"
+                  value={failedInput}
+                  disabled={uploading}
+                  onChange={(e) => setFailedInput(e.target.value)}
+                  placeholder="ej: 7, 40"
+                  className="input-glass flex-1 rounded-md px-2 py-1 text-xs"
+                />
               </label>
               <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
                 Este lote empieza en la escena
@@ -596,6 +636,56 @@ export default function BatchVisualsModal({
 
             {/* Revision de emparejamiento */}
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+              {failedOrders
+                .map((order) => scenes.find((s) => s.order === order)!)
+                .filter((scene) => !matches.some((m) => m.sceneId === scene.id) && !uploadedSceneIds.has(scene.id))
+                .map((scene) => (
+                  <div
+                    key={`failed-${scene.id}`}
+                    className="flex items-center gap-3 rounded-lg p-2"
+                    style={{ background: "rgba(227,11,16,0.06)", border: "1px dashed rgba(227,11,16,0.35)" }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const file = e.dataTransfer.files[0];
+                      if (file) addFileForScene(scene.id, file);
+                    }}
+                  >
+                    <div className="shrink-0 rounded-md flex items-center justify-center text-[10px] font-mono" style={{ width: 64, height: 36, background: "#020408", color: "#FF8A8D" }}>
+                      {pad(scene.order)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs" style={{ color: "var(--foreground)" }}>
+                        Escena {pad(scene.order)} · falló en Flow
+                      </p>
+                      <p className="text-[10px] truncate" title={scene.narrativeContent} style={{ color: "var(--muted-foreground)" }}>
+                        Generala a mano y soltala acá. “{scene.narrativeContent}”
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => failedInputRefs.current.get(scene.order)?.click()}
+                      disabled={uploading}
+                      className="btn-secondary shrink-0 text-[11px] px-2.5 py-1 rounded-md disabled:opacity-50"
+                    >
+                      Subir imagen
+                    </button>
+                    <input
+                      ref={(el) => {
+                        if (el) failedInputRefs.current.set(scene.order, el);
+                        else failedInputRefs.current.delete(scene.order);
+                      }}
+                      type="file"
+                      accept="image/*,video/*,.jfif,.jpe,.pjpeg,.pjp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) addFileForScene(scene.id, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </div>
+                ))}
               {matches.map((m) => {
                 const status = statuses[m.key] ?? { state: "pending" as const };
                 const tooBig = m.file.size > MAX_FILE_BYTES;

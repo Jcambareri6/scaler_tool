@@ -72,7 +72,10 @@ export function normalizeVisualFile(file: File): File {
 export function matchFilesToScenes(
   files: File[],
   scenes: SceneSlot[],
-  options: { onlyMissing: boolean; ignoreNumbers?: boolean; startOrder?: number }
+  // skipOrders: escenas que Flow no genero. El descargador no deja hueco
+  // (la siguiente baja con el numero de la que fallo), asi que al repartir
+  // por orden se saltean y quedan libres para subirlas aparte.
+  options: { onlyMissing: boolean; ignoreNumbers?: boolean; startOrder?: number; skipOrders?: number[] }
 ): FileMatch[] {
   const byOrder = new Map(scenes.map((s) => [s.order, s]));
   const taken = new Set<string>();
@@ -99,7 +102,13 @@ export function matchFilesToScenes(
 
   const free = [...scenes]
     .sort((a, b) => a.order - b.order)
-    .filter((s) => s.order >= (options.startOrder ?? 1) && !taken.has(s.id) && (!options.onlyMissing || !s.hasVisual));
+    .filter(
+      (s) =>
+        s.order >= (options.startOrder ?? 1) &&
+        !options.skipOrders?.includes(s.order) &&
+        !taken.has(s.id) &&
+        (!options.onlyMissing || !s.hasVisual)
+    );
   unnumbered.forEach((file, i) => {
     const scene = free[i];
     matches.push({ key: fileKey(file), file, sceneId: scene?.id ?? null, reason: scene ? "order" : "none" });
