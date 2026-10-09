@@ -249,9 +249,14 @@ export default function BatchVisualsModal({
 
   // Asignar a mano un archivo que iba por orden corre tambien a los que
   // siguen (ver reflowFrom): arregla el corrimiento cuando Flow fallo una.
-  const assignScene = (key: string, sceneId: string | null) => {
+  // El boton +1 ("Flow no genero la anterior") corre tambien los numerados.
+  const assignScene = (key: string, target: string | null | { next: true }) => {
     const locked = new Set(Object.keys(statuses).filter((k) => statuses[k]?.state === "ok"));
-    const next = reflowFrom(matches, sceneSlots, key, sceneId, { onlyMissing: onlyMissingUpload, locked });
+    const next = reflowFrom(matches, sceneSlots, key, target, {
+      onlyMissing: onlyMissingUpload,
+      locked,
+      includeNumbered: typeof target === "object" && target !== null,
+    });
     const prevByKey = new Map(matches.map((m) => [m.key, m.sceneId]));
     const changed = next.filter((m) => prevByKey.get(m.key) !== m.sceneId).map((m) => m.key);
     setMatches(next);
@@ -260,19 +265,6 @@ export default function BatchVisualsModal({
       for (const k of [key, ...changed]) if (out[k]?.state !== "ok") out[k] = { state: "pending" };
       return out;
     });
-  };
-
-  // "Esta imagen es de la escena siguiente": Flow no genero la anterior.
-  const nextFreeScene = (sceneId: string | null): string | null => {
-    const order = sceneId ? scenesById.get(sceneId)?.order : undefined;
-    if (order === undefined) return null;
-    const lockedScenes = new Set(
-      matches.filter((m) => statuses[m.key]?.state === "ok" || m.reason === "number" || m.reason === "manual").map((m) => m.sceneId)
-    );
-    const next = [...scenes]
-      .sort((a, b) => a.order - b.order)
-      .find((s) => s.order > order && !lockedScenes.has(s.id) && (!onlyMissingUpload || !scenesWithVisual.has(s.id)));
-    return next?.id ?? null;
   };
 
   const sceneUseCount = useMemo(() => {
@@ -529,7 +521,7 @@ export default function BatchVisualsModal({
                 Con número en el nombre (escena_07.png, 7.jpg) van a esa escena; el resto, en orden.
               </p>
               <p className="text-[11px] mt-1" style={{ color: "var(--muted-foreground)" }}>
-                ¿Flow falló una? En la primera imagen corrida tocá <span className="font-mono">+1 ↓</span> (o elegí su escena): esa y todas las siguientes se corren, y la que faltó queda libre para subirla sola.
+                ¿Flow falló una y las siguientes quedaron corridas (aunque tengan número)? En la primera imagen corrida tocá <span className="font-mono">+1 ↓</span>: esa y todas las siguientes avanzan una escena, y la que faltó queda libre para subirla sola.
               </p>
               <input
                 ref={fileInputRef}
@@ -580,7 +572,7 @@ export default function BatchVisualsModal({
                 const url = previewUrls[m.key];
                 const order = orderOf(m.sceneId);
                 const sceneText = m.sceneId ? scenesById.get(m.sceneId)?.narrativeContent : undefined;
-                const canShift = (m.reason === "order" || m.reason === "shifted") && status.state !== "ok" && !uploading;
+                const canShift = m.reason !== "manual" && status.state !== "ok" && !uploading;
                 return (
                   <div
                     key={m.key}
@@ -612,7 +604,7 @@ export default function BatchVisualsModal({
                               : m.reason === "order"
                                 ? "Por orden"
                                 : m.reason === "shifted"
-                                  ? "Por orden (corrida)"
+                                  ? "Corrida"
                                   : "Asignado a mano"}
                       </p>
                       {sceneText && (
@@ -636,7 +628,7 @@ export default function BatchVisualsModal({
                       ))}
                     </select>
                     <button
-                      onClick={() => assignScene(m.key, nextFreeScene(m.sceneId))}
+                      onClick={() => assignScene(m.key, { next: true })}
                       disabled={!canShift || !m.sceneId}
                       className="shrink-0 text-[11px] px-1.5 py-1 rounded-md transition-opacity hover:opacity-80 disabled:opacity-30"
                       style={{ color: "var(--muted-foreground)", border: "1px solid rgba(255,255,255,0.08)" }}
