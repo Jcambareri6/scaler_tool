@@ -16,7 +16,8 @@ export interface FileMatch {
   file: File;
   sceneId: string | null;
   // Como se eligio la escena -- se muestra en la tabla de revision.
-  reason: "number" | "order" | "manual" | "none";
+  // "shifted": venia por orden y se corrio con reflowFrom.
+  reason: "number" | "order" | "shifted" | "manual" | "none";
 }
 
 const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
@@ -107,4 +108,64 @@ export function matchFilesToScenes(
     const bo = b.sceneId ? orderOf.get(b.sceneId)! : Number.MAX_SAFE_INTEGER;
     return ao - bo || naturalCompare(a.file.name, b.file.name);
   });
+}
+
+// Archivos sin numero en el nombre que se reparten por orden (los que
+// sobraron, sin escena, tambien: al correr la cadena pueden entrar).
+function inOrderChain(m: FileMatch): boolean {
+  if (m.reason === "order" || m.reason === "shifted") return true;
+  return m.reason === "none" && sceneNumberFromName(m.file.name) === null;
+}
+
+// Cuando Flow falla una imagen del lote, los archivos que bajan quedan sin
+// hueco: desde ahi cada uno cae una escena antes de la suya. Esto lo arregla
+// de un toque: el archivo `key` pasa a `targetSceneId` y todos los que
+// venian despues por orden se corren a las escenas libres siguientes. Los
+// anteriores, los que van por numero, los asignados a mano y los `locked`
+// (ya cargados) no se tocan. Si `key` no va por orden, es una asignacion
+// manual comun.
+export function reflowFrom(
+  matches: FileMatch[],
+  scenes: SceneSlot[],
+  key: string,
+  targetSceneId: string | null,
+  options: { onlyMissing: boolean; locked: Set<string> }
+): FileMatch[] {
+  const target = matches.find((m) => m.key === key);
+  if (!target) return matches;
+  const assigned: FileMatch = { ...target, sceneId: targetSceneId, reason: "manual" };
+  if (!inOrderChain(target) || options.locked.has(key)) {
+    return matches.map((m) => (m.key === key ? assigned : m));
+  }
+
+  const chain = matches
+    .filter((m) => inOrderChain(m) && !options.locked.has(m.key))
+    .sort((a, b) => naturalCompare(a.file.name, b.file.name));
+  const tail = chain.slice(chain.findIndex((m) => m.key === key) + 1);
+  const tailKeys = new Set(tail.map((m) => m.key));
+
+  const orderOf = new Map(scenes.map((s) => [s.id, s.order]));
+  // Sin escena destino, el resto arranca donde estaba este archivo.
+  const startOrder = (targetSceneId ? orderOf.get(targetSceneId) : undefined) ?? (target.sceneId ? orderOf.get(target.sceneId)! - 1 : 0);
+  const taken = new Set(
+    matches.filter((m) => m.key !== key && !tailKeys.has(m.key) && m.sceneId).map((m) => m.sceneId!)
+  );
+  if (targetSceneId) taken.add(targetSceneId);
+  const free = [...scenes]
+    .sort((a, b) => a.order - b.order)
+    .filter((s) => s.order > startOrder && !taken.has(s.id) && (!options.onlyMissing || !s.hasVisual));
+
+  const moved = new Map<string, FileMatch>([[key, assigned]]);
+  tail.forEach((m, i) => {
+    const scene = free[i];
+    moved.set(m.key, { ...m, sceneId: scene?.id ?? null, reason: scene ? "shifted" : "none" });
+  });
+
+  return matches
+    .map((m) => moved.get(m.key) ?? m)
+    .sort((a, b) => {
+      const ao = a.sceneId ? orderOf.get(a.sceneId)! : Number.MAX_SAFE_INTEGER;
+      const bo = b.sceneId ? orderOf.get(b.sceneId)! : Number.MAX_SAFE_INTEGER;
+      return ao - bo || naturalCompare(a.file.name, b.file.name);
+    });
 }
