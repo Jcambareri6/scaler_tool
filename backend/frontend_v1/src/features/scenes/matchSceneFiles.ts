@@ -2,7 +2,10 @@
 // 1) si el nombre trae el numero de escena ("escena_07.png", "Scene 7.jpg",
 //    "07.png"), va a esa escena;
 // 2) el resto se reparte en orden natural de nombre (2 antes que 10) sobre
-//    las escenas que quedaron libres, de la primera a la ultima.
+//    las escenas que quedaron libres, desde `startOrder` hasta la ultima.
+// Con `ignoreNumbers` todos van por orden: descargadores como Viral DNA
+// numeran por orden de descarga (0, 1, 2...) y no por escena, y cada lote
+// nuevo vuelve a empezar en 0.
 // Archivos que sobran (o con un numero que no existe) quedan sin escena.
 
 export interface SceneSlot {
@@ -69,7 +72,7 @@ export function normalizeVisualFile(file: File): File {
 export function matchFilesToScenes(
   files: File[],
   scenes: SceneSlot[],
-  options: { onlyMissing: boolean }
+  options: { onlyMissing: boolean; ignoreNumbers?: boolean; startOrder?: number }
 ): FileMatch[] {
   const byOrder = new Map(scenes.map((s) => [s.order, s]));
   const taken = new Set<string>();
@@ -77,7 +80,7 @@ export function matchFilesToScenes(
   const unnumbered: File[] = [];
 
   for (const file of [...files].sort((a, b) => naturalCompare(a.name, b.name))) {
-    const number = sceneNumberFromName(file.name);
+    const number = options.ignoreNumbers ? null : sceneNumberFromName(file.name);
     if (number === null) {
       unnumbered.push(file);
       continue;
@@ -96,7 +99,7 @@ export function matchFilesToScenes(
 
   const free = [...scenes]
     .sort((a, b) => a.order - b.order)
-    .filter((s) => !taken.has(s.id) && (!options.onlyMissing || !s.hasVisual));
+    .filter((s) => s.order >= (options.startOrder ?? 1) && !taken.has(s.id) && (!options.onlyMissing || !s.hasVisual));
   unnumbered.forEach((file, i) => {
     const scene = free[i];
     matches.push({ key: fileKey(file), file, sceneId: scene?.id ?? null, reason: scene ? "order" : "none" });

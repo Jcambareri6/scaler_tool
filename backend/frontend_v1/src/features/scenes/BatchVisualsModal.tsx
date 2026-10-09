@@ -7,6 +7,7 @@ import {
   matchFilesToScenes,
   normalizeVisualFile,
   reflowFrom,
+  sceneNumberFromName,
   type FileMatch,
 } from "./matchSceneFiles";
 
@@ -176,6 +177,9 @@ export default function BatchVisualsModal({
   const [files, setFiles] = useState<File[]>([]);
   const [matches, setMatches] = useState<FileMatch[]>([]);
   const [onlyMissingUpload, setOnlyMissingUpload] = useState(false);
+  // Viral DNA y similares: el numero del archivo es el orden de descarga.
+  const [ignoreNumbers, setIgnoreNumbers] = useState(false);
+  const [startOrder, setStartOrder] = useState(1);
   const [statuses, setStatuses] = useState<Record<string, UploadStatus>>({});
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -196,10 +200,11 @@ export default function BatchVisualsModal({
   matchesRef.current = matches;
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
-  const lastOnlyMissingRef = useRef(onlyMissingUpload);
+  const modeKey = `${onlyMissingUpload}|${ignoreNumbers}|${startOrder}`;
+  const lastModeRef = useRef(modeKey);
   useEffect(() => {
-    const modeChanged = lastOnlyMissingRef.current !== onlyMissingUpload;
-    lastOnlyMissingRef.current = onlyMissingUpload;
+    const modeChanged = lastModeRef.current !== modeKey;
+    lastModeRef.current = modeKey;
     const keep = new Map(
       matchesRef.current
         .filter((m) =>
@@ -212,11 +217,11 @@ export default function BatchVisualsModal({
     const fresh = matchFilesToScenes(
       files.filter((f) => !keep.has(fileKey(f))),
       sceneSlots.filter((s) => ![...keep.values()].some((m) => m.sceneId === s.id)),
-      { onlyMissing: onlyMissingUpload }
+      { onlyMissing: onlyMissingUpload, ignoreNumbers, startOrder }
     );
     setMatches([...keep.values()].filter((m) => files.some((f) => fileKey(f) === m.key)).concat(fresh));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, onlyMissingUpload]);
+  }, [files, modeKey]);
 
   const previewUrls = useMemo(() => {
     const map: Record<string, string> = {};
@@ -232,6 +237,14 @@ export default function BatchVisualsModal({
       return;
     }
     setUploadError(null);
+    // Un archivo "0" no puede ser una escena: es numeracion de descarga.
+    if (!ignoreNumbers && incoming.some((f) => sceneNumberFromName(f.name) === 0)) setIgnoreNumbers(true);
+    // Lote nuevo con numeracion de descarga: arranca despues de la ultima
+    // escena ya cargada en esta sesion (se puede cambiar).
+    if (ignoreNumbers || incoming.some((f) => sceneNumberFromName(f.name) === 0)) {
+      const lastUploaded = Math.max(0, ...scenes.filter((s) => uploadedSceneIds.has(s.id)).map((s) => s.order));
+      if (lastUploaded > 0) setStartOrder(lastUploaded + 1);
+    }
     setFiles((prev) => {
       const keys = new Set(prev.map(fileKey));
       return [...prev, ...incoming.filter((f) => !keys.has(fileKey(f)))];
@@ -534,6 +547,25 @@ export default function BatchVisualsModal({
                   e.target.value = "";
                 }}
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2" style={panelStyle}>
+              <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
+                <input type="checkbox" checked={ignoreNumbers} onChange={(e) => setIgnoreNumbers(e.target.checked)} />
+                El número del archivo es orden de descarga (Viral DNA: 0, 1, 2...), no la escena
+              </label>
+              <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
+                Este lote empieza en la escena
+                <input
+                  type="number"
+                  min={1}
+                  max={scenes.length || 1}
+                  value={startOrder}
+                  disabled={uploading}
+                  onChange={(e) => setStartOrder(Math.max(1, Number(e.target.value) || 1))}
+                  className="input-glass w-16 rounded-md px-2 py-1 text-xs"
+                />
+              </label>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
