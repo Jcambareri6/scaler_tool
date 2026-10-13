@@ -161,7 +161,8 @@ async function ai33Credits(apiKey: string): Promise<number | null> {
     const res = await fetchWithTimeout(`${AI33_BASE_URL}/v1/credits`, { headers: { "xi-api-key": apiKey } }, 15000);
     if (!res.ok) return null;
     const data = (await res.json()) as { credits?: unknown };
-    return typeof data.credits === "number" ? data.credits : null;
+    const credits = typeof data.credits === "string" ? Number(data.credits) : data.credits;
+    return typeof credits === "number" && Number.isFinite(credits) ? credits : null;
   } catch {
     return null;
   }
@@ -180,8 +181,11 @@ async function orderKeysByCredits(keys: string[], needed: number): Promise<{ usa
   };
 }
 
+// ai33 puede rechazar el pedido de entrada (402) o aceptarlo y despues
+// marcar la TAREA como "error" por falta de saldo (lo tira pollAi33Task) --
+// los dos casos tienen que pasar a la siguiente cuenta.
 const isInsufficientCredits = (err: unknown) =>
-  err instanceof Error && /\(402\)|insufficient_credits|not enough credits/i.test(err.message);
+  err instanceof Error && /\(402\)|insufficient|not enough|credit|balance|quota/i.test(err.message);
 
 export async function generateWithAi33(
   storageKey: string,
@@ -199,12 +203,16 @@ export async function generateWithAi33(
     );
   }
 
-  let submitted: { task_id: string } | null = null;
-  let apiKey = usable[0]!;
+  // Envio + espera de la tarea con cada cuenta: si falla por saldo (al
+  // enviar o ya en la tarea), se prueba con la siguiente.
+  let task: Ai33TaskResponse | null = null;
   for (const [i, key] of usable.entries()) {
-    apiKey = key;
     try {
-      submitted = await submitAi33(text, voiceId, key);
+      const submitted = await submitAi33(text, voiceId, key);
+      if (!submitted?.task_id) {
+        throw new Error("ai33.pro no devolvio task_id para el pedido de voz");
+      }
+      task = await pollAi33Task(submitted.task_id, key);
       if (i > 0) console.log(`[ai33] usando la cuenta ${keyTag(key)} (las anteriores no tenian creditos)`);
       break;
     } catch (err) {
@@ -215,13 +223,11 @@ export async function generateWithAi33(
         }
         throw err;
       }
+      console.warn(`[ai33] la cuenta ${keyTag(key)} no tiene creditos (${(err as Error).message}), probando la siguiente...`);
     }
   }
-  if (!submitted?.task_id) {
-    throw new Error("ai33.pro no devolvio task_id para el pedido de voz");
-  }
+  if (!task) throw new Error("ai33.pro no devolvio la tarea de voz");
 
-  const task = await pollAi33Task(submitted.task_id, apiKey);
   const audioUrl = task.metadata?.audio_url;
   if (!audioUrl) {
     throw new Error("ai33.pro no devolvio audio_url para la tarea completada");
