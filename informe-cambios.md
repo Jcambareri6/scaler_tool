@@ -2,14 +2,20 @@
 
 Todo lo que se corrigió y agregó para abrir Scaler Tool a los alumnos cobrando por video. Para cada cambio: **qué pasaba antes**, **qué se hizo**, **por qué** y **un ejemplo**.
 
-- **Rama:** `claude/brave-hypatia-8mp61k`
+- **Rama:** `claude/brave-hypatia-8mp61k`, mergeada a `master` en el PR #3.
 - **Commits:**
   - `62e5ac4`: cerrar gastos sin control
   - `d21b95e`: sacar IA del frontend, reusar Whisper y cerrar los estados de jobs
   - `41e1cc7`: aprobación de cuentas, contador de videos y panel de admin
+  - `3b003c3`: tests de punta a punta (API y navegador)
 - **Plan original:** [`plan-monetizacion-y-seguridad.md`](plan-monetizacion-y-seguridad.md)
 
-> ⚠️ **Nada de esto está desplegado todavía.** Antes de desplegar hay que correr dos migraciones en Supabase, en un orden concreto. Ver [Cómo desplegar](#cómo-desplegar).
+> **Estado del deploy (14/10):**
+> - ✅ Migraciones aplicadas en Supabase.
+> - ✅ Worker de Hetzner actualizado a `master`, con `ADMIN_USER_IDS`.
+> - ⏳ **Falta Render:** cargar `ADMIN_USER_IDS` y desplegar la API. Mientras tanto nadie puede entrar al panel de Administración.
+>
+> Ver [Cómo desplegar](#cómo-desplegar).
 
 ---
 
@@ -412,15 +418,36 @@ Página nueva **Administración** (`/admin`). El link aparece en el menú **solo
 | Permisos de la key pública | Ídem, con los roles `anon` y `authenticated` | ✅ No puede escribir en `jobs`, ni leer saldos, ni llamar a las funciones de cobro |
 | Proyectos viejos | Ídem | ✅ Los que tienen video final quedan como ya cobrados |
 
-**Lo que no se pudo probar acá** (necesita la base real de Supabase, para los tests del viernes):
-- La barra de progreso del render por Realtime después de cerrar la base.
-- El flujo completo con el worker: renderizar, fallar y que se devuelva.
-- La reutilización de la voz y de Whisper con audios reales.
+### Tests automáticos
+
+Hay dos tests que corren contra la base de Supabase de `backend/.env`. Cada uno crea dos usuarios temporales (un admin y un alumno), levanta su propia API y al terminar los borra junto con todo lo que crearon.
+
+Los dos usan `OFFLINE_PROVIDERS=true`, que hace que la API ignore los providers de la base. Así no llaman a ai33, Whisper ni a los LLMs. `MOCK_PROVIDERS` solo no alcanza: simula únicamente cuando no hay provider cargado, y en producción están todos cargados.
+
+| Comando | Qué prueba | Resultado (14/10) |
+|---|---|---|
+| `npm run test:cobro` | La API: aprobación, contador, render de punta a punta (bien y con falla), voz, Whisper, límites, IA desactivada, cuentas sin límite y permisos de la key pública | ✅ 75 de 75 |
+| `npm run test:frontend` | La app en un navegador (Edge o Chrome instalado, con Playwright), como alumno y como admin: pantalla de pendiente, saldo en el menú, mensajes del botón Renderizar, panel de admin y rechazo | ✅ 30 de 30 |
+
+`test:frontend` deja capturas de cada paso en `%TEMP%\skaler-ui-test`.
+
+**Lo que todavía no se probó** (necesita producción):
+- La barra de progreso del render por Realtime en la app desplegada.
+- El worker de Hetzner: reintentos y devolución del video cuando el worker se cae. La devolución está probada en modo inline, con la misma función.
+- La reutilización de la voz y de Whisper con audios reales, mirando el saldo de ai33.
 - El login con Google creando la cuenta pendiente.
+- La extensión de Flow con una cuenta pendiente.
 
 ---
 
 ## Cómo desplegar
+
+> **Estado:** pasos 1 y 2 hechos en Supabase y en el worker. Falta Render: la variable y el deploy de la API. El frontend se despliega desde `master`.
+>
+> Además de lo que hizo la migración, a mano:
+> - Quedaron sin límite solo Joaquín, Seba y Rodri.
+> - El resto de las cuentas que ya existían quedó aprobado con 0 videos.
+> - `juanchoyt4006@gmail.com` (cuenta desconocida) quedó rechazado y baneado en Supabase Auth.
 
 **El orden importa:** la API nueva llama a funciones de la base que crean las migraciones. Si se despliega el código antes, **todos los pedidos fallan**.
 
@@ -442,8 +469,13 @@ Página nueva **Administración** (`/admin`). El link aparece en el menú **solo
 
 | Qué | Estado |
 |---|---|
-| Tope de voces por proyecto | A definir con Seba y el mentor (y lo de las voces clonadas) |
-| Tests de integración contra una base de pruebas | **El viernes**; falta elegir: proyecto de Supabase aparte o local |
+| `ADMIN_USER_IDS` en Render y deploy de la API | ⏳ **Bloqueante:** sin esto no anda el panel de admin |
+| Tope de voces por proyecto (plan, paso 4.5) | ⏳ A definir con Seba y el mentor (y lo de las voces clonadas). Hoy un alumno puede regenerar la voz sin límite (~0,25 USD cada vez). Al hacerlo, volver a agregar `'extra_voice'` a los motivos de `video_credit_movements` |
+| Desactivar el provider `snapgen` en la tabla `providers` (plan, paso 0.5) | ⏳ Pendiente. Hoy no se puede usar, porque las tools están desregistradas |
+| Que la key pública no lea todos los `jobs` (plan, paso 1.2) | ⏳ Pendiente: RLS en `jobs`, o consultas al backend en vez de Realtime |
+| Pruebas en producción (worker, Google, extensión, cobro real de ai33 y Whisper) | ⏳ Después del deploy de Render |
 | Pasar las imágenes de escenas a R2 (lo del límite de almacenamiento) | Pendiente |
+| Caché de la voz de muestra en Storage, en vez de en memoria (se pierde con cada deploy) | Opcional |
 | Limpieza de audios viejos | Opcional, más adelante |
-| Errores crudos de la base, límites en `/auth/refresh` | Después del sábado |
+| Fase 8: límites en `/auth/refresh` y `/auth/oauth`, validar `redirect_to` y errores crudos de la base | Después del sábado |
+| ~~Tests de integración~~ | ✅ Hechos: `test:cobro` y `test:frontend` (ver [Cómo se verificó](#cómo-se-verificó)) |

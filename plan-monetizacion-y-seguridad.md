@@ -2,10 +2,25 @@
 
 Plan de implementación para abrir Scaler Tool a los alumnos cobrando por video renderizado. Junta todo lo que charlamos: costos, contador de videos, aprobación de cuentas, panel de administrador, extensión de Flow, vulnerabilidades y fallas.
 
-> **Estado (15/10):** implementadas las fases 0 a 6 en la rama `claude/brave-hypatia-8mp61k`, más la caché de Whisper y el cierre de los estados de jobs. Falta: tope de voces por proyecto (a definir con Seba), pasar las imágenes de escenas a R2 y la fase 8. Ver [Cómo desplegar](#cómo-desplegar) abajo.
-> Los ejemplos de código del resto del documento son ilustrativos: el código real está en la rama.
+> **Estado (14/10, noche):** mergeado a `master` (PR #3). Migraciones aplicadas en Supabase y worker de Hetzner actualizado. Falta cargar `ADMIN_USER_IDS` en Render y desplegar la API.
+>
+> | Fase | Estado |
+> |---|---|
+> | 0. Sacar la IA | ✅ Hecha, salvo el paso 0.5: el provider `snapgen` sigue activo en la tabla `providers` (las tools están desregistradas, así que no se puede usar) |
+> | 1. Cerrar la base | ✅ Paso 1.1 aplicado. ⏳ Paso 1.2 (que `jobs` no se pueda leer entero) pendiente |
+> | 2. Gastos sin control | ✅ Hecha (tope del guion en 35.000 y no 40.000; la caché de la voz de muestra quedó en memoria y no en Storage) |
+> | 3. Aprobación de cuentas | ✅ Hecha |
+> | 4. Contador de videos | ✅ Hecha, salvo el paso 4.5 (tope de 3 voces por proyecto), que queda **a definir con Seba** |
+> | 5. Panel de admin | ✅ Hecha (más la opción "sin límite" para el equipo) |
+> | 6. Lo que ve el alumno | ✅ Hecha |
+> | 7. Extensión de Flow | ✅ No hizo falta cambiarla. ⏳ Falta probarla con una cuenta pendiente |
+> | 8. Prolijidad | ⏳ Solo se borró `/auth/test` |
+>
+> El detalle de lo que se hizo y de lo que falta está en [`informe-cambios.md`](informe-cambios.md). Los ejemplos de código del resto de este documento son ilustrativos: el código real está en `master`.
 
 ## Cómo desplegar
+
+> **Estado:** pasos 1 y 2 hechos en Supabase y en el worker de Hetzner. Falta Render: cargar `ADMIN_USER_IDS` y desplegar la API.
 
 **El orden importa:** la API nueva llama a funciones de la base que crean las migraciones. Si se despliega el código antes, todos los pedidos fallan.
 
@@ -1123,13 +1138,13 @@ Hacerlo con **dos cuentas de prueba**: una de alumno y la de Seba (admin).
 
 ## Decisiones pendientes
 
-| # | Pregunta | Propuesta |
-|---|---|---|
-| 1 | ¿Cuántos videos gratis al aprobar? | 5 |
-| 2 | ¿Cuántas voces incluidas por proyecto? | 3 |
-| 3 | ¿Tope de largo del guion? | 40.000 caracteres (~40 min) |
-| 4 | ¿Precio del paquete después de los gratis? | 20 USD por 10 videos (con 6 alumnos, 10 USD no cubre los servidores) |
-| 5 | ¿Qué modelo genera el guion? | Revisar el provider; si es Opus, evaluar uno más barato |
-| 6 | ¿Tope de previews por hora? | 10 por usuario |
-| 7 | ¿Nombre de contacto en los mensajes? | "Seba" (o un WhatsApp) |
-| 8 | ¿Los videos cargados vencen? | No, por ahora |
+| # | Pregunta | Propuesta | Cómo quedó |
+|---|---|---|---|
+| 1 | ¿Cuántos videos gratis al aprobar? | 5 | 5 (`WELCOME_VIDEOS`) |
+| 2 | ¿Cuántas voces incluidas por proyecto? | 3 | ⏳ A definir con Seba (no implementado) |
+| 3 | ¿Tope de largo del guion? | 40.000 caracteres (~40 min) | 35.000 (`MAX_SCRIPT_CHARS`) |
+| 4 | ¿Precio del paquete después de los gratis? | 20 USD por 10 videos (con 6 alumnos, 10 USD no cubre los servidores) | 25 USD por 20 videos (el admin carga 20 por defecto) |
+| 5 | ¿Qué modelo genera el guion? | Revisar el provider; si es Opus, evaluar uno más barato | `claude-sonnet-5` (no es Opus) |
+| 6 | ¿Tope de previews por hora? | 10 por usuario | 10 por usuario |
+| 7 | ¿Nombre de contacto en los mensajes? | "Seba" (o un WhatsApp) | "el administrador" |
+| 8 | ¿Los videos cargados vencen? | No, por ahora | No vencen |
