@@ -171,7 +171,9 @@ export async function uploadScriptAudio(req: Request, res: Response) {
     }
 
     const extension = (file.originalname.split(".").pop() || "audio").toLowerCase();
-    const result = await uploadUserAudio(script.id, file.buffer, extension);
+    // Un archivo por subida (no `${script.id}.mp3` fijo): asi una subida
+    // nueva no pisa el audio de un Asset anterior ni su transcripcion guardada.
+    const result = await uploadUserAudio(`${script.id}-upload-${Date.now()}`, file.buffer, extension);
 
     const { data: asset, error: assetError } = await supabase
       .from("assets")

@@ -46,10 +46,13 @@ export const pipelineRateLimiter = perUserLimiter(
   "Llegaste al máximo de 10 previews por hora, probá de nuevo en un rato"
 );
 
-// POST /scripts/:id/scenes/image-prompts (prompts para Flow, lo usa la extension).
+// POST /scripts/:id/scenes/image-prompts (prompts para Flow, lo usan la
+// extension y "Imagenes en lote"). Un pedido arma los prompts de TODAS las
+// escenas que faltan, pero "Otro prompt" es un pedido por escena: el cupo
+// alcanza para rehacer muchas escenas sueltas y solo corta un uso en bucle.
 export const imagePromptsRateLimiter = perUserLimiter(
   60 * 60 * 1000,
-  30,
+  200,
   "Llegaste al máximo de pedidos de prompts por hora, probá de nuevo en un rato"
 );
 

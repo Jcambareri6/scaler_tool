@@ -272,9 +272,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
         const newAssets =
           params.tab === "upload"
             ? await projectsService.uploadSceneVisual(sceneId, params.file)
-            : params.tab === "ai"
-              ? await projectsService.regenerateSceneVisual(sceneId, { source: params.aiKind, aiPrompt: params.aiPrompt })
-              : await projectsService.regenerateSceneVisual(sceneId, { source: "stock", prompt: params.prompt });
+            : await projectsService.regenerateSceneVisual(sceneId, { prompt: params.prompt });
         setAssets((prev) => [...prev.filter((a) => a.sceneId !== sceneId), ...newAssets]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "No se pudo reemplazar el clip");

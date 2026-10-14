@@ -16,23 +16,20 @@ interface Props {
   onSubmit: (sceneId: string, params: ReplaceParams) => void;
 }
 
-type Tab = "stock" | "upload" | "ai";
+type Tab = "stock" | "upload";
 
 export type ReplaceParams =
   | { tab: "stock"; prompt: string }
-  | { tab: "ai"; aiKind: "ai" | "ai_image"; aiPrompt: string }
   | { tab: "upload"; file: File };
 
 // Modal de reemplazo puntual de una escena (click en "Reemplazar clip" desde
-// el panel de escenas de StockReviewPanel) -- las tres vias que describe
-// mejoras-interfaz-preview-scalertool.md: buscar stock, subir propio, o
-// generar con IA. La llamada real a scene.service.ts (via projectsService)
-// la hace el padre en segundo plano (ver onSubmit arriba), no este modal.
+// el panel de escenas de StockReviewPanel): buscar stock o subir propio (la
+// via de generar con IA esta desactivada hasta que este terminada). La
+// llamada real a scene.service.ts (via projectsService) la hace el padre en
+// segundo plano (ver onSubmit arriba), no este modal.
 export default function SceneReplaceModal({ scene, currentAssets, onClose, onSubmit }: Props) {
   const [tab, setTab] = useState<Tab>("stock");
   const [stockPrompt, setStockPrompt] = useState(scene.visualPrompt ?? "");
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiKind, setAiKind] = useState<"ai" | "ai_image">("ai");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -45,8 +42,6 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
         return;
       }
       onSubmit(scene.id, { tab: "upload", file });
-    } else if (tab === "ai") {
-      onSubmit(scene.id, { tab: "ai", aiKind, aiPrompt: aiPrompt.trim() });
     } else {
       onSubmit(scene.id, { tab: "stock", prompt: stockPrompt.trim() });
     }
@@ -94,7 +89,6 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
             [
               { id: "stock" as const, label: "Buscar stock" },
               { id: "upload" as const, label: "Subir propio" },
-              { id: "ai" as const, label: "Video con IA" },
             ]
           ).map((t) => (
             <button
@@ -167,47 +161,6 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
             >
               {file ? file.name : "Elegir archivo..."}
             </button>
-          </div>
-        )}
-
-        {tab === "ai" && (
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <button
-                onClick={() => setAiKind("ai")}
-                className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-                style={
-                  aiKind === "ai"
-                    ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                    : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-                }
-              >
-                Video con IA
-              </button>
-              <button
-                onClick={() => setAiKind("ai_image")}
-                className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-                style={
-                  aiKind === "ai_image"
-                    ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                    : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-                }
-              >
-                Imagen con IA
-              </button>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
-                Prompt de generación
-              </label>
-              <textarea
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                rows={3}
-                placeholder="Si lo dejás vacío, se deriva de la narrativa de la escena..."
-                className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
-              />
-            </div>
           </div>
         )}
 

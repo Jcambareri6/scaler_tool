@@ -151,6 +151,12 @@ export const generateVoiceTool: ToolDefinition<
       return reusable;
     }
 
+    // Un archivo por (voz + texto): antes todas las voces de un script se
+    // subian a `${script_id}.mp3` y cada una pisaba a la anterior, asi que
+    // reusar un Asset viejo (volver a un guion anterior) devolvia un audio
+    // que ya no era el suyo -- y su transcripcion guardada tampoco coincidia.
+    const audioKey = `${script_id}-${hashText(`${voiceKey}\n${textHash}`).slice(0, 16)}`;
+
     // Voz de Edge TTS pedida explicitamente (gratis, sin api key) -- solo
     // disponible si ENABLE_EDGE_TTS=true (ver lib/edgeTts.ts), para no
     // depender en produccion de un protocolo no oficial sin SLA.
@@ -159,7 +165,7 @@ export const generateVoiceTool: ToolDefinition<
         throw new Error("Edge TTS no esta habilitado en este entorno (falta ENABLE_EDGE_TTS=true)");
       }
       const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
-      const result = await generateWithEdgeTts(script_id, text, edgeVoiceId);
+      const result = await generateWithEdgeTts(audioKey, text, edgeVoiceId);
       const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
       return { ...result, asset_id: assetId };
     }
@@ -177,7 +183,7 @@ export const generateVoiceTool: ToolDefinition<
       // cae a Edge TTS si esta habilitado explicitamente -- si no, mismo
       // error que antes de agregar esta integracion.
       if (isEdgeTtsEnabled()) {
-        const result = await generateWithEdgeTts(script_id, text, DEFAULT_EDGE_TTS_VOICE);
+        const result = await generateWithEdgeTts(audioKey, text, DEFAULT_EDGE_TTS_VOICE);
         const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
         return { ...result, asset_id: assetId };
       }
@@ -187,7 +193,7 @@ export const generateVoiceTool: ToolDefinition<
     const resolvedVoiceId =
       voice_id ?? (provider.configuration?.voice_id as string | undefined) ?? DEFAULT_VOICE_ID;
 
-    const result = await generateWithAi33(script_id, text, provider.api_key, resolvedVoiceId);
+    const result = await generateWithAi33(audioKey, text, provider.api_key, resolvedVoiceId);
     const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
     return { ...result, asset_id: assetId };
   },
