@@ -6,6 +6,7 @@ import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
 import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
 import { renderQueue } from "../../lib/renderQueue.js";
+import { chargeRender, refundRender } from "../../lib/accounts.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
 
 export async function listJobs(req: Request, res: Response) {
@@ -68,6 +69,21 @@ export async function approveStockReview(req: Request, res: Response) {
       });
     }
 
+    // Contador de videos: el primer Renderizar de un proyecto descuenta 1
+    // video al dueno del proyecto (no al miembro del workspace que aprieta
+    // el boton). Re-renderizar un proyecto ya cobrado, o uno de una cuenta
+    // sin limite, no descuenta. Ver charge_render en la migracion.
+    const charge = await chargeRender(job.video_project_id);
+    if (charge === "no_credits") {
+      return res.status(402).json({
+        error: "Se terminaron tus videos. Contactá al administrador para cargar más.",
+        code: "NO_VIDEO_CREDITS",
+      });
+    }
+    // Si el render no llega a encolarse, el video recien descontado se
+    // devuelve (solo si se desconto en ESTE pedido).
+    const undoCharge = () => (charge === "charged" ? refundRender(job.video_project_id) : Promise.resolve());
+
     // progress:1 marca "en cola, todavia no arranco a renderizar de verdad"
     // -- runRenderPipeline pisa esto con progress:10 recien cuando arranca
     // de verdad: en inline cuando el semaforo de renderQueue lo deja correr
@@ -92,9 +108,11 @@ export async function approveStockReview(req: Request, res: Response) {
       .maybeSingle();
 
     if (error) {
+      await undoCharge();
       return res.status(400).json({ error: error.message });
     }
     if (!data) {
+      await undoCharge();
       return res.status(409).json({ error: "Job is no longer awaiting stock review" });
     }
     await syncProjectStatus(job.video_project_id, "RENDERING");
@@ -118,6 +136,9 @@ export async function approveStockReview(req: Request, res: Response) {
           .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
           .eq("id", job_id);
         await syncProjectStatus(job.video_project_id, "FAILED");
+        // Render fallido: si el proyecto nunca llego a tener un video final,
+        // se devuelve el video descontado.
+        await refundRender(job.video_project_id);
       });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });

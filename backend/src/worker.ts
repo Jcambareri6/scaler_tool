@@ -5,6 +5,7 @@ import path from "node:path";
 import { supabase } from "./lib/supabase.js";
 import { runPreRenderPipeline, runRenderPipeline } from "./pipeline/orchestrator.js";
 import { syncProjectStatus } from "./lib/projectStatus.js";
+import { refundRender } from "./lib/accounts.js";
 import { errorMessage } from "./lib/errors.js";
 import { envInt } from "./lib/env.js";
 import { forgetJobProgress, reportJobProgress } from "./lib/jobProgress.js";
@@ -139,6 +140,10 @@ async function handleFailure(job: Job, failure: unknown) {
   await syncProjectStatus(job.video_project_id, "FAILED").catch((syncError) =>
     log(`no se pudo sincronizar el proyecto ${job.video_project_id}:`, syncError)
   );
+  // Render fallido en el ultimo intento: se devuelve el video descontado al
+  // apretar Renderizar (solo si el proyecto nunca tuvo un video final). En
+  // los reintentos intermedios no se toca nada.
+  if (job.queue === "render") await refundRender(job.video_project_id);
 }
 
 async function runJob(job: Job, queue: JobQueueName) {
@@ -261,6 +266,10 @@ async function recoverStaleJobs() {
       await syncProjectStatus(row.video_project_id, "FAILED").catch((syncError) =>
         log(`no se pudo sincronizar el proyecto ${row.video_project_id}:`, syncError)
       );
+      // El worker murio en el ultimo intento. Si era un render cobrado, se
+      // devuelve el video (refund_render no hace nada si no hubo cobro o si
+      // el proyecto ya tiene un video final).
+      await refundRender(row.video_project_id);
     }
   }
 }

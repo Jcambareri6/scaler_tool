@@ -22,6 +22,8 @@ export interface VideoProject {
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
   renderQuality: RenderQuality;
+  // true si el proyecto ya desconto su video (re-renderizarlo no descuenta).
+  renderCharged: boolean;
   workspaceId?: string;
   // Solo viene en GET /projects/:id y /details (rol del usuario actual).
   myRole?: WorkspaceRole;

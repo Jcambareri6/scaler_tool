@@ -1,5 +1,17 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/authContext";
+import { useAccount } from "@/lib/accountContext";
+
+// Solo visible para administradores (aprobar cuentas y cargar videos).
+const adminItem = {
+  label: "Administración",
+  href: "/admin",
+  icon: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  ),
+};
 
 const navItems = [
   {
@@ -80,6 +92,8 @@ export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { account } = useAccount();
+  const visibleNavItems = account?.isAdmin ? [...navItems, adminItem] : navItems;
 
   const handleLogout = () => {
     logout();
@@ -130,7 +144,7 @@ export default function Sidebar() {
         <p className="text-[10px] font-medium px-3 mb-2" style={{ color: "var(--muted-foreground)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
           Navegación
         </p>
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = isActive(item.href);
           return (
             <Link
@@ -155,6 +169,30 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Saldo de videos (cada proyecto descuenta 1 la primera vez que se
+          renderiza). Las cuentas sin limite no lo ven. */}
+      {account && !account.unlimited && (
+        <div className="px-4 pb-3">
+          <div
+            className="rounded-xl px-3 py-2.5"
+            style={
+              account.videosAvailable > 0
+                ? { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }
+                : { background: "rgba(239,68,68,0.09)", border: "1px solid rgba(239,68,68,0.25)" }
+            }
+          >
+            <p className="text-sm font-semibold" style={{ color: account.videosAvailable > 0 ? "var(--foreground)" : "rgba(252,165,165,0.95)" }}>
+              {account.videosAvailable} {account.videosAvailable === 1 ? "video disponible" : "videos disponibles"}
+            </p>
+            {account.videosAvailable === 0 && (
+              <p className="text-[11px] mt-0.5" style={{ color: "rgba(252,165,165,0.8)" }}>
+                Contactá al administrador para cargar más
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom */}
       <div className="px-3 pb-4 space-y-0.5" style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>

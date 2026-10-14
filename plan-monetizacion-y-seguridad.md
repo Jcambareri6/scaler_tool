@@ -2,8 +2,29 @@
 
 Plan de implementación para abrir Scaler Tool a los alumnos cobrando por video renderizado. Junta todo lo que charlamos: costos, contador de videos, aprobación de cuentas, panel de administrador, extensión de Flow, vulnerabilidades y fallas.
 
-> **Estado:** solo plan. Todavía no hay código implementado.
-> Los ejemplos de código son ilustrativos: muestran la idea, no el código final.
+> **Estado (15/10):** implementadas las fases 0 a 6 en la rama `claude/brave-hypatia-8mp61k`, más la caché de Whisper y el cierre de los estados de jobs. Falta: tope de voces por proyecto (a definir con Seba), pasar las imágenes de escenas a R2 y la fase 8. Ver [Cómo desplegar](#cómo-desplegar) abajo.
+> Los ejemplos de código del resto del documento son ilustrativos: el código real está en la rama.
+
+## Cómo desplegar
+
+**El orden importa:** la API nueva llama a funciones de la base que crean las migraciones. Si se despliega el código antes, todos los pedidos fallan.
+
+1. **Migraciones en Supabase** (SQL Editor, en este orden):
+   1. `backend/supabase/migrations/20261015000000_lock_public_tables.sql`
+   2. `backend/supabase/migrations/20261015010000_accounts_and_video_credits.sql`
+
+   La segunda deja a **todas las cuentas que ya existen aprobadas y sin límite** (son del equipo). A un alumno que ya se haya registrado, sacarle el "sin límite" desde el panel de Administración.
+2. **Variables de entorno**, en Render (API) **y** en el worker de Hetzner:
+   - `ADMIN_USER_IDS=<uuid-de-joaquin>,<uuid-de-seba>` (los UUID están en Supabase → Authentication → Users).
+   - Opcionales: `WELCOME_VIDEOS` (default 5) y `MAX_SCRIPT_CHARS` (default 35000).
+3. **Desplegar el código:** API en Render, worker en Hetzner y frontend en Netlify.
+4. **Probar enseguida** (con una cuenta nueva de prueba):
+   - Al registrarse ve "Tu cuenta está pendiente".
+   - Seba la aprueba desde Administración → tiene 5 videos.
+   - La barra de progreso del render sigue funcionando (Realtime de `jobs`).
+
+**Vuelta atrás del cierre de la base**, si algo del frontend dejara de andar:
+`grant select, insert, update, delete on all tables in schema public to anon, authenticated;`
 
 ---
 
