@@ -12,9 +12,11 @@ import {
 } from "./scene.service.js";
 import {
   generateSceneImagePrompts,
-  uploadBatchSceneVisuals,  MAX_BATCH_FILES,
+  uploadBatchSceneVisuals,
+  MAX_BATCH_FILES,
 } from "./sceneBatch.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
+import { imagePromptsRateLimiter, regenerateVisualRateLimiter } from "../../middleware/rateLimit.middleware.js";
 
 // Mismo criterio que files/file.route.ts (memoria, sin tocar disco), pero
 // con un limite mas alto -- aca puede venir un clip de video corto, no solo
@@ -29,7 +31,7 @@ export const sceneListRouter = Router({ mergeParams: true });
 sceneListRouter.post("/", authMiddleware, createScene);
 sceneListRouter.get("/", authMiddleware, listScenes);
 sceneListRouter.patch("/reorder", authMiddleware, reorderScenes);
-sceneListRouter.post("/image-prompts", authMiddleware, generateSceneImagePrompts);
+sceneListRouter.post("/image-prompts", authMiddleware, imagePromptsRateLimiter, generateSceneImagePrompts);
 sceneListRouter.post(
   "/batch-visuals",
   authMiddleware,
@@ -42,5 +44,5 @@ export const sceneRouter = Router({ mergeParams: true });
 sceneRouter.get("/", authMiddleware, getScene);
 sceneRouter.patch("/", authMiddleware, updateScene);
 sceneRouter.delete("/", authMiddleware, deleteScene);
-sceneRouter.post("/regenerate-visual", authMiddleware, regenerateSceneVisual);
+sceneRouter.post("/regenerate-visual", authMiddleware, regenerateVisualRateLimiter, regenerateSceneVisual);
 sceneRouter.post("/upload-visual", authMiddleware, upload.single("file"), uploadSceneVisual);

@@ -4,32 +4,18 @@ import { getOwnedScript } from "../../lib/ownership.js";
 import { runTool } from "../../tools/index.js";
 import {
   replaceStockSegmentsForScene,
-  setAiVideoSegmentsForScene,
-  setAiImageForScene,
   setUploadedVisualForScene,
   uploadSceneAssetFile,
   normalizeUpload,
   appendStockHistory,
   readStockHistory,
-  type AiVideoSegment,
 } from "../../lib/stockSegments.js";
 import type { SearchStockInput, SearchStockOutput } from "../../tools/searchStock.tool.js";
 import type {
   GenerateStockKeywordsInput,
   GenerateStockKeywordsOutput,
 } from "../../tools/generateStockKeywords.tool.js";
-import type { GenerateVideoInput, GenerateVideoOutput } from "../../tools/generateVideo.tool.js";
-import type {
-  GenerateVideoPromptInput,
-  GenerateVideoPromptOutput,
-} from "../../tools/generateVideoPrompt.tool.js";
-import type { GenerateImageInput, GenerateImageOutput } from "../../tools/generateImage.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject, withChannelStyle } from "../../lib/channelSettings.js";
-
-// Tope de seguridad, mismo criterio que orchestrator.ts::generateAiVisual --
-// evita gasto descontrolado si generate_video devolviera duration_seconds 0.
-const MAX_AI_VIDEO_SEGMENTS = 10;
 
 export async function createScene(req: Request, res: Response) {
   try {
@@ -204,10 +190,9 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
   try {
     const { scene_id } = req.params;
     const userId = req.user!.id;
-    const { prompt, source, ai_prompt } = (req.body ?? {}) as {
+    const { prompt, source } = (req.body ?? {}) as {
       prompt?: string;
       source?: "stock" | "ai" | "ai_image";
-      ai_prompt?: string;
     };
 
     const { data: scene, error: sceneError } = await supabase
@@ -238,116 +223,10 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
       ?.match(/(\d+(?:\.\d+)?)/);
     const minDurationSeconds = durationMatch ? Number(durationMatch[1]) : 30;
 
-    // "ai" / "ai_image": mismo flujo que el pipeline automatico en modo
-    // visual_source "ai" (ver orchestrator.ts), pero con el prompt que haya
-    // tipeado el usuario aca en vez de uno derivado automaticamente -- si
-    // lo deja vacio, se deriva uno igual (generate_video_prompt) a partir
-    // de la narrativa de la escena. Ambas fuentes comparten esta derivacion
-    // de prompt (el prompt de video le sirve igual a la imagen: describe
-    // una escena filmable, que es tambien una buena descripcion de imagen).
+    // La generacion de visuales con IA (imagen o video) esta desactivada
+    // hasta que este terminada -- solo stock (aca) o Flow (extension).
     if (source === "ai" || source === "ai_image") {
-      const customAiPrompt = typeof ai_prompt === "string" && ai_prompt.trim() ? ai_prompt.trim() : null;
-      let visualPrompt = customAiPrompt;
-      if (!visualPrompt) {
-        if (!sceneText.trim()) {
-          return res.status(400).json({
-            error: "No hay texto para generar el prompt de IA (mandá un prompt o cargá la narrativa de la escena primero)",
-          });
-        }
-        const videoTopic = (project as { title?: string }).title;
-        const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
-        const { visual_style_prompt: channelStyle } = await getChannelSettingsForProject(project.id);
-        // Solo el diseño visual del canal: los personajes los aporta el
-        // usuario como ingredientes en Flow, no una ficha armada por la IA.
-        const visualStyle = channelStyle || null;
-        const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
-          "generate_video_prompt",
-          {
-            scene_text: sceneText,
-            target: source === "ai_image" ? "image" : "video",
-            ...(videoTopic ? { video_topic: videoTopic } : {}),
-            ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-            ...(visualStyle ? { visual_style: visualStyle } : {}),
-          },
-          { userId }
-        );
-        // El diseño del canal pegado al final (ver withChannelStyle): el LLM
-        // no siempre lo incorpora solo.
-        visualPrompt = withChannelStyle(promptResult.prompt, visualStyle);
-      }
-
-      if (source === "ai_image") {
-        let image: GenerateImageOutput;
-        try {
-          image = await runTool<GenerateImageInput, GenerateImageOutput>(
-            "generate_image",
-            { prompt: visualPrompt, scene_id: scene_id as string },
-            { userId }
-          );
-        } catch (toolError) {
-          const message = toolError instanceof Error ? toolError.message : "generate_image failed";
-          return res.status(400).json({ error: message });
-        }
-
-        await setAiImageForScene(project.id, scene_id as string, {
-          storage_key: image.storage_key,
-          prompt: visualPrompt,
-        });
-
-        const { data: imageAsset, error: imageAssetError } = await supabase
-          .from("assets")
-          .select("*")
-          .eq("scene_id", scene_id)
-          .eq("type", "IMAGE");
-        if (imageAssetError) return res.status(400).json({ error: imageAssetError.message });
-
-        try {
-          await runTool("build_timeline", { video_project_id: project.id }, { userId });
-        } catch {
-          // No bloqueante, ver comentario equivalente mas abajo en la rama de stock.
-        }
-
-        return res.status(200).json(imageAsset ?? []);
-      }
-
-      // "ai": el modelo de video (Veo 3.1 8s fijos, Seedance 2 hasta 15s)
-      // genera clips mas cortos que la escena -- se piden varios seguidos
-      // con el mismo prompt hasta cubrirla entera (mismo criterio que
-      // orchestrator.ts::generateAiVisual y que search_stock completando
-      // con mas de un candidato).
-      const segments: AiVideoSegment[] = [];
-      let remaining = minDurationSeconds;
-      try {
-        for (let i = 0; i < MAX_AI_VIDEO_SEGMENTS && remaining > 0.5; i++) {
-          const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
-            "generate_video",
-            { prompt: visualPrompt, scene_id: scene_id as string, duration_seconds: remaining },
-            { userId }
-          );
-          segments.push({ storage_key: video.storage_key, duration_seconds: video.duration_seconds, prompt: visualPrompt });
-          remaining -= video.duration_seconds || 0.5;
-        }
-      } catch (toolError) {
-        const message = toolError instanceof Error ? toolError.message : "generate_video failed";
-        return res.status(400).json({ error: message });
-      }
-
-      await setAiVideoSegmentsForScene(project.id, scene_id as string, segments);
-
-      const { data: aiAsset, error: aiAssetError } = await supabase
-        .from("assets")
-        .select("*")
-        .eq("scene_id", scene_id)
-        .eq("type", "VIDEO");
-      if (aiAssetError) return res.status(400).json({ error: aiAssetError.message });
-
-      try {
-        await runTool("build_timeline", { video_project_id: project.id }, { userId });
-      } catch {
-        // No bloqueante, ver comentario equivalente mas abajo en la rama de stock.
-      }
-
-      return res.status(200).json(aiAsset ?? []);
+      return res.status(400).json({ error: "La generación de visuales con IA todavía no está disponible" });
     }
 
     const customPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;

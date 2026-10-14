@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import type { ToolDefinition } from "./tool.types.js";
-import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { ProviderNotConfiguredError, ToolUserError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { generateWithAi33 } from "../lib/ai33.js";
 import { generateWithEdgeTts, isEdgeTtsEnabled, EDGE_TTS_VOICE_PREFIX, DEFAULT_EDGE_TTS_VOICE } from "../lib/edgeTts.js";
 import { supabase } from "../lib/supabase.js";
 import { getOwnedScript } from "../lib/ownership.js";
+import { MAX_SCRIPT_CHARS, scriptTextOf, scriptTooLongMessage } from "../lib/scriptLimits.js";
 
 export interface GenerateVoiceInput {
   script_id: string;
-  text: string;
+  // Ignorado: se narra siempre el guion guardado del script (ver execute).
+  // Queda en el contrato para no romper a los callers que lo siguen mandando.
+  text?: string;
   voice_id?: string;
 }
 
@@ -114,20 +117,31 @@ export const generateVoiceTool: ToolDefinition<
   parameters: {
     type: "object",
     properties: {
-      script_id: { type: "string", description: "UUID del script a narrar" },
-      text: { type: "string", description: "Texto a convertir en voz" },
+      script_id: { type: "string", description: "UUID del script a narrar (se narra su guion guardado)" },
       voice_id: {
         type: "string",
         description:
           "Voz con prefijo de proveedor (ej: minimax_..., elevenlabs_..., clone_...) -- opcional",
       },
     },
-    required: ["script_id", "text"],
+    required: ["script_id"],
   },
-  async execute({ script_id, text, voice_id }, ctx) {
+  async execute({ script_id, voice_id }, ctx) {
     const script = await getOwnedScript(script_id, ctx.userId);
     if (!script) {
       throw new Error("Script not found");
+    }
+
+    // El texto sale SIEMPRE del guion guardado, nunca del pedido: si no,
+    // cualquiera podia mandar por POST /tools/generate_voice/execute un
+    // texto arbitrario (hasta el limite del body) y gastar credito de ai33
+    // sin relacion con su guion.
+    const text = scriptTextOf(script.content);
+    if (!text.trim()) {
+      throw new ToolUserError("El guion está vacío: escribilo o generalo antes de crear la voz");
+    }
+    if (text.length > MAX_SCRIPT_CHARS) {
+      throw new ToolUserError(scriptTooLongMessage(text.length));
     }
 
     const voiceKey = voice_id ?? "__default__";

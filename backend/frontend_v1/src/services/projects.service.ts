@@ -325,17 +325,12 @@ export const projectsService = {
 
   // Clip corto para escuchar como suena una voz antes de comprometerse a
   // generar la narracion completa (que puede tardar minutos).
-  async previewVoice(
-    voiceId: string,
-    sampleText?: string
-  ): Promise<{ audioUrl: string; durationSeconds: number }> {
+  // El texto de la muestra es fijo (lo pone el backend).
+  async previewVoice(voiceId: string): Promise<{ audioUrl: string; durationSeconds: number }> {
     const { output } = await api.post<{
       output: { audio_url: string; duration_seconds: number };
     }>(`/tools/preview_voice/execute`, {
-      input: {
-        voice_id: voiceId,
-        ...(sampleText?.trim() ? { sample_text: sampleText.trim() } : {}),
-      },
+      input: { voice_id: voiceId },
     });
     return { audioUrl: output.audio_url, durationSeconds: output.duration_seconds };
   },

@@ -5,6 +5,16 @@ import { runPreRenderPipeline } from "../../pipeline/orchestrator.js";
 import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
 import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
+import type { JobStatus } from "../../types/shared/typeShared.js";
+
+// Estados en los que el proyecto ya tiene un trabajo en curso (preview
+// generandose o render corriendo): no se lanza otra preview encima.
+const IN_PROGRESS_STATUSES: JobStatus[] = ["QUEUED", "RUNNING", "SCRIPT_DONE", "AUDIO_DONE", "VISUALS_DONE", "RENDERING"];
+
+// Un job "en curso" mas viejo que esto se considera colgado (ej: la API se
+// reinicio a mitad de camino en modo inline y nunca lo marco FAILED) y no
+// bloquea una preview nueva -- si no, el proyecto quedaria trabado para siempre.
+const STALE_JOB_MS = 3 * 60 * 60 * 1000;
 
 export async function runPipeline(req: Request, res: Response) {
   try {
@@ -14,6 +24,23 @@ export async function runPipeline(req: Request, res: Response) {
     const project = await getOwnedProject(project_id, userId);
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
+    }
+
+    // Una preview a la vez por proyecto: sin esto, apretar "Generar" varias
+    // veces encolaba N pipelines (cada uno paga Whisper y LLM) y llenaba la
+    // cola del worker, frenando a todos los demas usuarios.
+    const { data: running, error: runningError } = await supabase
+      .from("jobs")
+      .select("id")
+      .eq("video_project_id", project.id)
+      .in("status", IN_PROGRESS_STATUSES)
+      .gte("created_at", new Date(Date.now() - STALE_JOB_MS).toISOString())
+      .limit(1);
+    if (runningError) {
+      return res.status(500).json({ error: "Internal server error" });
+    }
+    if (running && running.length > 0) {
+      return res.status(409).json({ error: "Este proyecto ya se está procesando: esperá a que termine" });
     }
 
     // EXECUTION_MODE=queue: el Job queda QUEUED en la cola y lo toma el

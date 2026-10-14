@@ -16,11 +16,6 @@ const credentialsSchema = z.object({
     password: z.string().min(8),
 });
 
-authRouter.post("/test", (req, res) => {
-
-    res.json({ ok: true });
-});
-
 authRouter.post("/register", authRateLimiter, async (req, res) => {
     const parsed = credentialsSchema.safeParse(req.body);
     if (!parsed.success) {
