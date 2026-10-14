@@ -69,15 +69,13 @@ function SceneDetail({
   assets: Asset[];
   onRegenerate: (
     sceneId: string,
-    options: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
+    options: { prompt?: string }
   ) => Promise<void>;
   onSaved: (scene: Scene) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [narrative, setNarrative] = useState(scene.narrativeContent);
   const [visualPrompt, setVisualPrompt] = useState(scene.visualPrompt ?? "");
-  const [source, setSource] = useState<"stock" | "ai" | "ai_image">("stock");
-  const [aiPrompt, setAiPrompt] = useState("");
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -86,8 +84,6 @@ function SceneDetail({
   useEffect(() => {
     setNarrative(scene.narrativeContent);
     setVisualPrompt(scene.visualPrompt ?? "");
-    setSource("stock");
-    setAiPrompt("");
     setEditing(false);
     setError(null);
     setActiveIndex(0);
@@ -99,11 +95,7 @@ function SceneDetail({
     setRegenerating(true);
     setError(null);
     try {
-      if (source === "ai" || source === "ai_image") {
-        await onRegenerate(scene.id, { source, aiPrompt: aiPrompt.trim() });
-      } else {
-        await onRegenerate(scene.id, { source: "stock", prompt: visualPrompt.trim() });
-      }
+      await onRegenerate(scene.id, { prompt: visualPrompt.trim() });
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo regenerar el visual");
     } finally {
@@ -264,78 +256,28 @@ function SceneDetail({
         )}
       </div>
 
-      {/* Fuente del visual: buscar en stock o generar con IA (SnapGen) */}
-      <div>
-        <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>Fuente del visual</label>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setSource("stock")}
-            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-            style={
-              source === "stock"
-                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-            }
-          >
-            Buscar stock
-          </button>
-          <button
-            onClick={() => setSource("ai")}
-            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-            style={
-              source === "ai"
-                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-            }
-          >
-            Video con IA
-          </button>
-          <button
-            onClick={() => setSource("ai_image")}
-            className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-            style={
-              source === "ai_image"
-                ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-            }
-          >
-            Imagen con IA
-          </button>
-        </div>
-      </div>
-
-      {/* Prompt: de busqueda (stock) o de generacion (IA video/imagen), segun la fuente elegida arriba */}
+      {/* Prompt de busqueda de stock (la generacion con IA esta desactivada) */}
       <div>
         <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
-          {source === "ai" || source === "ai_image" ? "Prompt de generación (IA)" : "Prompt visual"}
+          Prompt visual
         </label>
         {/* Keyword que realmente encontro el clip actual (metadata.keyword,
             ver replaceStockSegmentsForScene) -- solo informativa, no se
             pisa el campo editable de abajo con esto: si el usuario escribe
             algo ahi, regenerateSceneVisual lo toma como busqueda literal y
             se salta por completo la cascada de 4 keywords con IA. */}
-        {source === "stock" && asset?.metadata?.keyword ? (
+        {asset?.metadata?.keyword ? (
           <p className="text-[11px] font-mono mb-2" style={{ color: "var(--muted-foreground)" }}>
             Keyword usada para este clip: <span style={{ color: "var(--foreground)" }}>{String(asset.metadata.keyword)}</span>
           </p>
         ) : null}
-        {source === "ai" || source === "ai_image" ? (
-          <textarea
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            rows={3}
-            placeholder="Describí la escena a generar (si lo dejás vacío, se deriva de la narrativa)..."
-            className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
-          />
-        ) : (
-          <textarea
-            value={visualPrompt}
-            onChange={(e) => setVisualPrompt(e.target.value)}
-            rows={3}
-            placeholder="Palabras clave para la búsqueda de stock (si lo dejás vacío, se usa la narrativa de la escena)..."
-            className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
-          />
-        )}
+        <textarea
+          value={visualPrompt}
+          onChange={(e) => setVisualPrompt(e.target.value)}
+          rows={3}
+          placeholder="Palabras clave para la búsqueda de stock (si lo dejás vacío, se usa la narrativa de la escena)..."
+          className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
+        />
       </div>
 
       {/* Actions */}
@@ -415,7 +357,7 @@ export default function ScenesPanel({ projectId }: Props) {
 
   const handleRegenerate = async (
     sceneId: string,
-    options: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
+    options: { prompt?: string }
   ) => {
     const assets = await projectsService.regenerateSceneVisual(sceneId, options);
     setAssetsByScene((prev) => ({ ...prev, [sceneId]: assets }));

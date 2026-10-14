@@ -30,10 +30,14 @@ export function clearToken(): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Codigo de error del backend cuando lo manda (ej: ACCOUNT_PENDING,
+  // NO_VIDEO_CREDITS), para reaccionar distinto a cada caso.
+  code: string | undefined;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -60,7 +64,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   if (!res.ok) {
     const rawMessage = data?.error ?? data?.message ?? `Request failed (${res.status})`;
     const message = typeof rawMessage === "string" ? rawMessage : JSON.stringify(rawMessage);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, typeof data?.code === "string" ? data.code : undefined);
   }
 
   return data as T;

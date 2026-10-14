@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { AuthService } from "./auth.services.js";
-import { authMiddleware } from "../../middleware/auth.middleware.js";
+import { authenticateOnly } from "../../middleware/auth.middleware.js";
+import { ensureAccount, getVideoCredits, isAdmin } from "../../lib/accounts.js";
 import { authRateLimiter } from "../../middleware/rateLimit.middleware.js";
 
 const authRouter = Router();
@@ -14,11 +15,6 @@ type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
 const credentialsSchema = z.object({
     email: z.string().trim().email(),
     password: z.string().min(8),
-});
-
-authRouter.post("/test", (req, res) => {
-
-    res.json({ ok: true });
 });
 
 authRouter.post("/register", authRateLimiter, async (req, res) => {
@@ -128,9 +124,31 @@ authRouter.post("/refresh", async (req, res) => {
     }
 });
 
-authRouter.get("/me", authMiddleware, (req, res) => {
+// Datos de la cuenta para el frontend: estado de aprobacion (la pantalla de
+// "cuenta pendiente" sale de aca), si es admin y el saldo de videos. Usa
+// authenticateOnly: tiene que responder tambien a cuentas no aprobadas.
+authRouter.get("/me", authenticateOnly, async (req, res) => {
     const user = req.user!;
-    return res.status(200).json({ id: user.id, email: user.email });
+    try {
+        const admin = isAdmin(user.id);
+        const [account, credits] = await Promise.all([
+            ensureAccount(user.id, user.email ?? ""),
+            getVideoCredits(user.id),
+        ]);
+        return res.status(200).json({
+            id: user.id,
+            email: user.email,
+            // Un admin nunca queda bloqueado, aunque su fila diga otra cosa.
+            status: admin ? "approved" : account.status,
+            is_admin: admin,
+            unlimited: account.unlimited,
+            videos_available: credits.balance,
+            videos_used: credits.used,
+        });
+    } catch (error) {
+        console.error("[auth/me] no se pudo leer la cuenta:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
 });
 
 export default authRouter;

@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import type { ToolDefinition } from "./tool.types.js";
-import { ProviderNotConfiguredError } from "./tool.errors.js";
+import { ProviderNotConfiguredError, ToolUserError } from "./tool.errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
 import { generateWithAi33 } from "../lib/ai33.js";
 import { generateWithEdgeTts, isEdgeTtsEnabled, EDGE_TTS_VOICE_PREFIX, DEFAULT_EDGE_TTS_VOICE } from "../lib/edgeTts.js";
 import { supabase } from "../lib/supabase.js";
 import { getOwnedScript } from "../lib/ownership.js";
+import { MAX_SCRIPT_CHARS, scriptTextOf, scriptTooLongMessage } from "../lib/scriptLimits.js";
 
 export interface GenerateVoiceInput {
   script_id: string;
-  text: string;
+  // Ignorado: se narra siempre el guion guardado del script (ver execute).
+  // Queda en el contrato para no romper a los callers que lo siguen mandando.
+  text?: string;
   voice_id?: string;
 }
 
@@ -114,20 +117,31 @@ export const generateVoiceTool: ToolDefinition<
   parameters: {
     type: "object",
     properties: {
-      script_id: { type: "string", description: "UUID del script a narrar" },
-      text: { type: "string", description: "Texto a convertir en voz" },
+      script_id: { type: "string", description: "UUID del script a narrar (se narra su guion guardado)" },
       voice_id: {
         type: "string",
         description:
           "Voz con prefijo de proveedor (ej: minimax_..., elevenlabs_..., clone_...) -- opcional",
       },
     },
-    required: ["script_id", "text"],
+    required: ["script_id"],
   },
-  async execute({ script_id, text, voice_id }, ctx) {
+  async execute({ script_id, voice_id }, ctx) {
     const script = await getOwnedScript(script_id, ctx.userId);
     if (!script) {
       throw new Error("Script not found");
+    }
+
+    // El texto sale SIEMPRE del guion guardado, nunca del pedido: si no,
+    // cualquiera podia mandar por POST /tools/generate_voice/execute un
+    // texto arbitrario (hasta el limite del body) y gastar credito de ai33
+    // sin relacion con su guion.
+    const text = scriptTextOf(script.content);
+    if (!text.trim()) {
+      throw new ToolUserError("El guion está vacío: escribilo o generalo antes de crear la voz");
+    }
+    if (text.length > MAX_SCRIPT_CHARS) {
+      throw new ToolUserError(scriptTooLongMessage(text.length));
     }
 
     const voiceKey = voice_id ?? "__default__";
@@ -137,6 +151,12 @@ export const generateVoiceTool: ToolDefinition<
       return reusable;
     }
 
+    // Un archivo por (voz + texto): antes todas las voces de un script se
+    // subian a `${script_id}.mp3` y cada una pisaba a la anterior, asi que
+    // reusar un Asset viejo (volver a un guion anterior) devolvia un audio
+    // que ya no era el suyo -- y su transcripcion guardada tampoco coincidia.
+    const audioKey = `${script_id}-${hashText(`${voiceKey}\n${textHash}`).slice(0, 16)}`;
+
     // Voz de Edge TTS pedida explicitamente (gratis, sin api key) -- solo
     // disponible si ENABLE_EDGE_TTS=true (ver lib/edgeTts.ts), para no
     // depender en produccion de un protocolo no oficial sin SLA.
@@ -145,7 +165,7 @@ export const generateVoiceTool: ToolDefinition<
         throw new Error("Edge TTS no esta habilitado en este entorno (falta ENABLE_EDGE_TTS=true)");
       }
       const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
-      const result = await generateWithEdgeTts(script_id, text, edgeVoiceId);
+      const result = await generateWithEdgeTts(audioKey, text, edgeVoiceId);
       const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
       return { ...result, asset_id: assetId };
     }
@@ -163,7 +183,7 @@ export const generateVoiceTool: ToolDefinition<
       // cae a Edge TTS si esta habilitado explicitamente -- si no, mismo
       // error que antes de agregar esta integracion.
       if (isEdgeTtsEnabled()) {
-        const result = await generateWithEdgeTts(script_id, text, DEFAULT_EDGE_TTS_VOICE);
+        const result = await generateWithEdgeTts(audioKey, text, DEFAULT_EDGE_TTS_VOICE);
         const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
         return { ...result, asset_id: assetId };
       }
@@ -173,7 +193,7 @@ export const generateVoiceTool: ToolDefinition<
     const resolvedVoiceId =
       voice_id ?? (provider.configuration?.voice_id as string | undefined) ?? DEFAULT_VOICE_ID;
 
-    const result = await generateWithAi33(script_id, text, provider.api_key, resolvedVoiceId);
+    const result = await generateWithAi33(audioKey, text, provider.api_key, resolvedVoiceId);
     const assetId = await persistAudioAsset(script_id, result.storage_key, result.duration_seconds, voiceKey, textHash);
     return { ...result, asset_id: assetId };
   },

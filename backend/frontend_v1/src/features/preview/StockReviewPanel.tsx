@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
+import { useAccount } from "@/lib/accountContext";
 import ScenePanel from "./ScenePanel";
 import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
 import type { Asset, Job, Scene } from "@/types";
@@ -112,6 +113,26 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const waveformRef = useRef<HTMLDivElement>(null);
+
+  // Contador de videos: el primer render de un proyecto descuenta 1 video;
+  // re-renderizarlo no (renderCharged). Las cuentas sin limite no descuentan.
+  const { account, refresh: refreshAccount } = useAccount();
+  const [renderCharged, setRenderCharged] = useState<boolean | null>(null);
+  useEffect(() => {
+    projectsService
+      .getProjectById(projectId)
+      .then((p) => setRenderCharged(p?.renderCharged ?? null))
+      .catch(() => setRenderCharged(null));
+  }, [projectId]);
+  const willCharge = Boolean(account && !account.unlimited && renderCharged === false);
+  const noCredits = willCharge && (account?.videosAvailable ?? 0) <= 0;
+  const renderHint = !account || account.unlimited || renderCharged === null
+    ? null
+    : renderCharged
+      ? "Este proyecto ya usó su video: renderizarlo de nuevo no descuenta."
+      : noCredits
+        ? "Se terminaron tus videos. Contactá al administrador para cargar más."
+        : `Usa 1 video (te ${account.videosAvailable === 1 ? "queda 1" : `quedan ${account.videosAvailable}`}).`;
 
   useEffect(() => {
     Promise.all([
@@ -272,9 +293,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
         const newAssets =
           params.tab === "upload"
             ? await projectsService.uploadSceneVisual(sceneId, params.file)
-            : params.tab === "ai"
-              ? await projectsService.regenerateSceneVisual(sceneId, { source: params.aiKind, aiPrompt: params.aiPrompt })
-              : await projectsService.regenerateSceneVisual(sceneId, { source: "stock", prompt: params.prompt });
+            : await projectsService.regenerateSceneVisual(sceneId, { prompt: params.prompt });
         setAssets((prev) => [...prev.filter((a) => a.sceneId !== sceneId), ...newAssets]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "No se pudo reemplazar el clip");
@@ -293,6 +312,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     setError(null);
     try {
       const job = await projectsService.approveStockReview(jobId);
+      void refreshAccount();
       onApproved(job);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo aprobar el stock");
@@ -452,9 +472,18 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   "Regenerar todo"
                 )}
               </button>
+              {renderHint && (
+                <span
+                  className="text-[11px] max-w-[220px] text-right leading-snug"
+                  style={{ color: noCredits ? "rgba(252,165,165,0.95)" : "var(--muted-foreground)" }}
+                >
+                  {renderHint}
+                </span>
+              )}
               <button
                 onClick={handleApprove}
-                disabled={approving || regenerating}
+                disabled={approving || regenerating || noCredits}
+                title={noCredits ? "Se terminaron tus videos" : undefined}
                 className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
               >
                 {approving ? (

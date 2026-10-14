@@ -22,7 +22,6 @@ export default function AudioPanel({ projectId, project }: Props) {
   const [saving, setSaving] = useState(false);
   const [selectedEngine, setSelectedEngine] = useState("");
 
-  const [sampleText, setSampleText] = useState("");
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
@@ -56,7 +55,7 @@ export default function AudioPanel({ projectId, project }: Props) {
     setPreviewingVoiceId(voiceId);
     setError(null);
     try {
-      const { audioUrl } = await projectsService.previewVoice(voiceId, sampleText);
+      const { audioUrl } = await projectsService.previewVoice(voiceId);
       setPreviewUrl(audioUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo generar la prueba de voz");
@@ -192,21 +191,11 @@ export default function AudioPanel({ projectId, project }: Props) {
         </div>
       )}
 
-      <div className="px-6 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-        <label className="text-[11px] font-medium uppercase tracking-widest block mb-2" style={{ color: "var(--muted-foreground)" }}>
-          Texto de prueba (opcional)
-        </label>
-        <input
-          type="text"
-          value={sampleText}
-          onChange={(e) => setSampleText(e.target.value)}
-          placeholder="Hola, esta es una prueba de esta voz para tu proyecto."
-          className="input-glass w-full rounded-lg px-3 py-2 text-xs"
-        />
-        {previewUrl && (
-          <audio controls autoPlay src={previewUrl} className="w-full mt-3" style={{ height: 36 }} />
-        )}
-      </div>
+      {previewUrl && (
+        <div className="px-6 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+          <audio controls autoPlay src={previewUrl} className="w-full" style={{ height: 36 }} />
+        </div>
+      )}
 
       <div className="flex-1 px-6 py-4 space-y-2">
         {filteredVoices.length === 0 ? (

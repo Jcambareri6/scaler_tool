@@ -8,9 +8,6 @@ import { transcribeAudioTool } from "./transcribeAudio.tool.js";
 import { searchStockTool } from "./searchStock.tool.js";
 import { generateStockKeywordsTool } from "./generateStockKeywords.tool.js";
 import { generateVisualContextTool } from "./generateVisualContext.tool.js";
-import { generateImageTool } from "./generateImage.tool.js";
-import { generateVideoTool } from "./generateVideo.tool.js";
-import { generateVideoPromptTool } from "./generateVideoPrompt.tool.js";
 import { generateImagePromptSequenceTool } from "./generateImagePromptSequence.tool.js";
 import { generateOverlayTool } from "./generateOverlay.tool.js";
 import { renderVideoTool } from "./renderVideo.tool.js";
@@ -19,7 +16,7 @@ import { buildScenesTool } from "./buildScenes.tool.js";
 
 export { runTool, listTools, getTool } from "./toolRegistry.js";
 export type { ToolContext, ToolDefinition } from "./tool.types.js";
-export { ProviderNotConfiguredError } from "./tool.errors.js";
+export { ProviderNotConfiguredError, ToolUserError } from "./tool.errors.js";
 
 registerTool(generateScriptTool);
 registerTool(generateScriptStyleTool);
@@ -30,9 +27,9 @@ registerTool(transcribeAudioTool);
 registerTool(searchStockTool);
 registerTool(generateStockKeywordsTool);
 registerTool(generateVisualContextTool);
-registerTool(generateImageTool);
-registerTool(generateVideoTool);
-registerTool(generateVideoPromptTool);
+// generate_image, generate_video y generate_video_prompt (SnapGen) no se
+// registran: la generacion de visuales con IA esta desactivada hasta que
+// este terminada. Los archivos de las tools quedan para retomarla.
 registerTool(generateImagePromptSequenceTool);
 registerTool(generateOverlayTool);
 registerTool(renderVideoTool);

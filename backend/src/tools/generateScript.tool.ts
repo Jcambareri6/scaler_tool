@@ -7,6 +7,7 @@ import { getOwnedProject, getOwnedScriptStyle } from "../lib/ownership.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { supabase } from "../lib/supabase.js";
 import { fetchWithTimeout } from "../lib/http.js";
+import { MAX_SCRIPT_CHARS } from "../lib/scriptLimits.js";
 
 // Un guion completo (hasta MAX_OUTPUT_TOKENS) puede tardar bastante mas que
 // una llamada de chat corta -- 30s (el default de fetchWithTimeout) cortaria
@@ -137,6 +138,16 @@ function computeDefaultApproxChars(referenceScripts: string[]): number | undefin
   if (referenceScripts.length === 0) return undefined;
   const total = referenceScripts.reduce((sum, script) => sum + script.length, 0);
   return Math.round(total / referenceScripts.length);
+}
+
+// El largo pedido nunca supera el tope de guion (lib/scriptLimits.ts), con
+// margen: las continuaciones pueden pasarse un poco del objetivo, y un guion
+// por encima del tope despues no se puede narrar (generate_voice lo rechaza).
+const MAX_TARGET_CHARS = Math.floor(MAX_SCRIPT_CHARS * 0.9);
+
+function capApproxChars(chars: number | undefined): number | undefined {
+  if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return undefined;
+  return Math.min(Math.round(chars), MAX_TARGET_CHARS);
 }
 
 function buildStyledUserPrompt(
@@ -442,11 +453,15 @@ export const generateScriptTool: ToolDefinition<
         );
       }
       systemPrompt = `${style.master_prompt}\n\n---\n\n${buildStyledFormatInstructions(provider)}`;
-      const defaultApproxChars = computeDefaultApproxChars(
-        (style.reference_scripts as string[] | null) ?? []
+      const defaultApproxChars = capApproxChars(
+        computeDefaultApproxChars((style.reference_scripts as string[] | null) ?? [])
       );
-      targetChars = input.approx_chars ?? defaultApproxChars;
-      userPrompt = buildStyledUserPrompt(input, defaultApproxChars);
+      const approxChars = capApproxChars(input.approx_chars);
+      targetChars = approxChars ?? defaultApproxChars;
+      userPrompt = buildStyledUserPrompt(
+        approxChars !== undefined ? { ...input, approx_chars: approxChars } : input,
+        defaultApproxChars
+      );
     }
     // Recursos compartidos del canal (workspace): el estilo de narracion se
     // suma a lo anterior (prompt generico o Prompt Maestro), y el idioma del

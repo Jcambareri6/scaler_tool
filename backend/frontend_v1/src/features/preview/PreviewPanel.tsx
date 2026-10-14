@@ -3,7 +3,7 @@ import { projectsService } from "@/services/projects.service";
 import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
-import type { Job, VisualSource, Asset, RenderQuality } from "@/types";
+import type { Job, Asset, RenderQuality } from "@/types";
 
 interface Props {
   projectId: string;
@@ -285,7 +285,6 @@ export default function PreviewPanel({ projectId }: Props) {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visualSource, setVisualSource] = useState<VisualSource>("stock");
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
@@ -298,12 +297,9 @@ export default function PreviewPanel({ projectId }: Props) {
       setJob(j);
       setLoading(false);
     });
-    // Precarga el modo elegido la ultima vez para este proyecto (persiste
-    // en video_projects.visual_source) -- si el usuario ya lo eligio antes,
-    // no vuelve a "stock" por default en cada visita al tab.
+    // Precarga las opciones elegidas la ultima vez para este proyecto.
     projectsService.getProjectById(projectId).then((p) => {
       if (p) {
-        setVisualSource(p.visualSource);
         setTransitionsEnabled(p.transitionsEnabled);
         setSubtitlesEnabled(p.subtitlesEnabled);
         setRenderQuality(p.renderQuality);
@@ -401,10 +397,11 @@ export default function PreviewPanel({ projectId }: Props) {
     setGenerating(true);
     setError(null);
     try {
-      // El pipeline automatico (orchestrator.ts) lee visual_source del
-      // proyecto para decidir stock/IA/mixto por escena -- se persiste
-      // antes de arrancar para que la corrida use lo que se eligio ahora.
-      await projectsService.updateProject(projectId, { visualSource, transitionsEnabled, subtitlesEnabled, renderQuality });
+      // Las opciones se persisten antes de arrancar para que la corrida use
+      // lo que se eligio ahora. visual_source va siempre en "stock": la
+      // generacion con IA esta desactivada (proyectos viejos que la tenian
+      // elegida quedan normalizados aca).
+      await projectsService.updateProject(projectId, { visualSource: "stock", transitionsEnabled, subtitlesEnabled, renderQuality });
       const newJob = await projectsService.runPipeline(projectId);
       setJob(newJob);
     } catch (err) {
@@ -435,34 +432,6 @@ export default function PreviewPanel({ projectId }: Props) {
   // volver a este tab) el usuario nunca llegaba a verlo.
   const renderSettings = (
     <>
-      <div className="flex flex-col gap-1.5 w-full max-w-xs">
-        <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
-          Fuente de los clips
-        </span>
-        <div className="flex gap-2">
-          {(
-            [
-              { value: "stock" as const, label: "Stock" },
-              { value: "ai" as const, label: "Solo IA" },
-              { value: "mixed" as const, label: "Mixto" },
-            ]
-          ).map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setVisualSource(opt.value)}
-              className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
-              style={
-                visualSource === opt.value
-                  ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
-                  : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
-              }
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Fundido entre escenas en el render final -- ver
           render_video.tool.ts (video_projects.transitions_enabled). */}
       <label

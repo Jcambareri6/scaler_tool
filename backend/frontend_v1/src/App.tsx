@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/lib/authContext";
+import { AccountProvider } from "@/lib/accountContext";
 import { ToastProvider } from "@/lib/toastContext";
 import RequireAuth from "@/components/RequireAuth";
 import Layout from "@/components/Layout";
@@ -15,6 +16,7 @@ import WorkspacesPage from "@/pages/WorkspacesPage";
 import FlowExtensionPage from "@/pages/FlowExtensionPage";
 import AcceptInvitePage from "@/pages/AcceptInvitePage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import AdminPage from "@/pages/AdminPage";
 
 export default function App() {
   return (
@@ -27,7 +29,9 @@ export default function App() {
             <Route
               element={
                 <RequireAuth>
-                  <Layout />
+                  <AccountProvider>
+                    <Layout />
+                  </AccountProvider>
                 </RequireAuth>
               }
             >
@@ -40,6 +44,7 @@ export default function App() {
               <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/flow-extension" element={<FlowExtensionPage />} />
               <Route path="/invites/:token" element={<AcceptInvitePage />} />
+              <Route path="/admin" element={<AdminPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

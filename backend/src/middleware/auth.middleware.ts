@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import type { User } from "@supabase/supabase-js";
 import { createAuthClient } from "../lib/supabase.js";
+import { getAccountStatus, isAdmin } from "../lib/accounts.js";
 
 // getUser(token) solo valida el token, no guarda sesion: alcanza con uno.
 const authClient = createAuthClient();
@@ -15,7 +16,10 @@ function isAuthDisabled(): boolean {
     return process.env.DISABLE_AUTH === "true";
 }
 
-export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
+// Solo valida el token y setea req.user, sin mirar si la cuenta esta
+// aprobada. Lo usa GET /auth/me, que es justamente donde el frontend se
+// entera de que la cuenta esta pendiente.
+export async function authenticateOnly(req: Request, res: Response, next: NextFunction) {
     if (isAuthDisabled()) {
         const devUserId = process.env.DEV_USER_ID;
         if (!devUserId) {
@@ -50,16 +54,40 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     next();
 }
 
-// Stopgap hasta que exista un rol admin real (Etapa 9 del roadmap, ver
-// comentario en provider.route.ts) -- lista de UUIDs de Supabase Auth con
-// permiso para administrar configuracion global del sistema (providers).
-// Debe correr DESPUES de authMiddleware, que es quien setea req.user.
+// Token valido + cuenta aprobada. Es el middleware de todas las rutas de la
+// app (y de la extension, que usa la misma API): una cuenta recien
+// registrada no puede hacer nada hasta que un admin la apruebe. Los admins
+// pasan siempre; con DISABLE_AUTH (solo desarrollo local) no se chequea.
+export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
+    await authenticateOnly(req, res, async () => {
+        if (isAuthDisabled() || isAdmin(req.user!.id)) return next();
+        try {
+            const status = await getAccountStatus(req.user!.id, req.user!.email ?? "");
+            if (status === "pending") {
+                return res.status(403).json({
+                    error: "Tu cuenta está esperando aprobación. Avisale al administrador para que la habilite.",
+                    code: "ACCOUNT_PENDING",
+                });
+            }
+            if (status === "rejected") {
+                return res.status(403).json({
+                    error: "Tu cuenta no fue aprobada. Contactá al administrador.",
+                    code: "ACCOUNT_REJECTED",
+                });
+            }
+            next();
+        } catch (error) {
+            console.error("[auth] no se pudo verificar la aprobacion de la cuenta:", error);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+    });
+}
+
+// Rutas solo para administradores (ADMIN_USER_IDS, ver lib/accounts.ts):
+// providers y panel de admin. Debe correr DESPUES de authMiddleware, que es
+// quien setea req.user.
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
-    const adminIds = (process.env.ADMIN_USER_IDS ?? "")
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean);
-    if (!adminIds.includes(req.user!.id)) {
+    if (!isAdmin(req.user!.id)) {
         return res.status(403).json({ error: "Forbidden" });
     }
     next();

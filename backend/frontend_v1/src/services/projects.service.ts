@@ -188,22 +188,13 @@ export const projectsService = {
     return mapScene(row, projectId);
   },
 
-  // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual).
-  // source="stock" (default): vuelve a buscar en todos los Providers de
-  // stock activos y arma la secuencia de clips que cubre la escena entera.
-  // source="ai": genera con SnapGen tantos clips seguidos como haga falta
-  // (Veo 3.1/Seedance 2 generan clips cortos, mas cortos que la escena) a
-  // partir de aiPrompt (si se deja vacio, se deriva uno de la narrativa).
-  // source="ai_image": genera UNA imagen con SnapGen en vez de video (mucho
-  // mas barato), mostrada con efecto Ken Burns en el render final.
-  async regenerateSceneVisual(
-    sceneId: string,
-    options?: { prompt?: string; source?: "stock" | "ai" | "ai_image"; aiPrompt?: string }
-  ): Promise<Asset[]> {
+  // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual):
+  // vuelve a buscar en todos los Providers de stock activos y arma la
+  // secuencia de clips que cubre la escena entera. La generacion con IA
+  // (SnapGen) esta desactivada hasta que este terminada.
+  async regenerateSceneVisual(sceneId: string, options?: { prompt?: string }): Promise<Asset[]> {
     const rows = await api.post<Parameters<typeof mapAsset>[0][]>(`/scenes/${sceneId}/regenerate-visual`, {
       ...(options?.prompt ? { prompt: options.prompt } : {}),
-      ...(options?.source ? { source: options.source } : {}),
-      ...(options?.aiPrompt ? { ai_prompt: options.aiPrompt } : {}),
     });
     return rows.map(mapAsset);
   },
@@ -325,17 +316,12 @@ export const projectsService = {
 
   // Clip corto para escuchar como suena una voz antes de comprometerse a
   // generar la narracion completa (que puede tardar minutos).
-  async previewVoice(
-    voiceId: string,
-    sampleText?: string
-  ): Promise<{ audioUrl: string; durationSeconds: number }> {
+  // El texto de la muestra es fijo (lo pone el backend).
+  async previewVoice(voiceId: string): Promise<{ audioUrl: string; durationSeconds: number }> {
     const { output } = await api.post<{
       output: { audio_url: string; duration_seconds: number };
     }>(`/tools/preview_voice/execute`, {
-      input: {
-        voice_id: voiceId,
-        ...(sampleText?.trim() ? { sample_text: sampleText.trim() } : {}),
-      },
+      input: { voice_id: voiceId },
     });
     return { audioUrl: output.audio_url, durationSeconds: output.duration_seconds };
   },

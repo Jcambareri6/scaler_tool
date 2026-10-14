@@ -17,6 +17,7 @@ import pipelineRouter from './modules/pipeline/pipeline.route.js';
 import scriptStyleRouter from './modules/scriptStyles/scriptStyle.route.js';
 import fileRouter from './modules/files/file.route.js';
 import { workspaceRouter, inviteRouter } from './modules/workspaces/workspace.route.js';
+import adminRouter from './modules/admin/admin.route.js';
 
 // DISABLE_AUTH bypasea el login por completo (ver auth.middleware.ts) -- es
 // solo para desarrollo local. Si esta env var quedara seteada por error en
@@ -59,5 +60,6 @@ app.use("/script-styles", scriptStyleRouter)
 app.use("/files", fileRouter)
 app.use("/workspaces", workspaceRouter)
 app.use("/invites", inviteRouter)
+app.use("/admin", adminRouter)
 
 export default app;

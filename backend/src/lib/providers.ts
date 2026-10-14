@@ -1,10 +1,19 @@
 import { supabase } from "./supabase.js";
 import type { Provider } from "../types/shared/typeShared.js";
 
+// OFFLINE_PROVIDERS=true (solo desarrollo y tests, ver scripts/test-cobro.ts):
+// se ignoran los providers de la base, asi una API local apuntando a la base
+// de produccion nunca le pega a ai33, Whisper ni a los LLMs con las keys
+// reales -- junto con MOCK_PROVIDERS=true, todo cae a los mocks.
+function providersOffline(): boolean {
+  return process.env.OFFLINE_PROVIDERS === "true";
+}
+
 // Las Tools resuelven su Provider por slug sin saber como esta guardado
 // (Etapa 9: "las Tools deben poder utilizar Providers sin conocer detalles
 // innecesarios de su configuracion").
 export async function getActiveProvider(slug: string): Promise<Provider | null> {
+  if (providersOffline()) return null;
   const { data, error } = await supabase
     .from("providers")
     .select("*")
@@ -22,6 +31,7 @@ export async function getActiveProvider(slug: string): Promise<Provider | null> 
 // solo una fila en la tabla + su cliente en el codigo de la Tool, no un
 // cambio en como se resuelven los proveedores.
 export async function getActiveProvidersByType(type: string): Promise<Provider[]> {
+  if (providersOffline()) return [];
   const { data, error } = await supabase
     .from("providers")
     .select("*")

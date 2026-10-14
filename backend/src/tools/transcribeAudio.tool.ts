@@ -216,6 +216,28 @@ async function mockTranscribe(assetId: string): Promise<TranscribeAudioOutput> {
   return { words: transcribedWords, segments, duration_seconds: duration };
 }
 
+interface CachedTranscription {
+  storage_key: string;
+  result: TranscribeAudioOutput;
+}
+
+// Se guarda en assets.metadata.transcription. Si falla solo se loguea: la
+// transcripcion ya se obtuvo y el pipeline puede seguir; lo unico que se
+// pierde es reusarla la proxima vez.
+async function cacheTranscription(
+  assetId: string,
+  metadata: unknown,
+  storageKey: string,
+  result: TranscribeAudioOutput
+): Promise<void> {
+  const transcription: CachedTranscription = { storage_key: storageKey, result };
+  const { error } = await supabase
+    .from("assets")
+    .update({ metadata: { ...((metadata as Record<string, unknown> | null) ?? {}), transcription } })
+    .eq("id", assetId);
+  if (error) console.warn(`[transcribe_audio] no se pudo guardar la transcripcion del asset ${assetId}: ${error.message}`);
+}
+
 export const transcribeAudioTool: ToolDefinition<
   TranscribeAudioInput,
   TranscribeAudioOutput
@@ -244,6 +266,15 @@ export const transcribeAudioTool: ToolDefinition<
       return mockTranscribe(asset_id);
     }
 
+    // Mismo audio, misma transcripcion: rehacer la preview sin cambiar el
+    // guion (ej: solo se cambiaron escenas) no vuelve a pagar Whisper. Se
+    // guarda junto con el storage_key que se transcribio, asi si el Asset
+    // pasara a apuntar a otro archivo no se reusa una transcripcion ajena.
+    const cached = (asset.metadata as { transcription?: CachedTranscription } | null)?.transcription;
+    if (cached && cached.storage_key === asset.storage_key && Array.isArray(cached.result?.words)) {
+      return cached.result;
+    }
+
     const provider = await getActiveProvider("openai");
     if (!provider?.api_key) {
       if (isMockMode()) {
@@ -252,6 +283,8 @@ export const transcribeAudioTool: ToolDefinition<
       throw new ProviderNotConfiguredError("transcribe_audio");
     }
 
-    return transcribeWithOpenAI(asset.storage_key, provider.api_key);
+    const result = await transcribeWithOpenAI(asset.storage_key, provider.api_key);
+    await cacheTranscription(asset_id, asset.metadata, asset.storage_key, result);
+    return result;
   },
 };

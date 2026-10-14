@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject } from "../../lib/ownership.js";
 import { uploadUserAudio } from "../../lib/ai33.js";
+import { MAX_SCRIPT_CHARS, scriptTextOf, scriptTooLongMessage } from "../../lib/scriptLimits.js";
 import type { ScriptDetail } from "./script.types.js";
 
 export async function createScript(req: Request, res: Response) {
@@ -9,6 +10,11 @@ export async function createScript(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
     const { content } = req.body;
+
+    const textLength = scriptTextOf(content).length;
+    if (textLength > MAX_SCRIPT_CHARS) {
+      return res.status(400).json({ error: scriptTooLongMessage(textLength) });
+    }
 
     const project = await getOwnedProject(project_id, userId);
     if (!project) {
@@ -103,6 +109,11 @@ export async function updateScript(req: Request, res: Response) {
     const userId = req.user!.id;
     const { content } = req.body;
 
+    const textLength = scriptTextOf(content).length;
+    if (textLength > MAX_SCRIPT_CHARS) {
+      return res.status(400).json({ error: scriptTooLongMessage(textLength) });
+    }
+
     const project = await getOwnedProject(project_id, userId);
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
@@ -160,7 +171,9 @@ export async function uploadScriptAudio(req: Request, res: Response) {
     }
 
     const extension = (file.originalname.split(".").pop() || "audio").toLowerCase();
-    const result = await uploadUserAudio(script.id, file.buffer, extension);
+    // Un archivo por subida (no `${script.id}.mp3` fijo): asi una subida
+    // nueva no pisa el audio de un Asset anterior ni su transcripcion guardada.
+    const result = await uploadUserAudio(`${script.id}-upload-${Date.now()}`, file.buffer, extension);
 
     const { data: asset, error: assetError } = await supabase
       .from("assets")

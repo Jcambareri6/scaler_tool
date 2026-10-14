@@ -1,7 +1,13 @@
 import type { Request, Response } from "express";
-import { listTools, runTool, ProviderNotConfiguredError } from "../../tools/index.js";
+import { listTools, runTool, ProviderNotConfiguredError, ToolUserError } from "../../tools/index.js";
 import { getOwnedJob } from "../../lib/ownership.js";
-import { getExecutionMode } from "../../lib/jobQueue.js";
+
+// Unicas tools que se pueden ejecutar directo por POST /tools/:tool/execute:
+// las que llama el frontend (services/projects.service.ts). El resto (Whisper,
+// stock, render, timeline, etc.) corre solo dentro del pipeline o de los
+// endpoints de escenas, con sus propios controles -- exponerlas aca dejaba
+// disparar llamadas pagas o renders sin pasar por esos controles.
+const PUBLIC_TOOLS = new Set(["generate_script", "generate_voice", "list_voices", "preview_voice"]);
 
 // Mensajes que las propias tools lanzan a proposito y son seguros de
 // mostrar tal cual (no filtran detalles de Postgres ni de proveedores
@@ -18,12 +24,13 @@ const SAFE_ERROR_MESSAGES = new Set([
 function isSafeToolError(error: unknown): error is Error {
   return (
     error instanceof ProviderNotConfiguredError ||
+    error instanceof ToolUserError ||
     (error instanceof Error && SAFE_ERROR_MESSAGES.has(error.message))
   );
 }
 
 export async function listAvailableTools(_req: Request, res: Response) {
-  return res.status(200).json(listTools());
+  return res.status(200).json(listTools().filter((tool) => PUBLIC_TOOLS.has(tool.name)));
 }
 
 export async function executeTool(req: Request, res: Response) {
@@ -32,14 +39,8 @@ export async function executeTool(req: Request, res: Response) {
     if (typeof toolName !== "string") {
       return res.status(400).json({ error: "tool_name is required" });
     }
-
-    // Con EXECUTION_MODE=queue la API corre en un plan chico sin ffmpeg
-    // pesado: el render solo se dispara aprobando el stock
-    // (POST /jobs/:id/approve-stock-review), que lo encola para el worker.
-    if (toolName === "render_video" && getExecutionMode() === "queue") {
-      return res.status(409).json({
-        error: "El render corre en el servidor de render: aprobá el stock del proyecto para encolarlo.",
-      });
+    if (!PUBLIC_TOOLS.has(toolName)) {
+      return res.status(404).json({ error: "Herramienta no disponible" });
     }
 
     const userId = req.user!.id;

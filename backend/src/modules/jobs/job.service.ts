@@ -6,58 +6,8 @@ import { errorMessage } from "../../lib/errors.js";
 import { syncProjectStatus } from "../../lib/projectStatus.js";
 import { getExecutionMode, pendingQueueFields } from "../../lib/jobQueue.js";
 import { renderQueue } from "../../lib/renderQueue.js";
+import { chargeRender, refundRender } from "../../lib/accounts.js";
 import type { JobStatus } from "../../types/shared/typeShared.js";
-
-// Orden del pipeline (ver CLAUDE.md, gap #1 del LEEME): AWAITING_STOCK_REVIEW
-// es el gate obligatorio antes de RENDERING. FAILED puede llegar desde
-// cualquier estado en curso; COMPLETED y FAILED son terminales.
-const JOB_TRANSITIONS: Record<JobStatus, JobStatus[]> = {
-  QUEUED: ["RUNNING", "FAILED"],
-  RUNNING: ["SCRIPT_DONE", "FAILED"],
-  SCRIPT_DONE: ["AUDIO_DONE", "FAILED"],
-  AUDIO_DONE: ["VISUALS_DONE", "FAILED"],
-  VISUALS_DONE: ["AWAITING_STOCK_REVIEW", "FAILED"],
-  AWAITING_STOCK_REVIEW: ["RENDERING", "FAILED"],
-  RENDERING: ["COMPLETED", "FAILED"],
-  COMPLETED: [],
-  FAILED: [],
-};
-
-export async function createJob(req: Request, res: Response) {
-  try {
-    const { project_id } = req.params;
-    const userId = req.user!.id;
-    const { type } = req.body;
-
-    if (typeof type !== "string" || type.trim() === "") {
-      return res.status(400).json({ error: "type is required" });
-    }
-
-    const project = await getOwnedProject(project_id, userId);
-    if (!project) {
-      return res.status(404).json({ error: "Project not found" });
-    }
-
-    const { data, error } = await supabase
-      .from("jobs")
-      .insert({
-        video_project_id: project_id,
-        type,
-        status: "QUEUED",
-        progress: 0,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    return res.status(201).json(data);
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-}
 
 export async function listJobs(req: Request, res: Response) {
   try {
@@ -101,62 +51,6 @@ export async function getJob(req: Request, res: Response) {
   }
 }
 
-export async function updateJob(req: Request, res: Response) {
-  try {
-    const { job_id } = req.params;
-    const userId = req.user!.id;
-    const { status, progress, error: jobError } = req.body as {
-      status?: JobStatus;
-      progress?: number;
-      error?: string | null;
-    };
-
-    const job = await getOwnedJob(job_id, userId);
-    if (!job) {
-      return res.status(404).json({ error: "Job not found" });
-    }
-
-    if (progress !== undefined && (progress < 0 || progress > 100)) {
-      return res.status(400).json({ error: "progress must be between 0 and 100" });
-    }
-
-    const update: Record<string, unknown> = {};
-    if (progress !== undefined) update.progress = progress;
-    if (jobError !== undefined) update.error = jobError;
-
-    if (status !== undefined) {
-      const allowed = JOB_TRANSITIONS[job.status];
-      if (!allowed.includes(status)) {
-        return res.status(400).json({
-          error: `Invalid transition from ${job.status} to ${status}`,
-        });
-      }
-      update.status = status;
-      if (status === "RUNNING" && !job.started_at) {
-        update.started_at = new Date().toISOString();
-      }
-      if (status === "COMPLETED" || status === "FAILED") {
-        update.finished_at = new Date().toISOString();
-      }
-    }
-
-    const { data, error } = await supabase
-      .from("jobs")
-      .update(update)
-      .eq("id", job_id)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    return res.status(200).json(data);
-  } catch (error) {
-    return res.status(500).json({ error: "Internal server error" });
-  }
-}
-
 // Gap #1 (LEEME): endpoint de aprobacion humana del stock, unico camino
 // para salir de AWAITING_STOCK_REVIEW hacia RENDERING.
 export async function approveStockReview(req: Request, res: Response) {
@@ -174,6 +68,21 @@ export async function approveStockReview(req: Request, res: Response) {
         error: `Job is not awaiting stock review (current status: ${job.status})`,
       });
     }
+
+    // Contador de videos: el primer Renderizar de un proyecto descuenta 1
+    // video al dueno del proyecto (no al miembro del workspace que aprieta
+    // el boton). Re-renderizar un proyecto ya cobrado, o uno de una cuenta
+    // sin limite, no descuenta. Ver charge_render en la migracion.
+    const charge = await chargeRender(job.video_project_id);
+    if (charge === "no_credits") {
+      return res.status(402).json({
+        error: "Se terminaron tus videos. Contactá al administrador para cargar más.",
+        code: "NO_VIDEO_CREDITS",
+      });
+    }
+    // Si el render no llega a encolarse, el video recien descontado se
+    // devuelve (solo si se desconto en ESTE pedido).
+    const undoCharge = () => (charge === "charged" ? refundRender(job.video_project_id) : Promise.resolve());
 
     // progress:1 marca "en cola, todavia no arranco a renderizar de verdad"
     // -- runRenderPipeline pisa esto con progress:10 recien cuando arranca
@@ -199,9 +108,11 @@ export async function approveStockReview(req: Request, res: Response) {
       .maybeSingle();
 
     if (error) {
+      await undoCharge();
       return res.status(400).json({ error: error.message });
     }
     if (!data) {
+      await undoCharge();
       return res.status(409).json({ error: "Job is no longer awaiting stock review" });
     }
     await syncProjectStatus(job.video_project_id, "RENDERING");
@@ -225,6 +136,9 @@ export async function approveStockReview(req: Request, res: Response) {
           .update({ status: "FAILED", error: message, finished_at: new Date().toISOString() })
           .eq("id", job_id);
         await syncProjectStatus(job.video_project_id, "FAILED");
+        // Render fallido: si el proyecto nunca llego a tener un video final,
+        // se devuelve el video descontado.
+        await refundRender(job.video_project_id);
       });
   } catch (error) {
     return res.status(500).json({ error: "Internal server error" });

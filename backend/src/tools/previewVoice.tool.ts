@@ -8,6 +8,7 @@ import { generateWithEdgeTts, isEdgeTtsEnabled, EDGE_TTS_VOICE_PREFIX } from "..
 
 export interface PreviewVoiceInput {
   voice_id: string;
+  // Ignorado: la muestra usa siempre DEFAULT_SAMPLE_TEXT (ver execute).
   sample_text?: string;
 }
 
@@ -22,6 +23,12 @@ function hashText(text: string): string {
   return createHash("md5").update(text).digest("hex").slice(0, 8);
 }
 
+// Muestras ya generadas en este proceso, por voice_id: escuchar la misma voz
+// de nuevo (cualquier usuario) no vuelve a pegarle a ai33. Se pierde al
+// reiniciar la API, pero con texto fijo cada voz cuesta una sola vez por
+// proceso y el mp3 en Storage queda en la misma key.
+const previewCache = new Map<string, PreviewVoiceOutput>();
+
 export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOutput> = {
   name: "preview_voice",
   description: "Genera un clip corto de audio para escuchar como suena una voz antes de usarla.",
@@ -32,15 +39,15 @@ export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOut
         type: "string",
         description: "Voz con prefijo de proveedor (ej: minimax_..., elevenlabs_...)",
       },
-      sample_text: {
-        type: "string",
-        description: "Texto de prueba (opcional, default: frase corta generica)",
-      },
     },
     required: ["voice_id"],
   },
-  async execute({ voice_id, sample_text }) {
-    const text = sample_text?.trim() || DEFAULT_SAMPLE_TEXT;
+  async execute({ voice_id }) {
+    // Texto fijo a proposito: con texto libre, cada muestra podia ser un
+    // pedido de TTS de cualquier largo pagado con el credito de ai33.
+    const text = DEFAULT_SAMPLE_TEXT;
+    const cached = previewCache.get(voice_id);
+    if (cached) return cached;
 
     if (voice_id.startsWith(EDGE_TTS_VOICE_PREFIX)) {
       if (!isEdgeTtsEnabled()) {
@@ -49,7 +56,9 @@ export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOut
       const edgeVoiceId = voice_id.slice(EDGE_TTS_VOICE_PREFIX.length);
       const storageKey = `previews/${voice_id}-${hashText(text)}`;
       const result = await generateWithEdgeTts(storageKey, text, edgeVoiceId);
-      return { audio_url: result.storage_key, duration_seconds: result.duration_seconds };
+      const output = { audio_url: result.storage_key, duration_seconds: result.duration_seconds };
+      previewCache.set(voice_id, output);
+      return output;
     }
 
     const provider = await getActiveProvider("ai33");
@@ -60,11 +69,11 @@ export const previewVoiceTool: ToolDefinition<PreviewVoiceInput, PreviewVoiceOut
       throw new ProviderNotConfiguredError("preview_voice");
     }
 
-    // Key estable por (voice_id + texto), con upsert:true en el storage --
-    // escuchar la misma voz con el mismo texto de nuevo no vuelve a pegarle
-    // a ai33.pro, reusa el mp3 ya generado.
+    // Key estable por (voice_id + texto), con upsert:true en el storage.
     const storageKey = `previews/${voice_id}-${hashText(text)}`;
     const result = await generateWithAi33(storageKey, text, provider.api_key, voice_id);
-    return { audio_url: result.storage_key, duration_seconds: result.duration_seconds };
+    const output = { audio_url: result.storage_key, duration_seconds: result.duration_seconds };
+    previewCache.set(voice_id, output);
+    return output;
   },
 };
