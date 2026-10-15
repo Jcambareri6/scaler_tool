@@ -349,7 +349,7 @@ $("loadBtn").addEventListener("click", (e) =>
 
     const projectId = $("project").value;
     if (!projectId) throw new Error("Elegí un proyecto");
-    await saveSettings({ mediaType: $("mediaType").value, retries: Number($("retries").value) || 0, parallel: parallelValue() });
+    await saveSettings({ mediaType: $("mediaType").value, retries: Number($("retries").value) || 0 });
 
     $("loadInfo").textContent = "Armando prompts (la primera vez puede tardar un poco)...";
     const script = await api("GET", `/projects/${projectId}/script`);
@@ -591,9 +591,6 @@ $("cancelBtn").addEventListener("click", (e) =>
 
 const STATUS_LABEL = { pending: "En cola", working: "Generando", ok: "✓ Lista", error: "✗ Error" };
 
-function parallelValue() {
-  return Math.min(10, Math.max(1, Number($("parallel").value) || 4));
-}
 const RUN_LABEL = {
   idle: ["Lista para empezar", ""],
   running: ["Corriendo", "accent"],
@@ -840,8 +837,6 @@ $("saveAdvanced").addEventListener("click", (e) =>
   $("delaySec").value = settings.delaySec ?? 3;
   $("mediaType").addEventListener("change", () => saveSettings({ mediaType: $("mediaType").value }));
   $("retries").addEventListener("change", () => saveSettings({ retries: Number($("retries").value) || 0 }));
-  $("parallel").value = settings.parallel ?? 4;
-  $("parallel").addEventListener("change", () => saveSettings({ parallel: parallelValue() }));
 
   refsCache = await getRefs();
   await renderRefs();

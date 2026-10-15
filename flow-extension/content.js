@@ -277,7 +277,7 @@
   // --- cola ---------------------------------------------------------------
   //
   // Modo rapido (el normal): manda los prompts uno tras otro, sin esperar a
-  // que termine cada uno, con hasta `settings.parallel` generandose a la vez.
+  // que termine cada uno, sin esperar a que termine ninguno.
   // Cada resultado se reconoce por la red de Flow (flowFindMedia: prompt
   // exacto -> mediaId -> URL) y se descarga numerado por escena apenas sale.
   //
