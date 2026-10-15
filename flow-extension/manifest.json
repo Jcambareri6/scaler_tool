@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Scaler Tool → Flow",
-  "version": "0.7.0",
-  "description": "Manda los prompts de cada escena a Google Flow, espera la imagen y la carga sola en su escena de Scaler Tool.",
+  "version": "1.1.0",
+  "description": "Manda los prompts de cada escena a Google Flow uno tras otro y descarga las imágenes en 720p o 1080p, numeradas por escena.",
   "permissions": [
     "storage",
+    "downloads",
     "scripting",
     "tabs",
     "debugger",
@@ -31,6 +32,17 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://flow.google.com/*",
+        "https://labs.google/fx/*"
+      ],
+      "js": [
+        "flow-tap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://flow.google.com/*",

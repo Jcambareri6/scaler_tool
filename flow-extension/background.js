@@ -53,13 +53,6 @@ async function apiFetch(path, init = {}) {
   return data;
 }
 
-function base64ToBlob(base64, mime) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-
 async function blobToBase64(blob) {
   const buf = new Uint8Array(await blob.arrayBuffer());
   let bin = "";
@@ -618,7 +611,85 @@ async function applyIngredients(tabId, refs) {
   }
 }
 
+// --- resultados por la red de Flow -------------------------------------
+//
+// Corre en el MAIN world de Flow y busca, en las respuestas que guardo
+// flow-tap.js, el resultado de UN prompt: el registro cuyo texto es el
+// prompt exacto y que aparecio despues de mandarlo (sentAt). Devuelve su
+// mediaId y, cuando Flow ya la entrego, la URL del archivo.
+//
+// No depende del formato exacto de los registros (Flow lo cambia): toma el
+// array mas interno que empieza con un UUID y contiene el prompt. `taken` son
+// los mediaId ya guardados: Flow devuelve variantes con el mismo prompt, y dos
+// escenas con el mismo prompt no tienen que llevarse la misma imagen.
+function pageFindMedia(prompt, sentAt, nextSentAt, taken, mediaType) {
+  const media = window.__scalerFlowMedia;
+  const signed = window.__scalerFlowSigned;
+  if (!media || !signed) return { tap: false };
+  const norm = (s) => String(s ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
+  const wanted = norm(prompt);
+  const takenSet = new Set((taken ?? []).map((id) => id.toLowerCase()));
+  const seen = window.__scalerFlowStats?.responses ?? 0;
+
+  // Medios nuevos desde que se mando este prompt (2 s de margen de reloj).
+  const fresh = [...media.entries()].filter(([id, r]) => r.firstAt >= sentAt - 2000 && !takenSet.has(id));
+
+  // 1) El prompt exacto (Flow lo devuelve tal cual, en ingles casi siempre).
+  let candidates = fresh.filter(([, r]) => r.texts.has(wanted));
+  // 2) Por tiempo: Flow reescribe/traduce algunos prompts (los que no estan en
+  //    ingles), asi que no se puede buscar el texto. Se toma lo que Flow creo
+  //    despues de mandar ESTE prompt y antes de mandar el siguiente: los
+  //    prompts salen de a uno, asi que es unico. (Por parecido no: prompts de
+  //    escenas vecinas se parecen mucho y se cruzarian.)
+  if (!candidates.length) {
+    candidates = fresh.filter(([, r]) => r.firstAt <= (nextSentAt ?? Infinity) + 1000 && r.texts.size > 0);
+  }
+  candidates.sort((a, b) => a[1].firstAt - b[1].firstAt);
+  if (!candidates.length) return { tap: true, seen, found: false };
+
+  const kind = mediaType === "video" ? "video" : "image";
+  const domSrcs = [...document.querySelectorAll("img[src], video[src], video source[src]")].map((el) => el.getAttribute("src") || "");
+  for (const [id, r] of candidates) {
+    let url = signed.get(id)?.[kind] ?? domSrcs.find((s) => s.includes(id) && s.includes(`/${kind}/`)) ?? null;
+    // Imagenes: la URL del propio registro tambien es la imagen. En video NO
+    // (es la miniatura): ahi solo sirve la URL firmada del video.
+    if (!url && kind === "image") url = [...r.urls].reverse().find((u) => !/\.(js|css)(\?|$)/.test(u)) ?? null;
+    if (url) return { tap: true, seen, found: true, mediaId: id, url };
+  }
+  return { tap: true, seen, found: true, mediaId: candidates[0][0], url: null };
+}
+
+// Pide a Flow la URL firmada de un medio que no esta a la vista (ver
+// __scalerFlowRequestSignedUrl en flow-tap.js).
+async function pageRequestSignedUrl(mediaId) {
+  if (typeof window.__scalerFlowRequestSignedUrl !== "function") return { ok: false, reason: "sin escucha" };
+  return window.__scalerFlowRequestSignedUrl(mediaId);
+}
+
+// Pestañas de Flow abiertas antes de instalar/actualizar la extension no
+// tienen flow-tap.js: se inyecta (solo ve lo que pase de aca en adelante).
+async function ensureTap(tabId) {
+  const [probe] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: () => window.__scalerFlowTap === 2 });
+  if (!probe?.result) {
+    await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["flow-tap.js"] });
+  }
+}
+
 const handlers = {
+  async flowFindMedia({ prompt, sentAt, nextSentAt, taken, mediaType }, sender) {
+    await ensureTap(sender.tab.id);
+    return inPage(sender.tab.id, pageFindMedia, [prompt, sentAt, nextSentAt ?? null, taken ?? [], mediaType ?? "image"]);
+  },
+
+  async flowRequestSignedUrl({ mediaId }, sender) {
+    return inPage(sender.tab.id, pageRequestSignedUrl, [mediaId]);
+  },
+
+  async flowEnsureTap(_msg, sender) {
+    await ensureTap(sender.tab.id);
+    return { ok: true };
+  },
+
   // Deja en la composicion de Flow exactamente los ingredientes de la escena
   // (refs: [{ names, flowName, dataUrl }]; vacio = sin ingredientes).
   async flowApplyRefs({ refs }, sender) {
@@ -747,19 +818,66 @@ const handlers = {
     const blob = await res.blob();
     return { base64: await blobToBase64(blob), mime: blob.type || "image/png" };
   },
+};
 
-  // Sube UN archivo a su escena via el endpoint de carga en lote
-  // (POST /scripts/:id/scenes/batch-visuals, ver sceneBatch.service.ts).
-  async upload({ scriptId, sceneId, fileName, mime, base64 }) {
-    const form = new FormData();
-    form.append("files", base64ToBlob(base64, mime), fileName);
-    form.append("scene_ids", JSON.stringify([sceneId]));
-    const data = await apiFetch(`/scripts/${scriptId}/scenes/batch-visuals`, { method: "POST", body: form });
-    const result = data?.results?.[0];
-    if (!result?.ok) throw new Error(result?.error ?? "El backend no aceptó el archivo");
+// --- resultados guardados ----------------------------------------------
+//
+// Cada imagen que sale de Flow se guarda aca (IndexedDB de la extension) y
+// recien se baja a la PC con el boton "Descargar" del panel, todas juntas y
+// en orden de escena. Se guardan los bytes y no la URL: las URLs firmadas de
+// Flow vencen.
+
+function resultsDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("scaler-flow", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("results", { keyPath: "sceneId" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function resultsTx(mode, fn) {
+  const db = await resultsDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("results", mode);
+    const out = fn(tx.objectStore("results"));
+    tx.oncomplete = () => resolve(out?.result ?? out);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+Object.assign(handlers, {
+  async storeResult({ sceneId, order, ext, mime, base64 }) {
+    await resultsTx("readwrite", (store) => store.put({ sceneId, order, ext, mime, base64 }));
     return { ok: true };
   },
-};
+
+  // El panel avisa el nombre de la descarga que va a lanzar (ver
+  // onDeterminingFilename abajo).
+  async expectName({ url, filename }) {
+    pendingNames.set(url, filename);
+    setTimeout(() => pendingNames.delete(url), 60_000);
+    return { ok: true };
+  },
+
+  async clearResults() {
+    await resultsTx("readwrite", (store) => store.clear());
+    return { ok: true };
+  },
+});
+
+// Nombre de cada descarga de la extension, por URL. El `filename` de
+// chrome.downloads.download a veces se ignora (otra extension que maneja
+// descargas lo pisa y quedan "descarga (1).png", "descarga (2).png"...): aca
+// se vuelve a imponer en el momento en que Chrome decide el nombre. Las
+// descargas que no son de la extension siguen con su nombre de siempre.
+const pendingNames = new Map();
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  const filename = pendingNames.get(item.url) ?? pendingNames.get(item.finalUrl);
+  if (!filename) return suggest();
+  pendingNames.delete(item.url);
+  suggest({ filename, conflictAction: "overwrite" });
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = msg?.type && handlers[msg.type];

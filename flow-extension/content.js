@@ -1,7 +1,7 @@
 // Corre DENTRO de la pestaña de Google Flow. Recorre la cola de escenas
-// guardada en chrome.storage (la arma el popup): por cada una escribe el
-// prompt en Flow, aprieta generar, espera el resultado nuevo, lo descarga y
-// lo manda (via background.js) a su escena de Scaler Tool. Vive aca y no
+// guardada en chrome.storage (la arma el popup): manda los prompts a Flow uno
+// tras otro y descarga cada resultado a la PC numerado por escena (ver
+// "cola" mas abajo). Vive aca y no
 // en el service worker porque una generacion tarda minutos y el worker de
 // MV3 se duerme a los ~30s sin eventos; la pestaña de Flow, en cambio,
 // sigue viva todo el proceso.
@@ -274,118 +274,306 @@
     return mediaType === "video" ? "mp4" : "png";
   }
 
-  async function generateOne(item, settings, alreadyUsed) {
-    const before = currentMediaSrcs(settings);
-    // Paso actual, visible en el popup -- para saber donde se traba.
-    const step = (text) => {
-      console.log(`[Scaler→Flow] escena ${item.order}: ${text}`);
-      return patchItem(item.sceneId, { step: text });
-    };
-    await step("escribiendo y enviando el prompt");
+  // --- cola ---------------------------------------------------------------
+  //
+  // Modo rapido (el normal): manda los prompts uno tras otro, sin esperar a
+  // que termine cada uno, con hasta `settings.parallel` generandose a la vez.
+  // Cada resultado se reconoce por la red de Flow (flowFindMedia: prompt
+  // exacto -> mediaId -> URL) y se descarga numerado por escena apenas sale.
+  //
+  // Modo de a una (respaldo): si Flow no deja leer sus respuestas, se vuelve
+  // al metodo de siempre -- mandar, esperar a que aparezca una imagen nueva
+  // en la pagina, descargarla y recien ahi mandar la siguiente.
 
-    // Escribir + enviar corre en el MAIN world de la pagina (background.js ->
-    // flowSendInPage), con el metodo de la extension de referencia. Solo
-    // vuelve ok si Flow vacio la caja, o sea si de verdad tomo el prompt.
+  const NOT_REGISTERED_MS = 90_000;
+  const NO_TRAFFIC_MS = 20_000;
+  const COLLECT_EVERY_MS = 10_000;
+  // Imagen ya creada en Flow sin URL: a los 15 s se le pide a Flow, cada 20 s,
+  // y a los 10 min se da por perdida (sin volver a mandar el prompt).
+  const SIGNED_URL_AFTER_MS = 15_000;
+  const SIGNED_URL_EVERY_MS = 20_000;
+  const FOUND_NO_URL_MAX_MS = 10 * 60_000;
+
+  function timeoutMsFor(settings) {
+    return (Number(settings.timeoutSec) || (settings.mediaType === "video" ? 600 : 240)) * 1000;
+  }
+
+  function step(item, text) {
+    console.log(`[Scaler→Flow] escena ${item.order}: ${text}`);
+    return patchItem(item.sceneId, { step: text });
+  }
+
+  // Guarda el resultado en la extension; se baja a la PC despues, todas
+  // juntas, con el boton "Descargar" del panel (ver storeResult en background.js).
+  async function saveResult(run, item, src, settings) {
+    await step(item, "guardando la imagen");
+    const media = await downloadMedia(src);
+    await send({
+      type: "storeResult",
+      sceneId: item.sceneId,
+      order: item.order,
+      ext: extensionFor(media.mime, settings.mediaType),
+      mime: media.mime,
+      base64: media.base64,
+    });
+  }
+
+  // Un intento fallido: vuelve a la cola si le quedan reintentos.
+  async function failItem(item, message, settings) {
+    const retries = Math.max(0, Number(settings.retries ?? 2));
+    const { run } = await chrome.storage.local.get(["run"]);
+    const current = run?.items.find((i) => i.sceneId === item.sceneId);
+    const attempts = current?.attempts ?? item.attempts ?? 1;
+    console.warn(`[Scaler→Flow] escena ${item.order}: ${message}`);
+    await patchItem(
+      item.sceneId,
+      attempts < retries + 1
+        ? { status: "pending", error: message, step: `reintentando (${message})` }
+        : { status: "error", error: message, step: null }
+    );
+  }
+
+  // Ingredientes de la escena (personajes/objetos de referencia). Flow
+  // conserva los de la escena anterior: si cambian (o hay que vaciarlos) se
+  // rearman; si son los mismos, no se toca nada.
+  async function applyRefs(item, refState) {
+    const { refs: allRefs } = await chrome.storage.local.get(["refs"]);
+    const wanted = (item.refIds ?? []).map((id) => (allRefs ?? []).find((r) => r.id === id)).filter(Boolean);
+    const refKey = wanted.map((r) => r.flowName).join("|");
+    if (refKey === refState.last) return;
+    await step(item, wanted.length ? "poniendo referencias en Flow" : "sacando referencias de Flow");
+    const applied = await send({
+      type: "flowApplyRefs",
+      refs: wanted.map((r) => ({ names: r.names, flowName: r.flowName, dataUrl: r.dataUrl })),
+    });
+    if (!applied?.ok) throw new Error(applied?.error ?? "No se pudieron poner las referencias en Flow");
+    refState.last = refKey;
+  }
+
+  async function sendPrompt(item) {
+    // Escribir + enviar corre en el MAIN world de la pagina (background.js).
+    // Solo vuelve ok si Flow vacio la caja, o sea si de verdad tomo el prompt.
     const sent = await send({ type: "flowSend", prompt: item.prompt });
     if (!sent?.ok) throw new Error(sent?.error ?? "No se pudo enviar el prompt a Flow");
+  }
 
-    await step("enviado, esperando el resultado de Flow");
-    const timeoutMs = (Number(settings.timeoutSec) || (settings.mediaType === "video" ? 600 : 240)) * 1000;
-    const src = await waitForNewMedia(settings, before, alreadyUsed, timeoutMs);
-    alreadyUsed.add(src);
-    // Miniatura para la tarjeta de la escena en el panel. Solo URLs http(s):
-    // un blob:/data: de esta pagina no se puede mostrar desde la extension.
-    if (/^https?:/.test(src)) await patchItem(item.sceneId, { thumb: src });
+  // Modo rapido: manda la escena y sigue, sin esperar el resultado.
+  async function launchItem(item, settings, refState) {
+    const attempts = (item.attempts ?? 0) + 1;
+    await patchItem(item.sceneId, { status: "working", attempts, error: null, sentAt: null, mediaId: null, foundAt: null, askedUrlAt: null });
+    try {
+      await applyRefs(item, refState);
+      await step(item, "enviando el prompt");
+      const sentAt = Date.now();
+      await sendPrompt(item);
+      await patchItem(item.sceneId, { sentAt, step: "generando en Flow" });
+    } catch (err) {
+      refState.last = null; // tras un error no se sabe que quedo puesto en Flow
+      await failItem({ ...item, attempts }, err instanceof Error ? err.message : String(err), settings);
+    }
+  }
 
-    await step("descargando y subiendo a la escena");
-    const media = await downloadMedia(src);
-    const fileName = `escena_${String(item.order).padStart(2, "0")}.${extensionFor(media.mime, settings.mediaType)}`;
-    return { ...media, fileName };
+  // Modo rapido: se fija si el resultado de una escena ya salio y lo guarda.
+  // Devuelve "ok" | "waiting" | "failed" | "no-network".
+  async function collectItem(run, item, settings, taken) {
+    if (!item.sentAt) return "waiting"; // todavia mandandose
+    // Cuando se mando el prompt siguiente: lo que Flow creo entre los dos
+    // envios es de esta escena (ver pageFindMedia en background.js).
+    const nextSentAt = run.items
+      .map((i) => i.sentAt)
+      .filter((t) => t && t > item.sentAt)
+      .sort((a, b) => a - b)[0] ?? null;
+    const res = await send({
+      type: "flowFindMedia",
+      prompt: item.prompt,
+      sentAt: item.sentAt,
+      nextSentAt,
+      taken: [...taken],
+      mediaType: settings.mediaType,
+    });
+    if (!res?.tap) return "no-network";
+    const elapsed = Date.now() - item.sentAt;
+
+    // La imagen ya existe en Flow pero todavia no hay URL para bajarla (Flow
+    // solo la pide para las que estan a la vista): se le pide, y NO se vuelve
+    // a mandar el prompt -- eso generaba imagenes repetidas y gastaba creditos.
+    if (res.found && !res.url) {
+      if (!item.mediaId) await patchItem(item.sceneId, { mediaId: res.mediaId, foundAt: Date.now(), step: "generando en Flow" });
+      const foundAt = item.foundAt ?? Date.now();
+      if (Date.now() - foundAt > SIGNED_URL_AFTER_MS && Date.now() - (item.askedUrlAt ?? 0) > SIGNED_URL_EVERY_MS) {
+        await patchItem(item.sceneId, { askedUrlAt: Date.now(), step: "pidiendo la imagen a Flow" });
+        await send({ type: "flowRequestSignedUrl", mediaId: res.mediaId }).catch(() => {});
+      }
+      if (Date.now() - foundAt > FOUND_NO_URL_MAX_MS) {
+        await patchItem(item.sceneId, {
+          status: "error",
+          error: "La imagen está en Flow pero no se pudo bajar: subí hasta ella en la grilla de Flow y tocá ↻ Reintentar fallidas",
+          step: null,
+        });
+        return "failed";
+      }
+      return "waiting";
+    }
+
+    if (res.found && res.url) {
+      taken.add(res.mediaId);
+      try {
+        await saveResult(run, item, res.url, settings);
+        await patchItem(item.sceneId, { status: "ok", error: null, step: null, mediaId: res.mediaId, thumb: res.url });
+        return "ok";
+      } catch (err) {
+        await failItem(item, err instanceof Error ? err.message : String(err), settings);
+        return "failed";
+      }
+    }
+    // Sin registro del prompt: si la escucha no vio NINGUNA respuesta de Flow
+    // (seen 0), no hay nada que esperar; si vio pero no esta este prompt, se
+    // le da margen. Va antes del timeout general para no gastar reintentos.
+    if (!res.found && ((res.seen === 0 && elapsed > NO_TRAFFIC_MS) || elapsed > Math.min(NOT_REGISTERED_MS, timeoutMsFor(settings)))) {
+      return "no-network";
+    }
+    if (elapsed > timeoutMsFor(settings)) {
+      await failItem(item, "Flow no terminó la imagen a tiempo", settings);
+      return "failed";
+    }
+    return "waiting";
+  }
+
+  // Modo de a una (respaldo): manda, espera el resultado en la pagina y lo
+  // guarda. Devuelve false si no queda nada por hacer.
+  async function sequentialStep(run, settings, refState, alreadyUsed) {
+    const item = run.items.find((i) => i.status === "pending");
+    if (!item) return false;
+    const attempts = (item.attempts ?? 0) + 1;
+    await patchItem(item.sceneId, { status: "working", attempts, error: null });
+    try {
+      await applyRefs(item, refState);
+      const before = currentMediaSrcs(settings);
+      await step(item, "enviando el prompt");
+      await sendPrompt(item);
+      await step(item, "esperando el resultado de Flow");
+      const src = await waitForNewMedia(settings, before, alreadyUsed, timeoutMsFor(settings));
+      alreadyUsed.add(src);
+      const { run: still } = await chrome.storage.local.get(["run"]);
+      if (stopRequested || !still) {
+        await patchItem(item.sceneId, { status: "pending" });
+        return false;
+      }
+      await saveResult(run, item, src, settings);
+      await patchItem(item.sceneId, {
+        status: "ok",
+        error: null,
+        step: null,
+        ...(/^https?:/.test(src) ? { thumb: src } : {}),
+      });
+    } catch (err) {
+      refState.last = null;
+      if (stopRequested) {
+        await patchItem(item.sceneId, { status: "pending" });
+        return false;
+      }
+      await failItem({ ...item, attempts }, err instanceof Error ? err.message : String(err), settings);
+    }
+    await sleep(Math.max(0, Number(settings.delaySec ?? 3)) * 1000);
+    return true;
+  }
+
+  async function switchToSequential(reason) {
+    console.warn(`[Scaler→Flow] paso a modo de a una: ${reason}`);
+    await patchRun((run) => {
+      run.mode = "sequential";
+      run.notice = "Flow no dejó leer sus respuestas: sigo de a una escena (más lento).";
+      // Las que estaban generandose se vuelven a mandar de a una (sin gastar
+      // un reintento): no hay forma segura de saber cual imagen es cual.
+      for (const item of run.items) {
+        if (item.status === "working") {
+          item.status = "pending";
+          item.attempts = Math.max(0, (item.attempts ?? 1) - 1);
+        }
+      }
+    });
   }
 
   async function runQueue() {
     if (running) return;
     running = true;
     stopRequested = false;
+    const refState = { last: null }; // ingredientes puestos en Flow (null = no se sabe)
     const alreadyUsed = new Set();
-    // Ingredientes que quedaron puestos en Flow (null = no se sabe: el primer
-    // envio de la corrida siempre los rearma).
-    let lastRefKey = null;
     try {
-      await patchRun((run) => {
+      await send({ type: "flowEnsureTap" }).catch(() => {});
+      const started = await patchRun((run) => {
         run.status = "running";
         run.lastError = null;
-      });
-
-      while (!stopRequested) {
-        const { run, settings } = await getState();
-        if (!run || run.status !== "running") break;
-        const item = run.items.find((i) => i.status === "pending");
-        if (!item) break;
-
-        const retries = Math.max(0, Number(settings?.retries ?? 2));
-        await patchItem(item.sceneId, { status: "working", error: null });
-        let lastError = null;
-
-        for (let attempt = 1; attempt <= retries + 1 && !stopRequested; attempt++) {
-          await patchItem(item.sceneId, { attempts: attempt });
-          try {
-            // Ingredientes de la escena (personajes/objetos de referencia).
-            // Flow conserva los de la escena anterior: si cambian (o hay que
-            // vaciarlos) se rearman; si son los mismos, no se toca nada.
-            const { refs: allRefs } = await chrome.storage.local.get(["refs"]);
-            const wanted = (item.refIds ?? []).map((id) => (allRefs ?? []).find((r) => r.id === id)).filter(Boolean);
-            const refKey = wanted.map((r) => r.flowName).join("|");
-            if (refKey !== lastRefKey) {
-              await patchItem(item.sceneId, { step: wanted.length ? "poniendo referencias en Flow" : "sacando referencias de Flow" });
-              const applied = await send({
-                type: "flowApplyRefs",
-                refs: wanted.map((r) => ({ names: r.names, flowName: r.flowName, dataUrl: r.dataUrl })),
-              });
-              if (!applied?.ok) throw new Error(applied?.error ?? "No se pudieron poner las referencias en Flow");
-              lastRefKey = refKey;
-            }
-            const media = await generateOne(item, settings ?? {}, alreadyUsed);
-            // Si cancelaron (o pausaron) mientras Flow generaba, no se sube.
-            const { run: still } = await chrome.storage.local.get(["run"]);
-            if (stopRequested || !still) break;
-            await send({
-              type: "upload",
-              scriptId: run.scriptId,
-              sceneId: item.sceneId,
-              fileName: media.fileName,
-              mime: media.mime,
-              base64: media.base64,
-            });
-            lastError = null;
-            break;
-          } catch (err) {
-            lastError = err instanceof Error ? err.message : String(err);
-            lastRefKey = null; // tras un error no se sabe que quedo puesto en Flow
-            if (/Sesión vencida/.test(lastError)) break; // reintentar no lo arregla
-            await sleep(3000);
+        for (const item of run.items) {
+          // Imagen que ya existe en Flow (tiene mediaId) pero no se pudo bajar:
+          // se sigue esperando su URL, sin volver a mandar el prompt.
+          if ((item.status === "working" || item.status === "error") && item.mediaId) {
+            Object.assign(item, { status: "working", error: null, foundAt: Date.now(), askedUrlAt: null });
+          } else if (item.status === "working") {
+            // Lo que quedo "generando" sin resultado se vuelve a mandar.
+            item.status = "pending";
           }
         }
+      });
+      // mediaId ya guardados (variantes de un mismo prompt no se reusan).
+      const taken = new Set((started?.items ?? []).filter((i) => i.status === "ok").map((i) => i.mediaId).filter(Boolean));
+      let anyOkByNetwork = (started?.items ?? []).some((i) => i.mediaId);
+      let lastCollect = Date.now();
 
-        if (stopRequested) {
-          await patchItem(item.sceneId, { status: "pending" });
+      while (!stopRequested) {
+        const { run, settings: stored } = await getState();
+        const settings = stored ?? {};
+        if (!run || run.status !== "running") break;
+
+        if (run.mode === "sequential") {
+          if (!(await sequentialStep(run, settings, refState, alreadyUsed))) break;
+          continue;
+        }
+
+        const inFlight = run.items.filter((i) => i.status === "working");
+        const next = run.items.find((i) => i.status === "pending");
+
+        // 1) Mandar todos los prompts seguidos, sin esperar resultados. Cada
+        //    tanto se hace una pasada de recoleccion (abajo) para no dejar
+        //    que se acumulen demasiadas respuestas de Flow sin leer.
+        if (next && Date.now() - lastCollect < COLLECT_EVERY_MS) {
+          await launchItem(next, settings, refState);
+          await sleep(Math.max(1, Number(settings.delaySec ?? 2)) * 1000);
+          continue;
+        }
+        lastCollect = Date.now();
+        if (!inFlight.length) {
+          if (next) continue;
           break;
         }
-        await patchItem(item.sceneId, lastError ? { status: "error", error: lastError } : { status: "ok", error: null });
-        if (lastError && /Sesión vencida/.test(lastError)) {
-          await patchRun((r) => {
-            r.status = "paused";
-            r.lastError = lastError;
-          });
-          return;
+
+        // 2) Recoger lo que ya salio.
+        let fallback = false;
+        for (const item of inFlight) {
+          if (stopRequested) break;
+          const outcome = await collectItem(run, item, settings, taken);
+          if (outcome === "ok") anyOkByNetwork = true;
+          if (outcome === "no-network") {
+            if (!anyOkByNetwork) {
+              fallback = true;
+              break;
+            }
+            await failItem(item, "Flow no registró el envío del prompt", settings);
+          }
         }
-        // Respiro entre escenas para no saturar Flow.
-        await sleep(Math.max(0, Number(settings?.delaySec ?? 3)) * 1000);
+        if (fallback) {
+          await switchToSequential("ningun resultado se pudo asociar por la red");
+          continue;
+        }
+        await sleep(2500);
       }
 
       await patchRun((run) => {
         if (stopRequested) {
           run.status = "paused";
+          // Las que estaban generandose quedan para retomar.
+          for (const item of run.items) if (item.status === "working") item.status = "pending";
         } else if (run.status === "running") {
           run.status = "done";
         }
