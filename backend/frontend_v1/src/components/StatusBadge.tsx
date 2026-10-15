@@ -60,7 +60,7 @@ export default function StatusBadge({ status, size = "sm" }: Props) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full font-mono font-medium tracking-wide ${sizeClass}`}
+      className={`inline-flex items-center gap-1.5 rounded-full font-mono font-medium tracking-wide whitespace-nowrap shrink-0 ${sizeClass}`}
       style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}`, backdropFilter: "blur(8px)" }}
     >
       {c.dot && (

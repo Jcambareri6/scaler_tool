@@ -24,6 +24,11 @@
 * { box-sizing: border-box; }
 body {
   min-width: 300px;
+  /* Una sola columna que nunca pasa el ancho del panel: sin esto, un
+     elemento que no se corta (botones, textos largos) estiraba todo y
+     aparecia scroll horizontal con el texto cortado a la derecha. */
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: hidden;
   margin: 0;
   padding: 12px 12px 24px;
   background: var(--bg);
@@ -87,20 +92,22 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 
 /* ── Tarjetas y secciones plegables ── */
-.card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 10px; display: grid; gap: 8px; }
+.card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
 .card-title { font-weight: 650; font-size: 12px; }
-.stack { display: grid; gap: 6px; margin-top: 8px; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 8px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .sub > summary { cursor: pointer; color: var(--muted); font-size: 11px; }
 
-.quick { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.quick { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .quick > summary {
   display: flex; align-items: center; gap: 6px; padding: 8px 10px; cursor: pointer; list-style: none; font-weight: 600; font-size: 12px;
 }
 .quick > summary::-webkit-details-marker { display: none; }
 .quick > summary::before { content: "▸"; color: var(--faint); font-size: 10px; transition: transform 0.15s; }
 .quick[open] > summary::before { transform: rotate(90deg); }
-.quick-body { padding: 0 10px 10px; display: grid; gap: 8px; }
+/* minmax(0, 1fr): la columna nunca crece mas que el panel aunque adentro
+   haya un texto que no se corta (ej. el nombre del proyecto abierto). */
+.quick-body { padding: 0 10px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .who-wrap { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; font-size: 11px; font-weight: 400; min-width: 0; }
 .who-wrap #who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
 
@@ -112,7 +119,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .auto-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 label { display: grid; gap: 3px; color: var(--muted); font-size: 11px; }
-.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(110px, 100%), 1fr)); gap: 6px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; cursor: pointer; }
 select, input, textarea {
@@ -123,8 +130,8 @@ input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 0; border-color: var(--accent); }
 
 /* ── Referencias ── */
-.ref-list { display: grid; gap: 8px; }
-.ref-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; }
+.ref-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.ref-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .ref-row img { width: 52px; height: 52px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); background: var(--well); }
 .ref-meta { display: grid; gap: 3px; min-width: 0; }
 .ref-file { color: var(--faint); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -153,9 +160,9 @@ select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 
 .empty-text { margin: 0; color: var(--muted); font-size: 12px; }
 
 /* ── Corrida ── */
-.run { display: grid; gap: 10px; }
+.run { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .run-head { display: flex; align-items: flex-start; gap: 8px; }
-.run-head-text { min-width: 0; }
+.run-head-text { min-width: 0; flex: 1; }
 .run-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-counts { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .badge {
@@ -178,10 +185,10 @@ select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 
 .seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
 .seg button:hover:not(:disabled) { color: var(--text); filter: none; }
 
-.items { display: grid; gap: 8px; }
+.items { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .items-empty { color: var(--faint); font-size: 12px; text-align: center; padding: 10px; }
 .item {
-  display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 9px; border-radius: var(--radius);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 9px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--surface);
 }
 .item.working { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
@@ -209,4 +216,5 @@ select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .item-prompt.open { display: block; color: var(--text); }
+.item-prompt, .item-error, .item-step { overflow-wrap: anywhere; }
 .item-error { margin: 0; color: var(--bad); font-size: 11px; }

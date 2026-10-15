@@ -273,8 +273,10 @@ export default function ScriptPanel({ projectId, project }: Props) {
 
       {/* Estilo de guion (Prompt Maestro por canal) */}
       <div className="px-6 py-4 space-y-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-        <div className="flex items-center gap-3">
-          <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+        {/* flex-wrap: en pantallas chicas los controles bajan de renglon en
+            vez de partir las etiquetas en dos lineas. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <label className="text-[11px] font-medium uppercase tracking-widest whitespace-nowrap" style={{ color: "var(--muted-foreground)" }}>
             Estilo de guion
           </label>
           <select
@@ -290,7 +292,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
               </option>
             ))}
           </select>
-          <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+          <label className="text-[11px] font-medium uppercase tracking-widest whitespace-nowrap" style={{ color: "var(--muted-foreground)" }}>
             Modelo
           </label>
           <select
@@ -301,7 +303,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
             <option value="anthropic">Claude</option>
             <option value="openai">GPT</option>
           </select>
-          <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+          <label className="text-[11px] font-medium uppercase tracking-widest whitespace-nowrap" style={{ color: "var(--muted-foreground)" }}>
             Idioma
           </label>
           <select
@@ -326,7 +328,7 @@ export default function ScriptPanel({ projectId, project }: Props) {
           )}
           <Link
             to="/script-styles"
-            className="text-[11px] transition-opacity hover:opacity-80"
+            className="text-[11px] whitespace-nowrap transition-opacity hover:opacity-80"
             style={{ color: "var(--accent)" }}
           >
             + Crear estilo nuevo

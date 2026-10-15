@@ -356,8 +356,7 @@ $("loadBtn").addEventListener("click", (e) =>
     const prompts = await api("POST", `/scripts/${script.id}/scenes/image-prompts`, {});
 
     const fromScene = Number($("fromScene").value) || 1;
-    const onlyMissing = $("onlyMissing").checked;
-    const selected = prompts.filter((p) => p.order >= fromScene && (!onlyMissing || !p.has_visual));
+    const selected = prompts.filter((p) => p.order >= fromScene);
     const withPrompt = selected.filter((p) => p.image_prompt);
     const withoutPrompt = selected.length - withPrompt.length;
 
@@ -393,6 +392,8 @@ $("loadBtn").addEventListener("click", (e) =>
     }));
     const withRefs = items.filter((i) => i.refIds.length).length;
 
+    // Corrida nueva: se borran las imagenes guardadas de la anterior.
+    await send({ type: "clearResults" });
     await chrome.storage.local.set({
       run: {
         projectId,
@@ -433,6 +434,96 @@ async function refreshFlowChip() {
   setChip("chipFlow", tabs.length ? "ok" : "warn", tabs.length ? "Pestaña de Google Flow abierta" : "Abrí Google Flow en una pestaña");
 }
 
+// --- descarga ------------------------------------------------------------
+//
+// Las imagenes que salen de Flow quedan guardadas en la extension
+// (storeResult en background.js). "Descargar" las baja todas juntas, en orden
+// de escena y en la calidad elegida: Descargas/Scaler Tool/<proyecto>/001.jpg...
+//
+// Se descarga desde aca (y no desde el service worker) porque aca se puede
+// armar un blob: URL. Con data: URLs Edge ignora el nombre y quedaban
+// "descargar (1).jfif", "descargar (2).jfif"...
+
+const QUALITIES = { 720: [1280, 720], 1080: [1920, 1080] };
+
+function readStoredResults() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("scaler-flow", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("results", { keyPath: "sceneId" });
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const all = req.result.transaction("results").objectStore("results").getAll();
+      all.onsuccess = () => resolve(all.result);
+      all.onerror = () => reject(all.error);
+    };
+  });
+}
+
+function safeFolderName(name) {
+  return (
+    String(name ?? "")
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/[. ]+$/, "")
+      .trim()
+      .slice(0, 80) || "Proyecto"
+  );
+}
+
+// Lleva la imagen a 1280x720 o 1920x1080 exactos (16:9). Si la original no es
+// 16:9, se recorta el sobrante del centro en vez de deformarla.
+async function toQuality(row, quality) {
+  const [width, height] = QUALITIES[quality];
+  const bytes = Uint8Array.from(atob(row.base64), (c) => c.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: row.mime || "image/png" }));
+  const scale = Math.max(width / bitmap.width, height / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bitmap, (width - w) / 2, (height - h) / 2, w, h);
+  bitmap.close();
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+}
+
+async function downloadAll(quality) {
+  const { run } = await chrome.storage.local.get(["run"]);
+  const ready = new Set((run?.items ?? []).filter((i) => i.status === "ok").map((i) => i.sceneId));
+  const rows = (await readStoredResults()).filter((r) => ready.has(r.sceneId)).sort((a, b) => a.order - b.order);
+  if (!rows.length) throw new Error("Todavía no hay imágenes listas");
+  const folder = safeFolderName(run.projectTitle);
+
+  for (const [index, row] of rows.entries()) {
+    showMsg(`Descargando ${index + 1} de ${rows.length} en ${quality}p...`, "ok");
+    const blob = await toQuality(row, quality);
+    const url = URL.createObjectURL(blob);
+    const filename = `Scaler Tool/${folder}/${String(row.order).padStart(3, "0")}.jpg`;
+    // Por si otra extension pisa el nombre (ver onDeterminingFilename).
+    await send({ type: "expectName", url, filename });
+    await chrome.downloads.download({ url, filename, conflictAction: "overwrite", saveAs: false });
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  return rows.length;
+}
+
+$("downloadBtn").addEventListener("click", () => {
+  $("qualityBox").hidden = !$("qualityBox").hidden;
+});
+
+for (const quality of [720, 1080]) {
+  $(`dl${quality}`).addEventListener("click", (e) =>
+    withBusy(e.currentTarget, async () => {
+      const count = await downloadAll(quality);
+      $("qualityBox").hidden = true;
+      const { run } = await chrome.storage.local.get(["run"]);
+      showMsg(`${count} imágenes descargadas en ${quality}p: Descargas › Scaler Tool › ${safeFolderName(run?.projectTitle)}`, "ok");
+    })
+  );
+}
+
 $("startBtn").addEventListener("click", (e) =>
   withBusy(e.currentTarget, async () => {
     const { run } = await chrome.storage.local.get(["run"]);
@@ -465,8 +556,11 @@ $("retryBtn").addEventListener("click", (e) =>
     let count = 0;
     for (const item of run.items) {
       if (item.status === "error") {
-        item.status = "pending";
+        // Si la imagen ya existe en Flow (mediaId) solo se vuelve a buscar su
+        // URL; si no, se vuelve a mandar el prompt con todos sus reintentos.
+        item.status = item.mediaId ? "working" : "pending";
         item.error = null;
+        item.attempts = 0;
         count++;
       }
     }
@@ -495,7 +589,8 @@ $("cancelBtn").addEventListener("click", (e) =>
 
 // --- render de la corrida -----------------------------------------------
 
-const STATUS_LABEL = { pending: "En cola", working: "Generando", ok: "✓ Cargada", error: "✗ Error" };
+const STATUS_LABEL = { pending: "En cola", working: "Generando", ok: "✓ Lista", error: "✗ Error" };
+
 const RUN_LABEL = {
   idle: ["Lista para empezar", ""],
   running: ["Corriendo", "accent"],
@@ -636,13 +731,22 @@ function renderRun(run) {
   const [label, tone] = RUN_LABEL[run.status] ?? [run.status, ""];
 
   $("runTitle").textContent = run.projectTitle || "Corrida";
-  $("runInfo").textContent = `${done}/${total} cargadas · ${pending} pendientes${failed ? ` · ${failed} con error` : ""}`;
+  const generating = run.items.filter((i) => i.status === "working").length;
+  $("runInfo").textContent =
+    `${done}/${total} listas` +
+    (generating ? ` · ${generating} generando` : "") +
+    ` · ${pending - generating} en cola${failed ? ` · ${failed} con error` : ""}` +
+    (run.mode === "sequential" ? " · de a una" : "");
   $("runStatus").textContent = label;
   $("runStatus").className = `badge ${tone}`;
   $("progDone").style.width = `${(done / total) * 100}%`;
   $("progFailed").style.width = `${((done + failed) / total) * 100}%`;
-  $("runError").textContent = run.lastError ?? "";
-  $("runError").hidden = !run.lastError;
+  // Error, o aviso si la corrida paso a modo de a una.
+  const runMessage = run.lastError ?? run.notice ?? "";
+  $("runError").textContent = runMessage;
+  $("runError").hidden = !runMessage;
+  $("downloadBtn").disabled = done === 0;
+  $("downloadBtn").textContent = done ? `⬇ Descargar (${done})` : "⬇ Descargar";
   $("startBtn").disabled = run.status === "running";
   $("startBtn").textContent = run.status === "paused" ? "▶ Seguir" : "▶ Empezar";
   $("pauseBtn").disabled = run.status !== "running";

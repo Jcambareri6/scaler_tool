@@ -34,7 +34,25 @@ y recargar la pestaña de Flow.
 5. En la extensión: **▶ Empezar**. Podés cerrar el popup: sigue solo. No
    cierres ni recargues la pestaña de Flow mientras corre.
 
-Cada escena va pasando por *en cola → generando → ✓ cargada*. Si una falla
+### Cómo salen las imágenes
+
+La extensión manda los prompts uno tras otro sin esperar a que termine cada uno, con hasta **En paralelo** escenas generándose a la vez (4 por defecto). Cada imagen se reconoce por la respuesta de Flow al prompt exacto, así que no se mezclan escenas aunque salgan fuera de orden. Si Flow no deja leer sus respuestas, la extensión pasa sola a generar de a una escena (más lento) y lo avisa en el panel.
+
+Cada resultado se descarga en tu carpeta de Descargas, numerado por escena. No se sube a la app:
+
+```
+Descargas/Scaler Tool/<nombre del proyecto>/001.png
+                                            002.png
+                                            ...
+```
+
+- La numeración usa ceros adelante para que el explorador y el editor de video las ordenen bien.
+- Si regenerás una escena, el archivo nuevo pisa al anterior: no aparece un `001 (1).png`.
+- Sirve para armar el video a mano en el editor, sin esperar a que cada imagen suba.
+
+Si Chrome tiene activado *Preguntar dónde guardar cada archivo*, va a abrir el diálogo una vez por imagen. Para que se guarden solas, desactivalo en `chrome://settings/downloads`.
+
+Cada escena va pasando por *en cola → generando → ✓ cargada* (o *✓ descargada*). Si una falla
 (Flow rechaza el prompt, tarda demasiado, etc.) se reintenta según
 *Reintentos*; si sigue fallando queda en **✗ error** con el motivo y la
 corrida sigue con la próxima. Al final: **↻ Reintentar fallidas**. Si querés
