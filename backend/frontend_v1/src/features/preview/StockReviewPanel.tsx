@@ -343,10 +343,13 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       <div className="flex-1 min-h-0 flex">
         {/* Columna izquierda: player + barra contextual + toolbar + scrubber */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex-1 min-h-0 flex items-center justify-center px-6">
+          {/* El player se ajusta al ancho Y al alto disponibles (container
+              query): en pantallas bajas (notebooks con zoom) antes crecia por
+              el ancho y empujaba la barra de abajo fuera de la vista. */}
+          <div className="flex-1 min-h-0 flex items-center justify-center px-4 xl:px-6 py-2" style={{ containerType: "size" }}>
             <div
-              className="relative w-full max-w-2xl rounded-2xl overflow-hidden flex items-center justify-center"
-              style={{ aspectRatio: "16/9", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
+              className="relative rounded-2xl overflow-hidden flex items-center justify-center"
+              style={{ aspectRatio: "16/9", width: "min(100%, 42rem, calc(100cqh * 16 / 9))", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
             >
               {activeSegment?.asset ? (
                 activeSegment.asset.type === "IMAGE" ? (
@@ -411,8 +414,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
           )}
 
           {/* Toolbar: play/pause, tiempo, aprobar */}
-          <div className="flex items-center justify-between px-6 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-            <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 xl:px-6 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center gap-3 shrink-0">
               <button
                 onClick={handleTogglePlay}
                 disabled={!audioAsset}
@@ -425,7 +428,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFB3B4" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
                 )}
               </button>
-              <span className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+              <span className="text-xs font-mono whitespace-nowrap" style={{ color: "var(--muted-foreground)" }}>
                 {formatSeconds(currentTime)} / {formatSeconds(totalDuration)}
               </span>
 
@@ -457,11 +460,11 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-end gap-2 ml-auto">
               <button
                 onClick={onRegenerate}
                 disabled={approving || regenerating}
-                className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+                className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl whitespace-nowrap shrink-0 disabled:opacity-50"
               >
                 {regenerating ? (
                   <>
@@ -484,7 +487,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 onClick={handleApprove}
                 disabled={approving || regenerating || noCredits}
                 title={noCredits ? "Se terminaron tus videos" : undefined}
-                className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl disabled:opacity-50"
+                className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl whitespace-nowrap shrink-0 disabled:opacity-50"
               >
                 {approving ? (
                   <>
@@ -500,7 +503,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
           {/* Scrubbing temporal global: solo waveform, ya no mezcla miniaturas
               de escena (ver diagnostico en mejoras-interfaz-preview-scalertool.md). */}
-          <div className="px-6 pb-5" style={{ background: "rgba(0,0,0,0.15)" }}>
+          <div className="px-4 xl:px-6 pb-5" style={{ background: "rgba(0,0,0,0.15)" }}>
             <div
               ref={waveformRef}
               onClick={handleWaveformClick}

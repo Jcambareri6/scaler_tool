@@ -105,11 +105,14 @@ export default function Sidebar() {
     return location.pathname.startsWith(href);
   };
 
+  // En pantallas de menos de 1280 px (notebooks, sobre todo con el zoom de
+  // Windows al 125-150%) el menu queda solo con iconos para dejarle lugar al
+  // contenido; los nombres aparecen al pasar el mouse (title).
   return (
-    <aside className="glass-sidebar flex flex-col w-[220px] min-w-[220px] h-full relative z-20">
+    <aside className="glass-sidebar flex flex-col w-[68px] min-w-[68px] xl:w-[220px] xl:min-w-[220px] h-full relative z-20">
       {/* Logo */}
       <div
-        className="flex items-center gap-3 px-5 h-16"
+        className="flex items-center justify-center xl:justify-start gap-3 px-3 xl:px-5 h-16"
         style={{ borderBottom: "1px solid var(--border)" }}
       >
         <img
@@ -118,30 +121,31 @@ export default function Sidebar() {
           className="w-8 h-8 rounded-lg shrink-0 object-cover"
           style={{ boxShadow: "0 0 14px rgba(227,11,16,0.35)", border: "1px solid rgba(255,235,225,0.1)" }}
         />
-        <span className="text-[17px] font-bold uppercase tracking-[0.06em] leading-none" style={{ color: "var(--brand-stone)", fontFamily: "var(--font-barlow)" }}>
+        <span className="hidden xl:inline text-[17px] font-bold uppercase tracking-[0.06em] leading-none" style={{ color: "var(--brand-stone)", fontFamily: "var(--font-barlow)" }}>
           Scaler<span style={{ color: "var(--primary)" }}>Tool</span>
         </span>
       </div>
 
       {/* New Project button */}
-      <div className="px-4 py-4">
+      <div className="px-3 xl:px-4 py-4">
         <Link
           to="/projects/new"
+          title="Nuevo proyecto"
           className="btn-primary flex items-center justify-center gap-2 w-full py-2 px-3 rounded-xl text-sm font-medium"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          Nuevo proyecto
+          <span className="hidden xl:inline">Nuevo proyecto</span>
         </Link>
       </div>
 
       {/* Divider */}
-      <div className="mx-4 mb-3" style={{ height: 1, background: "var(--border)" }} />
+      <div className="mx-3 xl:mx-4 mb-3" style={{ height: 1, background: "var(--border)" }} />
 
       {/* Nav */}
-      <nav className="flex-1 px-3 space-y-0.5">
-        <p className="text-[10px] font-medium px-3 mb-2" style={{ color: "var(--muted-foreground)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+      <nav className="flex-1 px-2 xl:px-3 space-y-0.5">
+        <p className="hidden xl:block text-[10px] font-medium px-3 mb-2" style={{ color: "var(--muted-foreground)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
           Navegación
         </p>
         {visibleNavItems.map((item) => {
@@ -150,7 +154,8 @@ export default function Sidebar() {
             <Link
               key={item.href}
               to={item.href}
-              className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-150 relative group"
+              title={item.label}
+              className="flex items-center justify-center xl:justify-start gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-150 relative group"
               style={{
                 color: active ? "var(--foreground)" : "var(--muted-foreground)",
                 background: active ? "rgba(227,11,16,0.12)" : "transparent",
@@ -164,7 +169,7 @@ export default function Sidebar() {
                 />
               )}
               <span className={active ? "text-[#FF8A8D]" : ""}>{item.icon}</span>
-              {item.label}
+              <span className="hidden xl:inline">{item.label}</span>
             </Link>
           );
         })}
@@ -173,9 +178,10 @@ export default function Sidebar() {
       {/* Saldo de videos (cada proyecto descuenta 1 la primera vez que se
           renderiza). Las cuentas sin limite no lo ven. */}
       {account && !account.unlimited && (
-        <div className="px-4 pb-3">
+        <div className="px-2 xl:px-4 pb-3">
           <div
-            className="rounded-xl px-3 py-2.5"
+            title={`${account.videosAvailable} ${account.videosAvailable === 1 ? "video disponible" : "videos disponibles"}`}
+            className="rounded-xl px-2 xl:px-3 py-2.5 text-center xl:text-left"
             style={
               account.videosAvailable > 0
                 ? { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }
@@ -183,10 +189,11 @@ export default function Sidebar() {
             }
           >
             <p className="text-sm font-semibold" style={{ color: account.videosAvailable > 0 ? "var(--foreground)" : "rgba(252,165,165,0.95)" }}>
-              {account.videosAvailable} {account.videosAvailable === 1 ? "video disponible" : "videos disponibles"}
+              {account.videosAvailable}
+              <span className="hidden xl:inline"> {account.videosAvailable === 1 ? "video disponible" : "videos disponibles"}</span>
             </p>
             {account.videosAvailable === 0 && (
-              <p className="text-[11px] mt-0.5" style={{ color: "rgba(252,165,165,0.8)" }}>
+              <p className="hidden xl:block text-[11px] mt-0.5" style={{ color: "rgba(252,165,165,0.8)" }}>
                 Contactá al administrador para cargar más
               </p>
             )}
@@ -195,12 +202,13 @@ export default function Sidebar() {
       )}
 
       {/* Bottom */}
-      <div className="px-3 pb-4 space-y-0.5" style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+      <div className="px-2 xl:px-3 pb-4 space-y-0.5" style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
         {bottomItems.map((item) => (
           <Link
             key={item.href}
             to={item.href}
-            className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-150"
+            title={item.label}
+            className="flex items-center justify-center xl:justify-start gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-150"
             style={{ color: "var(--muted-foreground)" }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLElement).style.color = "var(--foreground)";
@@ -212,19 +220,19 @@ export default function Sidebar() {
             }}
           >
             {item.icon}
-            {item.label}
+            <span className="hidden xl:inline">{item.label}</span>
           </Link>
         ))}
 
         {/* User */}
-        <div className="flex items-center gap-3 px-3 py-2 mt-2">
+        <div className="flex flex-col xl:flex-row items-center gap-3 px-3 py-2 mt-2" title={user?.email ?? undefined}>
           <div
             className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
             style={{ background: "linear-gradient(135deg, #E30B10, #4f46e5)" }}
           >
             {(user?.email ?? "U").charAt(0).toUpperCase()}
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="hidden xl:block flex-1 min-w-0">
             <p className="text-xs font-medium truncate" style={{ color: "var(--foreground)" }}>
               {user?.email ?? "Usuario"}
             </p>

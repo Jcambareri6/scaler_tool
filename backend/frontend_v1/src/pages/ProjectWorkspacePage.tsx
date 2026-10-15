@@ -155,7 +155,7 @@ export default function ProjectWorkspacePage() {
           <StatusBadge status={project.status} />
           {project.myRole && project.myRole !== "owner" && (
             <span
-              className="text-[10px] font-medium uppercase tracking-widest px-2 py-0.5 rounded-md"
+              className="text-[10px] font-medium uppercase tracking-widest px-2 py-0.5 rounded-md whitespace-nowrap shrink-0"
               style={{ background: "rgba(227,11,16,0.12)", color: "rgba(255,179,180,0.95)", border: "1px solid rgba(227,11,16,0.25)" }}
               title={project.myRole === "viewer" ? "Podés ver el proyecto y sus previews, pero no editarlo" : undefined}
             >
@@ -166,7 +166,7 @@ export default function ProjectWorkspacePage() {
 
         {/* Tab nav */}
         <nav
-          className="flex items-center gap-0.5 rounded-xl p-1"
+          className="flex items-center gap-0.5 rounded-xl p-1 shrink-0"
           style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
         >
           {tabs.map((tab) => {
@@ -175,7 +175,8 @@ export default function ProjectWorkspacePage() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-all duration-150"
+                title={tab.label}
+                className="flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-all duration-150"
                 style={{
                   color: active ? "var(--foreground)" : "var(--muted-foreground)",
                   background: active ? "rgba(255,255,255,0.08)" : "transparent",
@@ -195,7 +196,8 @@ export default function ProjectWorkspacePage() {
         {canAdmin && (<>
         <button
           onClick={() => setSharing(true)}
-          className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg"
+          title="Compartir"
+          className="btn-secondary flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="18" cy="5" r="3" />
@@ -204,7 +206,7 @@ export default function ProjectWorkspacePage() {
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
           </svg>
-          Compartir
+          <span className="hidden xl:inline">Compartir</span>
         </button>
 
         <button
