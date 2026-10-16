@@ -26,6 +26,14 @@ async function refreshSession() {
   if (!session?.access_token) return null;
   const next = { ...auth, accessToken: session.access_token, refreshToken: session.refresh_token || auth.refreshToken };
   await chrome.storage.local.set({ auth: next });
+  // Supabase rota el refresh token: el que tiene la app ya no sirve. Se le
+  // pasa el nuevo (app-bridge.js) para que la app no pierda la sesion.
+  const tabs = await chrome.tabs.query({ url: await bridgeUrlPatterns() }).catch(() => []);
+  for (const tab of tabs) {
+    chrome.tabs
+      .sendMessage(tab.id, { type: "bridge:tokens", oldRefreshToken: auth.refreshToken, accessToken: next.accessToken, refreshToken: next.refreshToken })
+      .catch(() => {});
+  }
   return next.accessToken;
 }
 

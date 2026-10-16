@@ -60,6 +60,19 @@
     if (msg?.type === "bridge:resync") {
       lastSent = null;
       sync();
+    } else if (msg?.type === "bridge:tokens") {
+      // La extension renovo la sesion con el refresh token de la app (que
+      // Supabase acaba de invalidar): la app se queda con el nuevo. Solo si
+      // la app sigue con ese mismo token (no se cerro sesion ni se entro
+      // con otro usuario en el medio).
+      try {
+        if (msg.refreshToken && localStorage.getItem("skaler_refresh_token") === msg.oldRefreshToken) {
+          localStorage.setItem("skaler_access_token", msg.accessToken);
+          localStorage.setItem("skaler_refresh_token", msg.refreshToken);
+        }
+      } catch {
+        // localStorage bloqueado: la app renueva por su cuenta o muestra el cartel
+      }
     }
   });
 

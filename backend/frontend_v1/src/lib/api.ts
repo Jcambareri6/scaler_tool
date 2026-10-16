@@ -1,6 +1,14 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 const TOKEN_KEY = "skaler_access_token";
 const REFRESH_TOKEN_KEY = "skaler_refresh_token";
+const SESSION_START_KEY = "skaler_session_started_at";
+
+// Duracion de la sesion: mientras no pasen 3 h desde el login, cada 401 por
+// token vencido (Supabase los da por 1 h) se renueva solo con el refresh
+// token. Pasadas las 3 h no se cierra nada: se avisa con un cartel (ver
+// SessionExpiredBanner) para que el usuario vuelva a entrar cuando quiera.
+export const SESSION_MAX_MS = 3 * 60 * 60 * 1000;
+export const SESSION_EXPIRED_EVENT = "skaler:session-expired";
 
 // La extension de Chrome (flow-extension/app-bridge.js) lee la sesion y a
 // que backend habla esta app desde localStorage para conectarse sola, sin
@@ -18,14 +26,68 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+// Login nuevo (login, registro u OAuth): arranca el reloj de las 3 h.
 export function setToken(token: string, refreshToken?: string | null): void {
   localStorage.setItem(TOKEN_KEY, token);
   if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  localStorage.setItem(SESSION_START_KEY, String(Date.now()));
 }
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(SESSION_START_KEY);
+}
+
+// Sesiones iniciadas antes de que existiera el reloj: cuentan desde ahora.
+function sessionStartedAt(): number {
+  const stored = Number(localStorage.getItem(SESSION_START_KEY));
+  if (stored > 0) return stored;
+  const now = Date.now();
+  if (getToken()) localStorage.setItem(SESSION_START_KEY, String(now));
+  return now;
+}
+
+export function isSessionExpired(): boolean {
+  return Boolean(getToken()) && Date.now() - sessionStartedAt() > SESSION_MAX_MS;
+}
+
+function announceSessionExpired(): void {
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
+// Un solo refresh a la vez: varios pedidos que vencen juntos esperan el
+// mismo. Supabase rota el refresh token, asi que usarlo dos veces fallaria.
+let refreshing: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!refreshToken || isSessionExpired()) return false;
+    try {
+      const res = await fetch(`${API_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      const session = data?.session;
+      if (!session?.access_token) return false;
+      // Sin setToken: renovar no reinicia el reloj de las 3 h.
+      localStorage.setItem(TOKEN_KEY, session.access_token);
+      if (session.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, session.refresh_token);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  try {
+    return await refreshing;
+  } finally {
+    refreshing = null;
+  }
 }
 
 export class ApiError extends Error {
@@ -42,18 +104,35 @@ export class ApiError extends Error {
 }
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
   // FormData necesita que el browser calcule su propio boundary en
   // Content-Type -- si lo fijamos nosotros a "application/json" (o incluso
   // a multipart/form-data a mano) el request queda mal formado.
   const isFormData = options.body instanceof FormData;
-  const headers: Record<string, string> = {
-    ...(isFormData ? {} : { "Content-Type": "application/json" }),
-    ...(options.headers as Record<string, string> | undefined),
+  const send = () => {
+    const token = getToken();
+    const headers: Record<string, string> = {
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...(options.headers as Record<string, string> | undefined),
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(`${API_URL}${path}`, { ...options, headers });
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  let res = await send();
+  // Token vencido: se renueva una vez y se repite el pedido. Si no se puede
+  // (pasaron las 3 h o el refresh token ya no sirve), cartel en vez de
+  // cerrar la sesion.
+  // Login/registro/refresh devuelven 401 por credenciales, no por sesion.
+  const isAuthCall = path.startsWith("/auth/") && !path.startsWith("/auth/me");
+  if (res.status === 401 && getToken() && !isAuthCall) {
+    if (await refreshAccessToken()) {
+      res = await send();
+    }
+    if (res.status === 401) {
+      announceSessionExpired();
+      throw new ApiError(401, "Tu sesión venció. Volvé a iniciar sesión para seguir.", "SESSION_EXPIRED");
+    }
+  }
 
   if (res.status === 204) {
     return undefined as T;

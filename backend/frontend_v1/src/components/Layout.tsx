@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import PendingAccountScreen from "./PendingAccountScreen";
+import SessionExpiredBanner from "./SessionExpiredBanner";
 import { useAccount } from "@/lib/accountContext";
 
 export default function Layout() {
@@ -59,6 +60,7 @@ export default function Layout() {
         />
       </div>
 
+      <SessionExpiredBanner />
       <Sidebar />
       <main className="flex-1 overflow-auto relative z-10">
         <Outlet />
