@@ -35,6 +35,26 @@ function pad(order: number): string {
   return String(order).padStart(2, "0");
 }
 
+// Un prompt es UN solo bloque: Flow toma cada parrafo como un prompt
+// aparte, asi que un salto de linea adentro partia la escena en dos.
+function singleBlock(prompt: string): string {
+  return prompt.replace(/\s*\n+\s*/g, " ").trim();
+}
+
+// Prompts pegados a mano (lo que devuelve ChatGPT/Claude con el prompt del
+// equipo): uno por parrafo, separados por una linea en blanco. Se saca el
+// encabezado "Escena 07 (guardar como escena_07)" si se pega un export de
+// esta misma pantalla.
+function splitPastedPrompts(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((block) => singleBlock(block.replace(/^\s*escena\s*\d+[^\n]*\n/i, "")))
+    .filter(Boolean);
+}
+
+// Guardados de escenas simultaneos al aplicar prompts pegados.
+const PASTE_SAVE_CONCURRENCY = 5;
+
 const tabStyle = (active: boolean) =>
   active
     ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
@@ -134,15 +154,74 @@ export default function BatchVisualsModal({
   // Persiste un prompt editado a mano (al salir del textarea).
   const saveDraft = async (sceneId: string) => {
     const scene = scenesById.get(sceneId);
-    const text = (drafts[sceneId] ?? "").trim();
+    const text = singleBlock(drafts[sceneId] ?? "");
     const current = prompts.find((p) => p.sceneId === sceneId);
     if (!scene || !text || text === (current?.imagePrompt ?? "")) return;
     try {
       const updated = await projectsService.updateScene(sceneId, projectId, { ...scene, imagePrompt: text, imagePromptEdited: true });
       onScenesUpdated(scenesRef.current.map((s) => (s.id === sceneId ? updated : s)));
       setPrompts((prev) => prev.map((p) => (p.sceneId === sceneId ? { ...p, imagePrompt: text, error: undefined } : p)));
+      setDrafts((prev) => ({ ...prev, [sceneId]: text }));
     } catch (err) {
       setPromptsError(err instanceof Error ? err.message : "No se pudo guardar el prompt");
+    }
+  };
+
+  // --- prompts pegados a mano ------------------------------------------
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteStart, setPasteStart] = useState(1);
+  const [pasteSaving, setPasteSaving] = useState(false);
+  const [pasteResult, setPasteResult] = useState<string | null>(null);
+
+  const pastedPrompts = useMemo(() => splitPastedPrompts(pasteText), [pasteText]);
+  const pasteTargets = useMemo(() => {
+    const ordered = [...scenes].sort((a, b) => a.order - b.order).filter((s) => s.order >= pasteStart);
+    return pastedPrompts.slice(0, ordered.length).map((prompt, i) => ({ scene: ordered[i]!, prompt }));
+  }, [pastedPrompts, scenes, pasteStart]);
+  const pasteOverflow = pastedPrompts.length - pasteTargets.length;
+
+  // Cada prompt pegado se guarda como editado a mano: la generacion
+  // automatica no lo pisa nunca (ver sceneBatch.service.ts).
+  const applyPasted = async () => {
+    if (pasteTargets.length === 0) return;
+    setPasteSaving(true);
+    setPasteResult(null);
+    setPromptsError(null);
+    const saved: Scene[] = [];
+    const failed: number[] = [];
+    const queue = [...pasteTargets];
+    const worker = async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        try {
+          saved.push(
+            await projectsService.updateScene(item.scene.id, projectId, { ...item.scene, imagePrompt: item.prompt, imagePromptEdited: true })
+          );
+        } catch {
+          failed.push(item.scene.order);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: PASTE_SAVE_CONCURRENCY }, worker));
+
+    const savedById = new Map(saved.map((s) => [s.id, s]));
+    onScenesUpdated(scenesRef.current.map((s) => savedById.get(s.id) ?? s));
+    const promptById = new Map(pasteTargets.filter((t) => savedById.has(t.scene.id)).map((t) => [t.scene.id, t.prompt]));
+    setPrompts((prev) =>
+      prev.map((p) => (promptById.has(p.sceneId) ? { ...p, imagePrompt: promptById.get(p.sceneId)!, imagePromptEdited: true, error: undefined } : p))
+    );
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const [id, prompt] of promptById) next[id] = prompt;
+      return next;
+    });
+    setPasteSaving(false);
+    if (failed.length) {
+      setPasteResult(`Se cargaron ${saved.length}. Fallaron las escenas ${failed.sort((a, b) => a - b).join(", ")}: probá de nuevo.`);
+    } else {
+      setPasteResult(`Listo: ${saved.length} prompts cargados.`);
+      setPasteText("");
+      setPasteOpen(false);
     }
   };
 
@@ -150,7 +229,7 @@ export default function BatchVisualsModal({
   const exportable = visiblePrompts.filter((p) => (drafts[p.sceneId] ?? "").trim());
 
   const exportText = exportable
-    .map((p) => `Escena ${pad(p.order)}  (guardar como escena_${pad(p.order)})\n${(drafts[p.sceneId] ?? "").trim()}`)
+    .map((p) => `Escena ${pad(p.order)}  (guardar como escena_${pad(p.order)})\n${singleBlock(drafts[p.sceneId] ?? "")}`)
     .join("\n\n");
 
   const copy = async (text: string, id: string) => {
@@ -446,6 +525,17 @@ export default function BatchVisualsModal({
                 Solo escenas sin visual
               </label>
               <button
+                onClick={() => {
+                  setPasteOpen((v) => !v);
+                  setPasteResult(null);
+                }}
+                disabled={loadingPrompts}
+                className="btn-secondary text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50"
+                title={loadingPrompts ? "Esperá a que terminen de armarse los prompts" : undefined}
+              >
+                {pasteOpen ? "Cerrar" : "Pegar mis prompts"}
+              </button>
+              <button
                 onClick={() => copy(exportText, "all")}
                 disabled={exportable.length === 0}
                 className="btn-secondary text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50"
@@ -460,6 +550,56 @@ export default function BatchVisualsModal({
                 Descargar .txt
               </button>
             </div>
+
+            {pasteOpen && (
+              <div className="rounded-xl p-3 space-y-2" style={panelStyle}>
+                <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+                  Pegá tus prompts, uno por párrafo y separados por una línea en blanco. Se cargan en orden, uno por escena, y la IA no los pisa.
+                </p>
+                <textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  disabled={pasteSaving}
+                  rows={8}
+                  placeholder={"Fotografía documental... (prompt de la escena 1)\n\nFotografía documental... (prompt de la escena 2)"}
+                  className="input-glass w-full rounded-lg px-2.5 py-2 text-xs resize-y font-mono"
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted-foreground)" }}>
+                    Empezar en la escena
+                    <input
+                      type="number"
+                      min={1}
+                      max={scenes.length || 1}
+                      value={pasteStart}
+                      disabled={pasteSaving}
+                      onChange={(e) => setPasteStart(Math.max(1, Number(e.target.value) || 1))}
+                      className="input-glass w-16 rounded-md px-2 py-1 text-xs"
+                    />
+                  </label>
+                  <p className="text-[11px] mr-auto" style={{ color: pasteOverflow > 0 ? "#FF8A8D" : "var(--muted-foreground)" }}>
+                    {pasteTargets.length > 0
+                      ? `${pasteTargets.length} prompts → escenas ${pad(pasteTargets[0]!.scene.order)} a ${pad(pasteTargets[pasteTargets.length - 1]!.scene.order)}`
+                      : "Sin prompts todavía"}
+                    {pasteOverflow > 0 && ` · sobran ${pasteOverflow} (no hay más escenas)`}
+                  </p>
+                  <button
+                    onClick={applyPasted}
+                    disabled={pasteSaving || pasteTargets.length === 0}
+                    className="btn-primary flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50"
+                  >
+                    {pasteSaving && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                    Cargar en las escenas
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {pasteResult && (
+              <p className="text-[11px]" style={{ color: pasteResult.startsWith("Listo") ? "#4ade80" : "#FF8A8D" }}>
+                {pasteResult}
+              </p>
+            )}
 
             {promptsError && (
               <p className="text-xs rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.09)", color: "rgba(252,165,165,0.95)", border: "1px solid rgba(239,68,68,0.2)" }}>
@@ -500,7 +640,7 @@ export default function BatchVisualsModal({
                             {busy ? "Generando..." : "Otro prompt"}
                           </button>
                           <button
-                            onClick={() => copy((drafts[p.sceneId] ?? "").trim(), p.sceneId)}
+                            onClick={() => copy(singleBlock(drafts[p.sceneId] ?? ""), p.sceneId)}
                             disabled={!(drafts[p.sceneId] ?? "").trim()}
                             className="text-[11px] px-2 py-1 rounded-md transition-opacity hover:opacity-80 disabled:opacity-50"
                             style={{ color: "var(--accent)", border: "1px solid rgba(255,255,255,0.08)" }}
