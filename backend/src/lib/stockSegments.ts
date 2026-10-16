@@ -1,4 +1,5 @@
 import { supabase } from "./supabase.js";
+import { uploadPublicFile } from "./storage.js";
 import type { StockCandidate } from "../tools/searchStock.tool.js";
 
 // Una escena solo tiene una representacion visual activa a la vez (video de
@@ -148,13 +149,6 @@ export function normalizeUpload(originalName: string, mimetype: string): { mimet
   return { mimetype: type, extension };
 }
 
-async function ensureSceneUploadsBucket(): Promise<void> {
-  const { error } = await supabase.storage.createBucket(SCENE_UPLOADS_BUCKET, { public: true });
-  if (error && !/already exists/i.test(error.message)) {
-    throw new Error(error.message);
-  }
-}
-
 // Sube un archivo que el usuario elige a mano desde el panel de escenas
 // (reemplazo puntual "subir propio") a Storage propio -- a diferencia del
 // stock (URL del provider) y de la IA (URL de SnapGen), este archivo no
@@ -166,17 +160,9 @@ export async function uploadSceneAssetFile(
   contentType: string,
   extension: string
 ): Promise<string> {
-  await ensureSceneUploadsBucket();
   const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
-  const { error } = await supabase.storage
-    .from(SCENE_UPLOADS_BUCKET)
-    .upload(path, buffer, { contentType, upsert: true });
-  if (error) throw new Error(error.message);
-
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(SCENE_UPLOADS_BUCKET).getPublicUrl(path);
-  return publicUrl;
+  // R2 si esta configurado (ver lib/storage.ts), si no Supabase Storage.
+  return uploadPublicFile({ bucket: SCENE_UPLOADS_BUCKET, path, contentType, body: buffer });
 }
 
 // Contraparte de replaceStockSegmentsForScene/setAiVideoSegmentsForScene

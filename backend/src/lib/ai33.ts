@@ -1,13 +1,11 @@
 import { spawn } from "node:child_process";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import nodePath from "node:path";
 import { createRequire } from "module";
-import { supabase } from "./supabase.js";
 import { withRetry } from "./retry.js";
 import { fetchWithTimeout } from "./http.js";
 import { getAudioDurationSeconds } from "./audioDuration.js";
-import { getActiveProvider } from "./providers.js";
-import { resolveR2Config, uploadFileToR2 } from "./r2.js";
+import { uploadPublicFile } from "./storage.js";
 import { makeWorkDir } from "./workDir.js";
 import { providerApiError } from "./errors.js";
 
@@ -36,40 +34,19 @@ export interface Ai33VoiceResult {
   duration_seconds: number;
 }
 
-export async function ensureAudioBucket(): Promise<void> {
-  const { error } = await supabase.storage.createBucket(AUDIO_BUCKET, { public: true });
-  if (error && !/already exists/i.test(error.message)) {
-    throw new Error(error.message);
-  }
-}
-
 // Mismo criterio de prioridad que render_video (ver renderVideo.tool.ts):
 // R2 sube en streaming y no tiene techo practico de tamaño -- Supabase
 // Storage si tiene un limite de proyecto, y una narracion de un guion largo
 // puede pasarlo ("The object exceeded the maximum allowed size"). Sin
-// provider "r2" configurado (Settings > Providers, mismas credenciales que
-// ya usa el render final) cae a Supabase Storage como antes.
-async function uploadAudioFile(localPath: string, storageKey: string): Promise<string> {
-  const r2Provider = await getActiveProvider("r2");
-  const r2Config = resolveR2Config(r2Provider);
-  if (r2Config && r2Provider?.api_key) {
-    return uploadFileToR2(localPath, `skaler-audio/${storageKey}.mp3`, "audio/mpeg", r2Config, r2Provider.api_key);
-  }
-
-  await ensureAudioBucket();
-  const buffer = await readFile(localPath);
-  const path = `${storageKey}.mp3`;
-  const { error: uploadError } = await supabase.storage
-    .from(AUDIO_BUCKET)
-    .upload(path, buffer, { contentType: "audio/mpeg", upsert: true });
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
-
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(path);
-  return publicUrl;
+// R2 configurado (ver lib/storage.ts) cae a Supabase Storage como antes.
+export async function uploadAudioFile(body: string | Buffer, storageKey: string): Promise<string> {
+  return uploadPublicFile({
+    bucket: AUDIO_BUCKET,
+    path: `${storageKey}.mp3`,
+    contentType: "audio/mpeg",
+    body,
+    r2Prefix: "skaler-audio",
+  });
 }
 
 // v3/text-to-speech de ai33.pro es asincronico -- devuelve un task_id y hay
