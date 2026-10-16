@@ -10,8 +10,9 @@ import type {
   GenerateImagePromptSequenceOutput,
   SequenceScene,
 } from "../../tools/generateImagePromptSequence.tool.js";
+import { singleBlock } from "../../tools/generateImagePromptSequence.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject, visualStyleKey, withChannelStyle } from "../../lib/channelSettings.js";
+import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
@@ -21,15 +22,16 @@ import { getChannelSettingsForProject, visualStyleKey, withChannelStyle } from "
 // Continuidad visual: los prompts NO se arman escena por escena sueltas
 // (asi cada imagen salia distinta): se arman por tramos de escenas
 // consecutivas, con el guion completo con timestamps y el diseño visual del
-// canal -- ver tools/generateImagePromptSequence.tool.ts. Los personajes los
-// aporta el usuario como ingredientes en Flow (extension).
+// canal -- ver tools/generateImagePromptSequence.tool.ts.
 
 // Escenas por llamada al LLM: suficientes para que encadene un tramo de la
 // historia, pocas para que no se "olvide" de ninguna.
 const SEQUENCE_CHUNK_SIZE = 8;
-// Tramos en paralelo (cada uno lleva el guion completo y el diseño del
-// canal, asi que no pierden consistencia entre si).
-const SEQUENCE_CONCURRENCY = 3;
+// Tramos en paralelo, despues del primero (ver generateSceneImagePrompts).
+const SEQUENCE_CONCURRENCY = 4;
+// Prompts de referencia que se le pasan a cada tramo para que describa
+// igual a los personajes y arme igual los rotulos.
+const REFERENCE_PROMPTS = 3;
 // Escenas vecinas que se pasan como contexto antes/despues de cada tramo.
 const CONTEXT_BEFORE = 2;
 const CONTEXT_AFTER = 1;
@@ -77,9 +79,11 @@ function sequenceSceneOf(scene: SceneRow): SequenceScene {
   return { order: scene.order, text: textOf(scene), ...(time ? { time } : {}) };
 }
 
+// Siempre en un solo bloque, aunque se haya guardado con saltos de linea
+// (prompts viejos con el estilo pegado abajo, o editados a mano).
 function promptOf(scene: SceneRow | undefined): string | null {
   const prompt = scene?.content?.imagePrompt;
-  return typeof prompt === "string" && prompt.trim() ? prompt.trim() : null;
+  return typeof prompt === "string" && prompt.trim() ? singleBlock(prompt) : null;
 }
 
 function hashOf(...parts: string[]): string {
@@ -189,11 +193,9 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       ? new Set(scene_ids.filter((id): id is string => typeof id === "string"))
       : null;
 
-    // Los prompts se arman solo con el diseño visual del canal + el guion
+    // Los prompts se arman con el diseño visual del canal + el guion
     // completo con timestamps (el prompt del equipo, ver
-    // generateImagePromptSequence.tool.ts). Sin biblia visual: los personajes
-    // los aporta el usuario como ingredientes en Flow (extension), y una
-    // ficha de personajes inventada por la IA los contradecia.
+    // generateImagePromptSequence.tool.ts).
     let ctx: VisualContext;
     try {
       ctx = await loadVisualContext(script.id, script.video_project_id, userId);
@@ -201,9 +203,10 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
       return res.status(400).json({ error: err instanceof Error ? err.message : "No se pudo leer el diseño visual del canal" });
     }
     // La huella cambia cuando cambia el diseño del canal o la forma de armar
-    // los prompts ("estilo-pegado": desde que el diseño se pega al final de
-    // cada prompt): los no editados a mano se rehacen solos una vez.
-    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "sin-biblia", "estilo-plantilla");
+    // los prompts ("estilo-integrado": desde que el LLM integra el diseño en
+    // cada prompt en vez de pegarlo al final; "es": siempre en español): los
+    // no editados a mano se rehacen solos una vez.
+    const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "estilo-integrado", "es");
 
     const errors = new Map<string, string>();
     const needs = new Set<string>();
@@ -223,7 +226,17 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
 
     const fullScript = sceneList.filter((s) => textOf(s).trim()).map(sequenceSceneOf);
     const generated = new Map<string, string>();
-    await mapWithConcurrency(consecutiveChunks(sceneList, needs), SEQUENCE_CONCURRENCY, async (indexes) => {
+    // Continuidad entre tramos: el primero se escribe solo y sus prompts van
+    // de referencia a los demas (que corren en paralelo), asi el personaje se
+    // describe igual y los rotulos siguen el mismo formato en todo el video.
+    // Si solo se rehacen escenas sueltas, la referencia son prompts que ya
+    // existen en otras escenas.
+    let reference = sceneList
+      .filter((s) => !needs.has(s.id))
+      .map(promptOf)
+      .filter((p): p is string => !!p)
+      .slice(0, REFERENCE_PROMPTS);
+    const runChunk = async (indexes: number[]) => {
       const chunkScenes = indexes.map((i) => sceneList[i]!);
       const first = indexes[0]!;
       const last = indexes[indexes.length - 1]!;
@@ -247,13 +260,13 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
             ...(ctx.videoTopic ? { video_topic: ctx.videoTopic } : {}),
             ...(ctx.visualStyle ? { visual_style: ctx.visualStyle } : {}),
             ...(ctx.contentPolicy ? { content_policy: ctx.contentPolicy } : {}),
+            ...(reference.length ? { reference_prompts: reference } : {}),
           },
           { userId }
         );
         const byOrder = new Map(prompts.map((p) => [p.order, p.prompt]));
         for (const scene of chunkScenes) {
-          const raw = byOrder.get(scene.order);
-          const prompt = raw ? withChannelStyle(raw, ctx.visualStyle) : undefined;
+          const prompt = byOrder.get(scene.order);
           if (!prompt) {
             errors.set(scene.id, "La IA no devolvio prompt para esta escena (proba con 'Otro prompt')");
             continue;
@@ -283,7 +296,18 @@ export async function generateSceneImagePrompts(req: Request, res: Response) {
         const message = err instanceof Error ? err.message : "No se pudo generar el prompt";
         for (const scene of chunkScenes) errors.set(scene.id, message);
       }
-    });
+    };
+
+    const [firstChunk, ...restChunks] = consecutiveChunks(sceneList, needs);
+    if (firstChunk) {
+      await runChunk(firstChunk);
+      const fresh = firstChunk
+        .map((i) => generated.get(sceneList[i]!.id))
+        .filter((p): p is string => !!p)
+        .slice(0, REFERENCE_PROMPTS);
+      if (fresh.length) reference = fresh;
+    }
+    await mapWithConcurrency(restChunks, SEQUENCE_CONCURRENCY, runChunk);
 
     const result: SceneImagePrompt[] = sceneList.map((scene) => {
       const fresh = generated.get(scene.id);
