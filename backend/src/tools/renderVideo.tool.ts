@@ -836,7 +836,9 @@ async function realRender(
   closeGapsBetweenSegments(segments);
 
   if (segments.length === 0) {
-    throw new Error("El timeline no tiene escenas con clips de video asignados todavia");
+    throw new Error(
+      "El timeline no tiene escenas con clips de video asignados todavia (si el proyecto es solo Flow, cargá las imágenes desde la extensión antes de renderizar)"
+    );
   }
   if (!content.audio?.storage_key) {
     throw new Error("El timeline no tiene audio narrado todavia");

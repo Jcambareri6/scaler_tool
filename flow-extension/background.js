@@ -647,16 +647,26 @@ function pageFindMedia(prompt, sentAt, nextSentAt, taken, mediaType) {
   candidates.sort((a, b) => a[1].firstAt - b[1].firstAt);
   if (!candidates.length) return { tap: true, seen, found: false };
 
+  // Generacion rechazada/fallida segun el estado que manda Flow (ver flags en
+  // flow-tap.js): nunca va a tener archivo, no tiene sentido esperarlo.
+  const FAILED = /(^|_)(FAILED|FAILURE|UNSAFE|BLOCKED|FILTERED|REJECTED)(_|$)/;
+  const failureOf = (r) => [...(r.flags ?? [])].find((f) => FAILED.test(f)) ?? null;
+  const alive = candidates.filter(([, r]) => !failureOf(r));
+
   const kind = mediaType === "video" ? "video" : "image";
   const domSrcs = [...document.querySelectorAll("img[src], video[src], video source[src]")].map((el) => el.getAttribute("src") || "");
-  for (const [id, r] of candidates) {
+  for (const [id, r] of alive) {
     let url = signed.get(id)?.[kind] ?? domSrcs.find((s) => s.includes(id) && s.includes(`/${kind}/`)) ?? null;
     // Imagenes: la URL del propio registro tambien es la imagen. En video NO
     // (es la miniatura): ahi solo sirve la URL firmada del video.
     if (!url && kind === "image") url = [...r.urls].reverse().find((u) => !/\.(js|css)(\?|$)/.test(u)) ?? null;
     if (url) return { tap: true, seen, found: true, mediaId: id, url };
   }
-  return { tap: true, seen, found: true, mediaId: candidates[0][0], url: null };
+  // Todas las variantes fallaron: se avisa para volver a mandar el prompt.
+  if (!alive.length) {
+    return { tap: true, seen, found: true, failed: failureOf(candidates[0][1]), mediaId: candidates[0][0], url: null };
+  }
+  return { tap: true, seen, found: true, mediaId: alive[0][0], url: null };
 }
 
 // Pide a Flow la URL firmada de un medio que no esta a la vista (ver

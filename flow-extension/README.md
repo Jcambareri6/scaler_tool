@@ -25,7 +25,9 @@ y recargar la pestaña de Flow.
    (Sesiones iniciadas antes de este cambio no guardaban el refresh token:
    cerrá sesión y volvé a entrar una vez.) Como alternativa, en *Conectar a
    mano* sigue el login con email/contraseña.
-3. Elegí el proyecto → *Cargar prompts del proyecto* (los arma la IA la
+3. Elegí el proyecto → *Cargar prompts del proyecto*. Si el video se generó
+   con **Visuales: Vacío (solo Flow)** (pestaña Preview de la app), las
+   escenas ya vienen vacías y con los prompts hechos: carga al toque. (los arma la IA la
    primera vez y quedan guardados en cada escena; se pueden editar desde la
    app en Escenas → *Imágenes en lote (Flow)*).
    - *Solo escenas sin visual* y *Desde escena N* para completar lo que falte.
@@ -53,9 +55,12 @@ Descargas/Scaler Tool/<nombre del proyecto>/001.png
 Si Chrome tiene activado *Preguntar dónde guardar cada archivo*, va a abrir el diálogo una vez por imagen. Para que se guarden solas, desactivalo en `chrome://settings/downloads`.
 
 Cada escena va pasando por *en cola → generando → ✓ cargada* (o *✓ descargada*). Si una falla
-(Flow rechaza el prompt, tarda demasiado, etc.) se reintenta según
+(Flow rechaza el prompt, tarda demasiado, registra la imagen pero nunca la
+entrega en 5 minutos, etc.) se vuelve a mandar el prompt según
 *Reintentos*; si sigue fallando queda en **✗ error** con el motivo y la
-corrida sigue con la próxima. Al final: **↻ Reintentar fallidas**. Si querés
+corrida sigue con la próxima. Al final: **↻ Reintentar fallidas**, o el
+**↻ Reintentar** de cada escena con error. Reintentar siempre vuelve a mandar
+el prompt (gasta un crédito de Flow). Si querés
 cambiar el prompt de una que falló, editalo en la app y volvé a *Cargar
 prompts* con *Solo escenas sin visual*.
 

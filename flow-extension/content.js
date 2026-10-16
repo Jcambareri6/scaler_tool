@@ -289,10 +289,14 @@
   const NO_TRAFFIC_MS = 20_000;
   const COLLECT_EVERY_MS = 10_000;
   // Imagen ya creada en Flow sin URL: a los 15 s se le pide a Flow, cada 20 s,
-  // y a los 10 min se da por perdida (sin volver a mandar el prompt).
+  // y a los 5 min se da por fallida y se vuelve a mandar el prompt (si le
+  // quedan reintentos): asi es como se ve una generacion que Flow rechazo
+  // sin decirlo en su respuesta.
   const SIGNED_URL_AFTER_MS = 15_000;
   const SIGNED_URL_EVERY_MS = 20_000;
-  const FOUND_NO_URL_MAX_MS = 10 * 60_000;
+  const FOUND_NO_URL_MAX_MS = 5 * 60_000;
+
+  const NO_MEDIA = { mediaId: null, sentAt: null, foundAt: null, askedUrlAt: null };
 
   function timeoutMsFor(settings) {
     return (Number(settings.timeoutSec) || (settings.mediaType === "video" ? 600 : 240)) * 1000;
@@ -318,7 +322,9 @@
     });
   }
 
-  // Un intento fallido: vuelve a la cola si le quedan reintentos.
+  // Un intento fallido: vuelve a la cola si le quedan reintentos. Se olvida
+  // el medio de Flow que tenia: el proximo intento manda el prompt de nuevo
+  // (antes "Reintentar" volvia a esperar la misma imagen fallida para siempre).
   async function failItem(item, message, settings) {
     const retries = Math.max(0, Number(settings.retries ?? 2));
     const { run } = await chrome.storage.local.get(["run"]);
@@ -328,8 +334,8 @@
     await patchItem(
       item.sceneId,
       attempts < retries + 1
-        ? { status: "pending", error: message, step: `reintentando (${message})` }
-        : { status: "error", error: message, step: null }
+        ? { status: "pending", error: message, step: `reintentando (${message})`, ...NO_MEDIA }
+        : { status: "error", error: message, step: null, ...NO_MEDIA }
     );
   }
 
@@ -394,6 +400,13 @@
     if (!res?.tap) return "no-network";
     const elapsed = Date.now() - item.sentAt;
 
+    // Flow rechazo la generacion (politica, error suyo): se reintenta ya, sin
+    // esperar el timeout.
+    if (res.found && res.failed) {
+      await failItem(item, `Flow no pudo generar la imagen (${res.failed})`, settings);
+      return "failed";
+    }
+
     // La imagen ya existe en Flow pero todavia no hay URL para bajarla (Flow
     // solo la pide para las que estan a la vista): se le pide, y NO se vuelve
     // a mandar el prompt -- eso generaba imagenes repetidas y gastaba creditos.
@@ -405,11 +418,7 @@
         await send({ type: "flowRequestSignedUrl", mediaId: res.mediaId }).catch(() => {});
       }
       if (Date.now() - foundAt > FOUND_NO_URL_MAX_MS) {
-        await patchItem(item.sceneId, {
-          status: "error",
-          error: "La imagen está en Flow pero no se pudo bajar: subí hasta ella en la grilla de Flow y tocá ↻ Reintentar fallidas",
-          step: null,
-        });
+        await failItem(item, "Flow no entregó la imagen (puede que haya fallado la generación)", settings);
         return "failed";
       }
       return "waiting";
@@ -506,10 +515,12 @@
         run.status = "running";
         run.lastError = null;
         for (const item of run.items) {
-          // Imagen que ya existe en Flow (tiene mediaId) pero no se pudo bajar:
-          // se sigue esperando su URL, sin volver a mandar el prompt.
-          if ((item.status === "working" || item.status === "error") && item.mediaId) {
-            Object.assign(item, { status: "working", error: null, foundAt: Date.now(), askedUrlAt: null });
+          // Imagen que ya existe en Flow (tiene mediaId) y se estaba
+          // esperando al pausar: se sigue esperando su URL, sin volver a
+          // mandar el prompt. Las que quedaron en error no se tocan: las
+          // devuelve a la cola "Reintentar".
+          if (item.status === "working" && item.mediaId) {
+            Object.assign(item, { error: null, foundAt: Date.now(), askedUrlAt: null });
           } else if (item.status === "working") {
             // Lo que quedo "generando" sin resultado se vuelve a mandar.
             item.status = "pending";
