@@ -57,12 +57,17 @@ function announceSessionExpired(): void {
 }
 
 // Un solo refresh a la vez: varios pedidos que vencen juntos esperan el
-// mismo. Supabase rota el refresh token, asi que usarlo dos veces fallaria.
+// mismo, y entre pestañas se turnan con un lock del navegador. Supabase rota
+// el refresh token, asi que usarlo dos veces fallaria: la que llega segunda
+// ve que el token ya cambio (lo renovo otra pestaña o la extension, que
+// comparten localStorage) y lo usa sin volver a renovar.
 let refreshing: Promise<boolean> | null = null;
+const REFRESH_LOCK = "skaler-refresh-session";
 
-async function refreshAccessToken(): Promise<boolean> {
+async function refreshAccessToken(staleToken: string | null): Promise<boolean> {
   if (refreshing) return refreshing;
-  refreshing = (async () => {
+  const run = async () => {
+    if (getToken() !== staleToken) return Boolean(getToken());
     const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
     if (!refreshToken || isSessionExpired()) return false;
     try {
@@ -82,7 +87,8 @@ async function refreshAccessToken(): Promise<boolean> {
     } catch {
       return false;
     }
-  })();
+  };
+  refreshing = navigator.locks ? navigator.locks.request(REFRESH_LOCK, run).then((ok) => ok) : run();
   try {
     return await refreshing;
   } finally {
@@ -108,8 +114,10 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   // Content-Type -- si lo fijamos nosotros a "application/json" (o incluso
   // a multipart/form-data a mano) el request queda mal formado.
   const isFormData = options.body instanceof FormData;
+  let sentToken: string | null = null;
   const send = () => {
     const token = getToken();
+    sentToken = token;
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(options.headers as Record<string, string> | undefined),
@@ -125,7 +133,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   // Login/registro/refresh devuelven 401 por credenciales, no por sesion.
   const isAuthCall = path.startsWith("/auth/") && !path.startsWith("/auth/me");
   if (res.status === 401 && getToken() && !isAuthCall) {
-    if (await refreshAccessToken()) {
+    if (await refreshAccessToken(sentToken)) {
       res = await send();
     }
     if (res.status === 401) {

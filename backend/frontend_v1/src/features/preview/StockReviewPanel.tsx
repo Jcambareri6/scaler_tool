@@ -118,10 +118,16 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // re-renderizarlo no (renderCharged). Las cuentas sin limite no descuentan.
   const { account, refresh: refreshAccount } = useAccount();
   const [renderCharged, setRenderCharged] = useState<boolean | null>(null);
+  // Proyecto "Vacío (solo Flow)" (visual_source "flow", ver orchestrator.ts):
+  // las escenas llegan sin clip a proposito, con sus prompts ya armados.
+  const [flowOnly, setFlowOnly] = useState(false);
   useEffect(() => {
     projectsService
       .getProjectById(projectId)
-      .then((p) => setRenderCharged(p?.renderCharged ?? null))
+      .then((p) => {
+        setRenderCharged(p?.renderCharged ?? null);
+        setFlowOnly(p?.visualSource === "flow");
+      })
       .catch(() => setRenderCharged(null));
   }, [projectId]);
   const willCharge = Boolean(account && !account.unlimited && renderCharged === false);
@@ -148,6 +154,27 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       setLoading(false);
     });
   }, [projectId]);
+
+  // Solo Flow: las imagenes se cargan desde otra pestaña (Escenas ->
+  // Imagenes en lote), asi que al volver a esta se releen.
+  useEffect(() => {
+    if (!flowOnly) return;
+    const reload = () => {
+      if (document.visibilityState !== "visible") return;
+      projectsService.getSceneVideoAssets(projectId).then(setAssets).catch(() => {});
+    };
+    document.addEventListener("visibilitychange", reload);
+    window.addEventListener("focus", reload);
+    return () => {
+      document.removeEventListener("visibilitychange", reload);
+      window.removeEventListener("focus", reload);
+    };
+  }, [flowOnly, projectId]);
+
+  const scenesWithVisual = useMemo(() => new Set(assets.map((a) => a.sceneId).filter(Boolean)).size, [assets]);
+  // Sin ninguna imagen el render falla (no hay nada que mostrar): se frena
+  // aca en vez de gastar el intento.
+  const missingFlowImages = flowOnly && scenesWithVisual === 0;
 
   // Una escena puede necesitar mas de un clip para cubrir toda su duracion
   // (replaceStockSegmentsForScene completa con otro candidato en vez de
@@ -335,7 +362,9 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
           Revisá el video antes del render final
         </p>
         <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>
-          Estos son los clips que el sistema eligió automáticamente para cada escena.
+          {flowOnly
+            ? `Escenas vacías con sus prompts listos para Flow · ${scenesWithVisual} de ${scenes.length} con imagen. Cargalas desde la extensión o en Escenas → Imágenes en lote.`
+            : "Estos son los clips que el sistema eligió automáticamente para cada escena."}
         </p>
         {error && <p className="text-xs mt-2" style={{ color: "#f87171" }}>{error}</p>}
       </div>
@@ -358,7 +387,9 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" />
                 )
               ) : (
-                <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>Sin clip para esta escena</p>
+                <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>
+                  {flowOnly ? "Escena vacía: falta cargar su imagen de Flow" : "Sin clip para esta escena"}
+                </p>
               )}
 
               {/* Preview de los subtitulos que van a quedar quemados en el
@@ -475,7 +506,11 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   "Regenerar todo"
                 )}
               </button>
-              {renderHint && (
+              {missingFlowImages ? (
+                <span className="text-[11px] max-w-[220px] text-right leading-snug" style={{ color: "var(--muted-foreground)" }}>
+                  Cargá las imágenes de Flow para poder renderizar.
+                </span>
+              ) : renderHint && (
                 <span
                   className="text-[11px] max-w-[220px] text-right leading-snug"
                   style={{ color: noCredits ? "rgba(252,165,165,0.95)" : "var(--muted-foreground)" }}
@@ -485,8 +520,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               )}
               <button
                 onClick={handleApprove}
-                disabled={approving || regenerating || noCredits}
-                title={noCredits ? "Se terminaron tus videos" : undefined}
+                disabled={approving || regenerating || noCredits || missingFlowImages}
+                title={noCredits ? "Se terminaron tus videos" : missingFlowImages ? "Todavía no hay imágenes cargadas" : undefined}
                 className="btn-primary flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl whitespace-nowrap shrink-0 disabled:opacity-50"
               >
                 {approving ? (
