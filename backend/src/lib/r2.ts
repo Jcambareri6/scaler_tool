@@ -26,6 +26,19 @@ export function resolveR2Config(provider: Provider | null): R2Config | null {
   return { accountId, accessKeyId, bucket, publicBaseUrl };
 }
 
+// R2 tambien se puede configurar por variables de entorno (R2_ACCOUNT_ID,
+// R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL), en
+// Render y en el worker, sin pasar por Settings > Providers. El provider de
+// la base, si esta, tiene prioridad.
+export function r2ConfigFromEnv(): { config: R2Config; secretAccessKey: string } | null {
+  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL } = process.env;
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET || !R2_PUBLIC_BASE_URL) return null;
+  return {
+    config: { accountId: R2_ACCOUNT_ID, accessKeyId: R2_ACCESS_KEY_ID, bucket: R2_BUCKET, publicBaseUrl: R2_PUBLIC_BASE_URL },
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+  };
+}
+
 function buildClient(config: R2Config, secretAccessKey: string): S3Client {
   return new S3Client({
     region: "auto",
@@ -40,7 +53,7 @@ function buildClient(config: R2Config, secretAccessKey: string): S3Client {
 // el render final del limite de 100MB de Cloudinary, no tiene sentido
 // reintroducir un techo practico por memoria del proceso.
 export async function uploadFileToR2(
-  filePath: string,
+  filePath: string | Buffer,
   key: string,
   contentType: string,
   config: R2Config,
@@ -51,7 +64,7 @@ export async function uploadFileToR2(
     params: {
       Bucket: config.bucket,
       Key: key,
-      Body: createReadStream(filePath),
+      Body: typeof filePath === "string" ? createReadStream(filePath) : filePath,
       ContentType: contentType,
     },
   });

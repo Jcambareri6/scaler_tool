@@ -20,10 +20,11 @@
 
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const SIGNED_URL = /https:\/\/flow-content\.google\/(image|video)\/([0-9a-f-]{36})\?[^"'\s\\<>]+/gi;
+  const ENUM = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/;
   const SIGN_RPC = "as29s"; // RPC con el que Flow pide las URLs firmadas
   const norm = (s) => String(s ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
 
-  // mediaId -> { firstAt, texts: Set, urls: [] }
+  // mediaId -> { firstAt, texts: Set, urls: [], flags: Set }
   const media = (window.__scalerFlowMedia = window.__scalerFlowMedia || new Map());
   // mediaId -> { image?: url, video?: url } (URL firmada mas reciente)
   const signed = (window.__scalerFlowSigned = window.__scalerFlowSigned || new Map());
@@ -61,8 +62,12 @@
     if (typeof node[0] === "string" && UUID.test(node[0]) && node.length >= 3) {
       const id = node[0].toLowerCase();
       const entry = media.get(id) ?? { firstAt: at, texts: new Set(), urls: [] };
+      entry.flags = entry.flags ?? new Set();
       for (const s of strings.slice(1)) {
         if (/^https:\/\//.test(s)) entry.urls.push(s);
+        // Estados en MAYUSCULAS (ej. MEDIA_GENERATION_STATUS_FAILED): aparte
+        // de los textos, para saber si Flow rechazo la generacion.
+        else if (ENUM.test(s)) entry.flags.add(s);
         else if (s.length >= 12 && !UUID.test(s)) entry.texts.add(norm(s));
       }
       if (entry.urls.length > 6) entry.urls = entry.urls.slice(-6);

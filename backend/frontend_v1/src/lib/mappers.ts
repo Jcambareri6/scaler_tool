@@ -20,7 +20,7 @@ interface ProjectRow {
   updated_at: string;
 }
 
-const VISUAL_SOURCES: VisualSource[] = ["stock", "ai", "mixed"];
+const VISUAL_SOURCES: VisualSource[] = ["stock", "ai", "mixed", "flow"];
 
 function toVisualSource(value: string | null | undefined): VisualSource {
   return (VISUAL_SOURCES as string[]).includes(value ?? "") ? (value as VisualSource) : "stock";

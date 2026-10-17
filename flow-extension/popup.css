@@ -218,3 +218,4 @@ select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 
 .item-prompt.open { display: block; color: var(--text); }
 .item-prompt, .item-error, .item-step { overflow-wrap: anywhere; }
 .item-error { margin: 0; color: var(--bad); font-size: 11px; }
+.item-retry { justify-self: start; margin-top: 2px; }

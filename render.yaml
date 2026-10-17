@@ -40,3 +40,17 @@ services:
       # "inline" es el plan de vuelta atras (sin redeploy de codigo).
       - key: EXECUTION_MODE
         sync: false
+      # Cloudflare R2 para todos los archivos (audio, visuales de escenas,
+      # renders): no cobra egreso, a diferencia de Supabase Storage. Opcional
+      # -- tambien se puede cargar como provider "r2" en Settings > Providers.
+      # Ver backend/src/lib/storage.ts.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false

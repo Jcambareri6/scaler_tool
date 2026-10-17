@@ -1,6 +1,6 @@
 export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "ERROR";
 
-export type VisualSource = "stock" | "ai" | "mixed";
+export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 
 export type RenderQuality = "720p" | "1080p";
 

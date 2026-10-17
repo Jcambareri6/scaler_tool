@@ -528,7 +528,9 @@ $("startBtn").addEventListener("click", (e) =>
   withBusy(e.currentTarget, async () => {
     const { run } = await chrome.storage.local.get(["run"]);
     if (!run?.items?.length) throw new Error("Primero cargá los prompts del proyecto");
-    if (!run.items.some((i) => i.status === "pending")) throw new Error("No quedan escenas pendientes");
+    // "working" tambien: escenas que quedaron generando al pausar o cerrar
+    // Flow (si no, la corrida no arrancaba y se quedaban con el spinner).
+    if (!run.items.some((i) => i.status === "pending" || i.status === "working")) throw new Error("No quedan escenas pendientes");
     const tab = await findFlowTab();
     run.status = "running";
     run.lastError = null;
@@ -549,26 +551,28 @@ $("pauseBtn").addEventListener("click", (e) =>
   })
 );
 
-$("retryBtn").addEventListener("click", (e) =>
-  withBusy(e.currentTarget, async () => {
-    const { run } = await chrome.storage.local.get(["run"]);
-    if (!run) return;
-    let count = 0;
-    for (const item of run.items) {
-      if (item.status === "error") {
-        // Si la imagen ya existe en Flow (mediaId) solo se vuelve a buscar su
-        // URL; si no, se vuelve a mandar el prompt con todos sus reintentos.
-        item.status = item.mediaId ? "working" : "pending";
-        item.error = null;
-        item.attempts = 0;
-        count++;
-      }
-    }
-    if (count === 0) throw new Error("No hay escenas fallidas");
-    await chrome.storage.local.set({ run });
-    $("startBtn").click();
-  })
-);
+// Vuelve a la cola las escenas con error (todas, o solo sceneId) y arranca.
+// Siempre se manda el prompt de nuevo, con todos sus reintentos: antes, si
+// Flow habia registrado la imagen (mediaId), solo se volvia a esperar su URL,
+// y una generacion que Flow rechazo no la tiene nunca -- quedaba
+// "generando" para siempre sin mandar nada.
+async function retryFailed(sceneId = null) {
+  const { run } = await chrome.storage.local.get(["run"]);
+  if (!run) return;
+  if (run.status === "running" && !sceneId) throw new Error("Hay una corrida en curso: pausala primero");
+  let count = 0;
+  for (const item of run.items) {
+    if (item.status !== "error" || (sceneId && item.sceneId !== sceneId)) continue;
+    Object.assign(item, { status: "pending", error: null, attempts: 0, step: null, mediaId: null, sentAt: null, foundAt: null, askedUrlAt: null });
+    count++;
+  }
+  if (count === 0) throw new Error("No hay escenas fallidas");
+  await chrome.storage.local.set({ run });
+  // Si la corrida ya esta andando, la toma sola en la proxima vuelta.
+  if (run.status !== "running") $("startBtn").click();
+}
+
+$("retryBtn").addEventListener("click", (e) => withBusy(e.currentTarget, () => retryFailed()));
 
 // Cancelar: a diferencia de Pausar, frena y DESCARTA la cola. Lo ya cargado
 // en las escenas queda; lo que estaba generandose en Flow en ese momento
@@ -712,6 +716,16 @@ function itemCard(item) {
     error.className = "item-error";
     error.textContent = item.error;
     body.appendChild(error);
+  }
+
+  if (item.status === "error") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "ghost sm item-retry";
+    retry.textContent = "↻ Reintentar";
+    retry.title = "Volver a mandar el prompt de esta escena a Flow";
+    retry.addEventListener("click", (e) => withBusy(e.currentTarget, () => retryFailed(item.sceneId)));
+    body.appendChild(retry);
   }
 
   card.append(thumb, body);

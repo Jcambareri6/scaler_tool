@@ -110,7 +110,9 @@ export interface ContentPolicy {
 // "mixed": intenta stock primero, y solo si ningun candidato cubre una
 // porcion razonable de la escena, genera el clip con IA para esa escena
 // puntual (ver orchestrator.ts). Default "stock" a nivel de columna.
-export type VisualSource = "stock" | "ai" | "mixed";
+// "flow": no busca stock ni genera nada -- deja las escenas vacias con su
+// prompt de imagen ya armado, para cargarlas desde Google Flow (extension).
+export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 
 // Gap #4 (LEEME): contrato del overlay para modo estricto — el texto SIEMPRE
 // debe derivar del guion (source: "script"), nunca inventarse. La

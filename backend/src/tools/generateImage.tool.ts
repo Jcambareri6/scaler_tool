@@ -3,7 +3,7 @@ import { ProviderNotConfiguredError } from "./tool.errors.js";
 import { providerApiError } from "../lib/errors.js";
 import { getActiveProvider } from "../lib/providers.js";
 import { isMockMode } from "../lib/mock.js";
-import { supabase } from "../lib/supabase.js";
+import { uploadPublicFile } from "../lib/storage.js";
 import { withRetry } from "../lib/retry.js";
 
 export interface GenerateImageInput {
@@ -26,13 +26,6 @@ const REQUEST_TIMEOUT_MS = 60 * 1000;
 
 function randomId(): string {
   return Math.random().toString(36).slice(2);
-}
-
-async function ensureAiImageBucket(): Promise<void> {
-  const { error } = await supabase.storage.createBucket(AI_IMAGE_BUCKET, { public: true });
-  if (error && !/already exists/i.test(error.message)) {
-    throw new Error(error.message);
-  }
 }
 
 async function generateWithSnapgen(prompt: string, apiKey: string, model: string): Promise<GenerateImageOutput> {
@@ -61,18 +54,8 @@ async function generateWithSnapgen(prompt: string, apiKey: string, model: string
   }
   const imageBuffer = Buffer.from(b64, "base64");
 
-  await ensureAiImageBucket();
   const path = `${Date.now()}-${randomId()}.png`;
-  const { error: uploadError } = await supabase.storage
-    .from(AI_IMAGE_BUCKET)
-    .upload(path, imageBuffer, { contentType: "image/png", upsert: true });
-  if (uploadError) {
-    throw new Error(uploadError.message);
-  }
-
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(AI_IMAGE_BUCKET).getPublicUrl(path);
+  const publicUrl = await uploadPublicFile({ bucket: AI_IMAGE_BUCKET, path, contentType: "image/png", body: imageBuffer });
 
   return { storage_key: publicUrl };
 }

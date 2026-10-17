@@ -25,6 +25,7 @@ import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/gener
 import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
+import { buildSceneImagePrompts } from "../modules/scenes/sceneBatch.service.js";
 
 export interface PipelineContext {
   userId: string;
@@ -255,9 +256,13 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   const contentPolicy = (project.content_policy as ContentPolicy | null) ?? undefined;
   const videoTopic = (project as { title?: string }).title;
   // La generacion de visuales con IA (visual_source "ai"/"mixed") esta
-  // desactivada hasta que este terminada: todo proyecto busca stock, sin
-  // importar el visual_source guardado. Las imagenes de Flow llegan aparte
-  // (extension) y se conservan via preservedVisuals.
+  // desactivada hasta que este terminada: esos proyectos buscan stock. Las
+  // imagenes de Flow llegan aparte (extension) y se conservan via
+  // preservedVisuals.
+  // "flow": las escenas quedan vacias (sin contexto visual, keywords ni
+  // stock, que es lo que mas tarda) y al final se arman los prompts de
+  // imagen, asi la extension los encuentra hechos.
+  const flowOnly = project.visual_source === "flow";
   // Escenas a las que hay que buscarles visual: todas, salvo que se esten
   // conservando las que ya tienen (paso 4) -- esas no se tocan.
   const sceneRows = ((scenes ?? []) as SceneRow[]).filter((s) => !preservedVisuals?.has(s.id));
@@ -272,7 +277,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // que las 4 queries de cada escena (Fase 2, generate_stock_keywords) sean
   // coherentes entre si -- misma epoca, misma ubicacion, mismo tono.
   const sceneKeywords = new Map<string, string[]>();
-  if (sceneRows.length > 0) {
+  if (sceneRows.length > 0 && !flowOnly) {
     const contextResult = await runTool<GenerateVisualContextInput, GenerateVisualContextOutput>(
       "generate_visual_context",
       { full_text: scriptText, ...(videoTopic ? { video_topic: videoTopic } : {}) },
@@ -323,36 +328,38 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     // repetir la escena anterior (ver sceneKeywords mas arriba).
     const keywords = sceneKeywords.get(scene.id) ?? [];
 
-    // exclude_keys: sin esto, la cascada de search_stock se corta en la
-    // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
-    // saber si esos resultados ya estan gastados en otra escena de este
-    // mismo video -- con keywords de nicho el stock disponible puede ser
-    // 2-3 clips nada mas, asi que dos escenas con contenido similar
-    // terminaban recibiendo la misma tanda agotada de candidatos.
-    const stock = await runTool<SearchStockInput, SearchStockOutput>(
-      "search_stock",
-      {
-        keywords,
-        ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-        min_duration_seconds: minDurationSeconds,
-        exclude_keys: Array.from(usedStockKeys),
-      },
-      toolCtx
-    );
+    if (!flowOnly) {
+      // exclude_keys: sin esto, la cascada de search_stock se corta en la
+      // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
+      // saber si esos resultados ya estan gastados en otra escena de este
+      // mismo video -- con keywords de nicho el stock disponible puede ser
+      // 2-3 clips nada mas, asi que dos escenas con contenido similar
+      // terminaban recibiendo la misma tanda agotada de candidatos.
+      const stock = await runTool<SearchStockInput, SearchStockOutput>(
+        "search_stock",
+        {
+          keywords,
+          ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+          min_duration_seconds: minDurationSeconds,
+          exclude_keys: Array.from(usedStockKeys),
+        },
+        toolCtx
+      );
 
-    const { usedKeys } = await replaceStockSegmentsForScene(
-      projectId,
-      scene.id,
-      stock.candidates,
-      minDurationSeconds,
-      usedStockKeys
-    );
-    // Deja registro de que clips ya se usaron en ESTA escena (sobrevive
-    // al borrado de Assets que hace cada regeneracion puntual, ver
-    // regenerateSceneVisual en scene.service.ts) -- sin esto, la primera
-    // vez que el usuario regenera una escena desde el pipeline
-    // automatico no tiene memoria de que candidato ya se probo aca.
-    await appendStockHistory(scene.id, scene.content as Record<string, unknown> | null, usedKeys);
+      const { usedKeys } = await replaceStockSegmentsForScene(
+        projectId,
+        scene.id,
+        stock.candidates,
+        minDurationSeconds,
+        usedStockKeys
+      );
+      // Deja registro de que clips ya se usaron en ESTA escena (sobrevive
+      // al borrado de Assets que hace cada regeneracion puntual, ver
+      // regenerateSceneVisual en scene.service.ts) -- sin esto, la primera
+      // vez que el usuario regenera una escena desde el pipeline
+      // automatico no tiene memoria de que candidato ya se probo aca.
+      await appendStockHistory(scene.id, scene.content as Record<string, unknown> | null, usedKeys);
+    }
 
     // Sin decision de producto todavia sobre que overlay corresponde a
     // cada escena (queda fuera de esta fase) -- se valida "ninguno" para
@@ -379,11 +386,28 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       await reportJobProgress(
         ctx.jobId,
         progress,
-        `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
+        flowOnly
+          ? `Armando las escenas (${completedScenes}/${sceneRows.length})...`
+          : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
         { force: completedScenes === sceneRows.length }
       );
     }
   });
+
+  if (flowOnly) {
+    // Los mismos prompts que arma "Cargar prompts del proyecto" en la
+    // extension (biblia visual + diseño del canal, por tramos). Un fallo
+    // no tira el video: las escenas quedan armadas y la extension vuelve a
+    // pedir los que falten.
+    await reportJobProgress(ctx.jobId, 85, "Armando los prompts de imagen para Flow...", { force: true });
+    try {
+      const prompts = await buildSceneImagePrompts({ scriptId: script.id, videoProjectId: projectId, userId: ctx.userId });
+      const failed = prompts.filter((p) => p.error).length;
+      if (failed) console.warn(`[pipeline] ${projectId}: ${failed} escenas sin prompt de imagen`);
+    } catch (err) {
+      console.warn(`[pipeline] ${projectId}: no se pudieron armar los prompts de imagen:`, err);
+    }
+  }
 
   await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
 
@@ -398,7 +422,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // 8. Gate humano
   await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
     progress: 100,
-    progress_message: "Listo para revisar el stock",
+    progress_message: flowOnly ? "Escenas listas para cargar desde Flow" : "Listo para revisar el stock",
   });
 }
 

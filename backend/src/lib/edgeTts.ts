@@ -1,8 +1,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { EdgeTTS } from "node-edge-tts";
-import { supabase } from "./supabase.js";
-import { ensureAudioBucket, AUDIO_BUCKET } from "./ai33.js";
+import { uploadAudioFile } from "./ai33.js";
 import { getAudioDurationSeconds } from "./audioDuration.js";
 import { makeWorkDir } from "./workDir.js";
 
@@ -106,18 +105,8 @@ export async function generateWithEdgeTts(
       durationSeconds = Math.max(3, Math.ceil(words / 2.5));
     }
 
-    await ensureAudioBucket();
-    const objectPath = `${storageKey}.mp3`;
-    const { error: uploadError } = await supabase.storage
-      .from(AUDIO_BUCKET)
-      .upload(objectPath, audioBuffer, { contentType: "audio/mpeg", upsert: true });
-    if (uploadError) {
-      throw new Error(uploadError.message);
-    }
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(objectPath);
+    // Mismo destino que el audio de ai33 (R2 si esta, si no Supabase).
+    const publicUrl = await uploadAudioFile(audioBuffer, storageKey);
 
     return { storage_key: publicUrl, duration_seconds: Math.round(durationSeconds) };
   } catch (error) {

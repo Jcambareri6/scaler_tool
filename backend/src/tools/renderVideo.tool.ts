@@ -19,7 +19,8 @@ import { supabase } from "../lib/supabase.js";
 import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
-import { resolveR2Config, uploadFileToR2 } from "../lib/r2.js";
+import { uploadFileToR2 } from "../lib/r2.js";
+import { resolveR2Target } from "../lib/storage.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
@@ -836,7 +837,9 @@ async function realRender(
   closeGapsBetweenSegments(segments);
 
   if (segments.length === 0) {
-    throw new Error("El timeline no tiene escenas con clips de video asignados todavia");
+    throw new Error(
+      "El timeline no tiene escenas con clips de video asignados todavia (si el proyecto es solo Flow, cargá las imágenes desde la extensión antes de renderizar)"
+    );
   }
   if (!content.audio?.storage_key) {
     throw new Error("El timeline no tiene audio narrado todavia");
@@ -867,9 +870,8 @@ async function realRender(
   // Cloudinary tiene el limite de 100MB (ver CLOUDINARY_MAX_BYTES) -- R2 y
   // Supabase Storage no, asi que en esos casos se prioriza calidad (CRF por
   // defecto) en vez de forzar un bitrate a mano.
-  const r2Provider = await getActiveProvider("r2");
-  const r2Config = resolveR2Config(r2Provider);
-  const usingR2 = Boolean(r2Config && r2Provider?.api_key);
+  const r2 = await resolveR2Target();
+  const usingR2 = Boolean(r2);
 
   const cloudinaryProvider = usingR2 ? null : await getActiveProvider("cloudinary");
   const cloudName = cloudinaryProvider?.configuration?.cloud_name as string | undefined;
@@ -1085,13 +1087,13 @@ async function realRender(
     console.log(`[render_video] ffmpeg listo, subiendo...`);
     await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
-    if (usingR2 && r2Config && r2Provider?.api_key) {
+    if (r2) {
       publicUrl = await uploadFileToR2(
         finalOutputPath,
         `skaler-renders/${videoProjectId}.mp4`,
         "video/mp4",
-        r2Config,
-        r2Provider.api_key
+        r2.config,
+        r2.secretAccessKey
       );
     } else if (usingCloudinary && cloudName && cloudinaryApiKey && cloudinaryProvider?.api_key) {
       publicUrl = await uploadRenderToCloudinary(videoProjectId, finalOutputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key);

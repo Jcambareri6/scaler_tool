@@ -288,6 +288,7 @@ export default function PreviewPanel({ projectId }: Props) {
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
+  const [flowOnly, setFlowOnly] = useState(false);
   const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
@@ -303,6 +304,7 @@ export default function PreviewPanel({ projectId }: Props) {
         setTransitionsEnabled(p.transitionsEnabled);
         setSubtitlesEnabled(p.subtitlesEnabled);
         setRenderQuality(p.renderQuality);
+        setFlowOnly(p.visualSource === "flow");
       }
     });
   }, [projectId]);
@@ -398,10 +400,15 @@ export default function PreviewPanel({ projectId }: Props) {
     setError(null);
     try {
       // Las opciones se persisten antes de arrancar para que la corrida use
-      // lo que se eligio ahora. visual_source va siempre en "stock": la
+      // lo que se eligio ahora. visual_source va en "stock" o "flow": la
       // generacion con IA esta desactivada (proyectos viejos que la tenian
       // elegida quedan normalizados aca).
-      await projectsService.updateProject(projectId, { visualSource: "stock", transitionsEnabled, subtitlesEnabled, renderQuality });
+      await projectsService.updateProject(projectId, {
+        visualSource: flowOnly ? "flow" : "stock",
+        transitionsEnabled,
+        subtitlesEnabled,
+        renderQuality,
+      });
       const newJob = await projectsService.runPipeline(projectId);
       setJob(newJob);
     } catch (err) {
@@ -432,6 +439,37 @@ export default function PreviewPanel({ projectId }: Props) {
   // volver a este tab) el usuario nunca llegaba a verlo.
   const renderSettings = (
     <>
+      {/* De donde salen los visuales -- ver orchestrator.ts
+          (video_projects.visual_source). "Vacío (solo Flow)" saltea el
+          stock: deja las escenas vacias con sus prompts de imagen hechos
+          para cargarlas con la extension de Flow. */}
+      <div className="flex flex-col gap-1.5 w-full max-w-xs">
+        <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+          Visuales
+        </span>
+        <div className="flex gap-2">
+          {(
+            [
+              { value: false, label: "Stock" },
+              { value: true, label: "Vacío (solo Flow)" },
+            ]
+          ).map((opt) => (
+            <button
+              key={opt.label}
+              onClick={() => setFlowOnly(opt.value)}
+              className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+              style={
+                flowOnly === opt.value
+                  ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
+                  : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Fundido entre escenas en el render final -- ver
           render_video.tool.ts (video_projects.transitions_enabled). */}
       <label
