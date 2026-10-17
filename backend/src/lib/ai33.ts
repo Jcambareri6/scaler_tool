@@ -39,13 +39,16 @@ export interface Ai33VoiceResult {
 // Storage si tiene un limite de proyecto, y una narracion de un guion largo
 // puede pasarlo ("The object exceeded the maximum allowed size"). Sin
 // R2 configurado (ver lib/storage.ts) cae a Supabase Storage como antes.
-export async function uploadAudioFile(body: string | Buffer, storageKey: string): Promise<string> {
+// `r2Default`: el audio de ai33 y las subidas siempre fueron a R2 si estaba;
+// el de Edge TTS solo con R2_ALL_FILES.
+export async function uploadAudioFile(body: string | Buffer, storageKey: string, r2Default = true): Promise<string> {
   return uploadPublicFile({
     bucket: AUDIO_BUCKET,
     path: `${storageKey}.mp3`,
     contentType: "audio/mpeg",
     body,
     r2Prefix: "skaler-audio",
+    r2Default,
   });
 }
 

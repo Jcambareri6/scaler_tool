@@ -106,7 +106,7 @@ export async function generateWithEdgeTts(
     }
 
     // Mismo destino que el audio de ai33 (R2 si esta, si no Supabase).
-    const publicUrl = await uploadAudioFile(audioBuffer, storageKey);
+    const publicUrl = await uploadAudioFile(audioBuffer, storageKey, false);
 
     return { storage_key: publicUrl, duration_seconds: Math.round(durationSeconds) };
   } catch (error) {
