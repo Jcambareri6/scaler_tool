@@ -83,10 +83,13 @@ export async function pollAi33Task(taskId: string, apiKey: string): Promise<Ai33
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       continue;
     }
-    if (task.status === "done") return task;
     if (task.status === "error") {
       throw new Error(`ai33.pro TTS task failed: ${task.error_message ?? "unknown error"}`);
     }
+    // ai33 deja la tarea en "doing" un buen rato despues de que el mp3 ya
+    // esta listo para descargar (visto: 30+ min, hasta tirar el timeout). Con
+    // el audio_url alcanza: la duracion se mide despues con ffmpeg.
+    if (task.status === "done" || task.metadata?.audio_url) return task;
 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
@@ -100,7 +103,9 @@ async function submitAi33(text: string, voiceId: string, apiKey: string): Promis
     const formData = new FormData();
     formData.append("text", text);
     formData.append("voice_id", voiceId);
-    formData.append("with_transcript", "true");
+    // Sin with_transcript: el pipeline transcribe con Whisper y no usa el de
+    // ai33. Pedirlo dejaba la tarea en "doing" mucho despues de que el audio
+    // ya estaba listo para descargar (visto: 30+ min con el mp3 disponible).
     const submitResponse = await fetchWithTimeout(`${AI33_BASE_URL}/v3/text-to-speech`, {
       method: "POST",
       headers: { "xi-api-key": apiKey },
