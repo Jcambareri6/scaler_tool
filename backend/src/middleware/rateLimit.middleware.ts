@@ -1,5 +1,6 @@
 import rateLimit from "express-rate-limit";
 import type { Request } from "express";
+import { isAdmin } from "../lib/accounts.js";
 
 // /auth/register y /auth/login no tienen otra proteccion contra fuerza
 // bruta / spam de cuentas -- por IP, ventana corta.
@@ -25,7 +26,8 @@ export const toolsRateLimiter = rateLimit({
 
 // Limites por usuario para los endpoints que gastan credito de APIs sin
 // pasar por /tools. skipFailedRequests: un pedido rechazado (ej: 409 porque
-// el proyecto ya se esta procesando) no consume cupo.
+// el proyecto ya se esta procesando) no consume cupo. Los admins no tienen
+// limite (pueden generar todo con IA).
 function perUserLimiter(windowMs: number, limit: number, message: string) {
   return rateLimit({
     windowMs,
@@ -33,6 +35,7 @@ function perUserLimiter(windowMs: number, limit: number, message: string) {
     standardHeaders: true,
     legacyHeaders: false,
     skipFailedRequests: true,
+    skip: (req: Request) => isAdmin(req.user!.id),
     keyGenerator: (req: Request) => req.user!.id,
     message: { error: message },
   });

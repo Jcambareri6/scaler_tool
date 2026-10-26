@@ -26,10 +26,6 @@ import type { ContentPolicy } from "../../types/shared/typeShared.js";
 import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 import { isAdmin } from "../../lib/accounts.js";
 
-// Tope de seguridad, mismo criterio que orchestrator.ts::generateAiVisual --
-// evita gasto descontrolado si generate_video devolviera duration_seconds 0.
-const MAX_AI_VIDEO_SEGMENTS = 10;
-
 export async function createScene(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
@@ -275,14 +271,15 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
       const segments: AiVideoSegment[] = [];
       let remaining = minDurationSeconds;
       try {
-        for (let i = 0; i < MAX_AI_VIDEO_SEGMENTS && remaining > 0.5; i++) {
+        // Sin tope de clips, mismo criterio que orchestrator.ts::generateAiVisual.
+        while (remaining > 0.5) {
           const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
             "generate_video",
             { prompt: visualPrompt, scene_id: scene_id as string, duration_seconds: remaining },
             { userId }
           );
           segments.push({ storage_key: video.storage_key, duration_seconds: video.duration_seconds, prompt: visualPrompt });
-          remaining -= video.duration_seconds || 0.5;
+          remaining -= Math.max(video.duration_seconds || 0, 0.5);
         }
       } catch (toolError) {
         const message = toolError instanceof Error ? toolError.message : "generate_video failed";

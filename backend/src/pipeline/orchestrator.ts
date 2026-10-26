@@ -328,13 +328,6 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // para esa escena en vez de rellenar con varios clips cortitos.
   const MIXED_AI_FALLBACK_COVERAGE = 0.5;
 
-  // Tope de seguridad: los modelos de video (Veo 3.1 8s fijos, Seedance 2
-  // hasta 15s) generan clips mucho mas cortos que una escena tipica
-  // (30-40s), asi que hace falta pedir varios seguidos para cubrirla
-  // entera. El tope evita gasto descontrolado si `duration_seconds`
-  // llegara a venir en 0 por algun bug/respuesta rara del proveedor.
-  const MAX_AI_VIDEO_SEGMENTS = 10;
-
   // Diseño visual del canal (recursos compartidos del workspace), solo hace
   // falta para armar los prompts de video con IA.
   const visualStyle = aiOnly || aiMixed
@@ -353,9 +346,13 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       toolCtx
     );
 
+    // Los modelos de video (Veo 3.1 8s fijos, Seedance 2 hasta 15s) generan
+    // clips mas cortos que una escena tipica (30-40s): se piden los que haga
+    // falta, sin tope, hasta cubrirla entera. Cada vuelta descuenta al menos
+    // 0.5s para que el loop termine aunque el proveedor devuelva 0.
     const segments: AiVideoSegment[] = [];
     let remaining = minDurationSeconds;
-    for (let i = 0; i < MAX_AI_VIDEO_SEGMENTS && remaining > 0.5; i++) {
+    while (remaining > 0.5) {
       const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
         "generate_video",
         { prompt: promptResult.prompt, scene_id: sceneId, duration_seconds: remaining },
@@ -366,7 +363,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
         duration_seconds: video.duration_seconds,
         prompt: promptResult.prompt,
       });
-      remaining -= video.duration_seconds || 0.5;
+      remaining -= Math.max(video.duration_seconds || 0, 0.5);
     }
     await setAiVideoSegmentsForScene(projectId, sceneId, segments);
   }
