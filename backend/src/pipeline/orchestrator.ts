@@ -14,10 +14,6 @@ import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { isAdmin } from "../lib/accounts.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
-import type {
-  GenerateVideoPromptInput,
-  GenerateVideoPromptOutput,
-} from "../tools/generateVideoPrompt.tool.js";
 import type { GenerateVoiceInput, GenerateVoiceOutput } from "../tools/generateVoice.tool.js";
 import type {
   TranscribeAudioInput,
@@ -36,7 +32,7 @@ import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/gener
 import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
-import { buildSceneImagePrompts } from "../modules/scenes/sceneBatch.service.js";
+import { buildSceneImagePrompts, buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
 
 export interface PipelineContext {
   userId: string;
@@ -328,41 +324,26 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // para esa escena en vez de rellenar con varios clips cortitos.
   const MIXED_AI_FALLBACK_COVERAGE = 0.5;
 
-  // Diseño visual del canal (recursos compartidos del workspace), solo hace
-  // falta para armar los prompts de video con IA.
-  const visualStyle = aiOnly || aiMixed
-    ? (await getChannelSettingsForProject(projectId)).visual_style_prompt || undefined
-    : undefined;
+  // Escenas que van con video con IA: todas en "ai", las que se quedan
+  // cortas de stock en "mixed". Se juntan durante el loop de escenas y se
+  // generan despues, porque los prompts se arman por tramos de escenas
+  // seguidas con el guion completo (como los de Flow), no de a una.
+  const aiScenes: SceneRow[] = [];
 
-  async function generateAiVisual(sceneId: string, sceneText: string, minDurationSeconds: number): Promise<void> {
-    const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
-      "generate_video_prompt",
-      {
-        scene_text: sceneText,
-        ...(videoTopic ? { video_topic: videoTopic } : {}),
-        ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-        ...(visualStyle ? { visual_style: visualStyle } : {}),
-      },
-      toolCtx
-    );
-
-    // Los modelos de video (Veo 3.1 8s fijos, Seedance 2 hasta 15s) generan
-    // clips mas cortos que una escena tipica (30-40s): se piden los que haga
-    // falta, sin tope, hasta cubrirla entera. Cada vuelta descuenta al menos
-    // 0.5s para que el loop termine aunque el proveedor devuelva 0.
+  // Los modelos de video (Veo 3.1 8s fijos, Seedance 2 hasta 15s) generan
+  // clips mas cortos que una escena tipica (30-40s): se piden los que haga
+  // falta, sin tope, hasta cubrirla entera. Cada vuelta descuenta al menos
+  // 0.5s para que el loop termine aunque el proveedor devuelva 0.
+  async function generateAiVisual(sceneId: string, prompt: string, minDurationSeconds: number): Promise<void> {
     const segments: AiVideoSegment[] = [];
     let remaining = minDurationSeconds;
     while (remaining > 0.5) {
       const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
         "generate_video",
-        { prompt: promptResult.prompt, scene_id: sceneId, duration_seconds: remaining },
+        { prompt, scene_id: sceneId, duration_seconds: remaining },
         toolCtx
       );
-      segments.push({
-        storage_key: video.storage_key,
-        duration_seconds: video.duration_seconds,
-        prompt: promptResult.prompt,
-      });
+      segments.push({ storage_key: video.storage_key, duration_seconds: video.duration_seconds, prompt });
       remaining -= Math.max(video.duration_seconds || 0, 0.5);
     }
     await setAiVideoSegmentsForScene(projectId, sceneId, segments);
@@ -388,7 +369,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     const keywords = sceneKeywords.get(scene.id) ?? [];
 
     if (aiOnly) {
-      await generateAiVisual(scene.id, sceneText, minDurationSeconds);
+      aiScenes.push(scene);
     } else if (!flowOnly) {
       // exclude_keys: sin esto, la cascada de search_stock se corta en la
       // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
@@ -412,7 +393,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       const stockFallsShort = stock.candidates.length === 0 || coverage < MIXED_AI_FALLBACK_COVERAGE;
 
       if (aiMixed && stockFallsShort) {
-        await generateAiVisual(scene.id, sceneText, minDurationSeconds);
+        aiScenes.push(scene);
       } else {
         const { usedKeys } = await replaceStockSegmentsForScene(
           projectId,
@@ -451,19 +432,49 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
     completedScenes += 1;
     if (sceneRows.length > 0) {
-      const progress = 30 + Math.round((completedScenes / sceneRows.length) * 60);
+      // Con IA, el loop llega hasta 50% y la generacion de video ocupa el resto.
+      const span = aiOnly || aiMixed ? 20 : 60;
+      const progress = 30 + Math.round((completedScenes / sceneRows.length) * span);
       await reportJobProgress(
         ctx.jobId,
         progress,
-        flowOnly
+        flowOnly || aiOnly
           ? `Armando las escenas (${completedScenes}/${sceneRows.length})...`
-          : aiOnly
-            ? `Generando video con IA (escena ${completedScenes}/${sceneRows.length})...`
-            : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
+          : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
         { force: completedScenes === sceneRows.length }
       );
     }
   });
+
+  if (aiScenes.length > 0) {
+    // Mismos prompts que Flow (Claude, por tramos de escenas seguidas, con el
+    // guion completo y el diseño del canal integrado), adaptados a video:
+    // accion y movimiento de camara. Ver buildSceneVideoPrompts.
+    await reportJobProgress(ctx.jobId, 50, "Armando los prompts de video con IA...", { force: true });
+    const { prompts: videoPrompts, errors: promptErrors } = await buildSceneVideoPrompts({
+      scriptId: script.id,
+      videoProjectId: projectId,
+      userId: ctx.userId,
+      sceneIds: aiScenes.map((s) => s.id),
+    });
+
+    let generatedScenes = 0;
+    await mapWithConcurrency(aiScenes, SCENE_CONCURRENCY, async (scene) => {
+      const prompt = videoPrompts.get(scene.id);
+      if (!prompt) {
+        throw new Error(`Escena ${scene.order}: ${promptErrors.get(scene.id) ?? "no se pudo armar el prompt de video"}`);
+      }
+      const minDurationSeconds = parseDurationSeconds((scene.content as { duration?: unknown } | null)?.duration) ?? 30;
+      await generateAiVisual(scene.id, prompt, minDurationSeconds);
+      generatedScenes += 1;
+      await reportJobProgress(
+        ctx.jobId,
+        50 + Math.round((generatedScenes / aiScenes.length) * 40),
+        `Generando video con IA (escena ${generatedScenes}/${aiScenes.length})...`,
+        { force: generatedScenes === aiScenes.length }
+      );
+    });
+  }
 
   if (flowOnly) {
     // Los mismos prompts que arma "Cargar prompts del proyecto" en la

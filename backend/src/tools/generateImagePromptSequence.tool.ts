@@ -195,7 +195,21 @@ Si te paso PROMPTS DE REFERENCIA de otras partes de este mismo video, son la fue
 
 Escribí cada prompt SIEMPRE en español, aunque el ESTILO VISUAL o el guion estén en otro idioma, como un único párrafo continuo, sin el timestamp, títulos, numeración, etiquetas, explicaciones ni comillas alrededor de todo el prompt. Devolvé los prompts con la herramienta return_prompts: una entrada por timestamp del tramo, en orden, donde "order" es el número de escena que figura entre paréntesis al lado de cada timestamp del tramo.`;
 
+// Adaptacion para video con IA (SnapGen: Veo 3.1 / Seedance 2). Las reglas
+// del equipo son para imagenes fijas; para un clip se mantiene todo
+// (guion completo, continuidad, estilo integrado, un prompt por timestamp)
+// salvo lo de "un unico frame": el prompt describe un plano corto con
+// accion y movimiento de camara. Se agrega al final para que prevalezca.
+const VIDEO_ADAPTATION = `ADAPTACIÓN PARA VIDEO: estos prompts NO van a un generador de imágenes sino a un generador de VIDEO con IA (tipo Veo o Seedance), que con cada prompt genera un clip corto de unos 5 a 15 segundos. Todas las reglas anteriores siguen valiendo (guion completo, continuidad de personajes y escenarios, estilo visual integrado en cada prompt, un prompt por timestamp, en español, un único párrafo), con estos cambios, que tienen prioridad sobre lo anterior:
+- En vez de un único frame fijo, cada prompt describe UN plano continuo de pocos segundos: qué se ve al empezar, qué acción concreta ocurre durante el clip (quién se mueve, qué hace, qué cambia en la escena) y cómo termina. Una sola acción principal, clara y filmable; nada de secuencias de varias escenas, cortes, montajes ni transiciones dentro del mismo prompt.
+- Indicá siempre el movimiento de cámara (por ejemplo: travelling lento hacia adelante, paneo a la derecha, cámara en mano siguiendo al personaje, plano fijo, dolly out, grúa ascendente, órbita lenta alrededor del sujeto) y el tipo de plano (general, medio, primer plano, detalle). Elegí el movimiento que mejor cuente la idea del timestamp y variálo entre timestamps consecutivos.
+- Describí el ritmo y la física del movimiento (lento, suave, enérgico) y el ambiente animado (viento, humo, luces que titilan, gente de fondo) cuando aporte a la escena.
+- No pidas diálogos, voces, narración ni subtítulos: el audio del video es la narración aparte.`;
+
 export interface GenerateImagePromptSequenceInput extends ChannelContext {
+  // "video": prompts para generar clips con IA (ver VIDEO_ADAPTATION).
+  // Default "image" (Flow).
+  target?: "image" | "video";
   scenes: SequenceScene[];
   // Guion completo con timestamps -- se lee entero antes de ilustrar el tramo.
   full_script?: SequenceScene[];
@@ -249,6 +263,7 @@ export const generateImagePromptSequenceTool: ToolDefinition<
       video_topic: { type: "string", description: "Titulo del video (opcional)" },
       visual_style: { type: "string", description: "Diseño visual del canal (opcional)" },
       content_policy: { type: "object", description: "Preferencias/restricciones visuales del proyecto (opcional)" },
+      target: { type: "string", enum: ["image", "video"], description: "Generador destino (default: image)" },
     },
     required: ["scenes"],
   },
@@ -265,14 +280,16 @@ export const generateImagePromptSequenceTool: ToolDefinition<
         .join("\n")}\n` +
       contextBlock("Prompts ya usados en los timestamps posteriores al tramo", input.context_after?.filter((c) => c.prompt));
 
-    const raw =
-      (await promptsWithAnthropic(SEQUENCE_SYSTEM_PROMPT, user)) ?? (await promptsWithOpenAI(SEQUENCE_SYSTEM_PROMPT, user));
+    const system = input.target === "video" ? `${SEQUENCE_SYSTEM_PROMPT}\n\n${VIDEO_ADAPTATION}` : SEQUENCE_SYSTEM_PROMPT;
+    const raw = (await promptsWithAnthropic(system, user)) ?? (await promptsWithOpenAI(system, user));
     if (!raw) {
       const style = input.visual_style?.trim();
       return {
         prompts: input.scenes.map((s) => ({
           order: s.order,
-          prompt: singleBlock(`Ilustración de: ${s.text.trim().slice(0, 400)}${style ? ` Estilo: ${style}` : ""}`),
+          prompt: singleBlock(
+            `${input.target === "video" ? "Clip de video de" : "Ilustración de"}: ${s.text.trim().slice(0, 400)}${style ? ` Estilo: ${style}` : ""}`
+          ),
         })),
       };
     }
