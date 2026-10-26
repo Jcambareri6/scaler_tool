@@ -18,12 +18,8 @@ import type {
   GenerateStockKeywordsOutput,
 } from "../../tools/generateStockKeywords.tool.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../../tools/generateVideo.tool.js";
-import type {
-  GenerateVideoPromptInput,
-  GenerateVideoPromptOutput,
-} from "../../tools/generateVideoPrompt.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
+import { buildSceneVideoPrompts } from "./sceneBatch.service.js";
 import { isAdmin } from "../../lib/accounts.js";
 
 export async function createScene(req: Request, res: Response) {
@@ -241,9 +237,11 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
 
     // "ai": mismo flujo que el pipeline automatico con visual_source "ai"
     // (ver orchestrator.ts), pero con el prompt que haya tipeado el usuario
-    // -- si lo deja vacio, se deriva uno (generate_video_prompt) de la
-    // narrativa de la escena. El modelo de video genera clips mas cortos que
-    // la escena, asi que se piden varios seguidos hasta cubrirla entera.
+    // -- si lo deja vacio, se arma como en el pipeline: igual que los de Flow
+    // (Claude, guion completo, escenas vecinas y diseño del canal), adaptado
+    // a video (ver buildSceneVideoPrompts). El modelo de video genera clips
+    // mas cortos que la escena, asi que se piden varios seguidos hasta
+    // cubrirla entera.
     if (source === "ai") {
       let visualPrompt = typeof ai_prompt === "string" && ai_prompt.trim() ? ai_prompt.trim() : null;
       if (!visualPrompt) {
@@ -252,20 +250,16 @@ export async function regenerateSceneVisual(req: Request, res: Response) {
             error: "No hay texto para generar el prompt de IA (mandá un prompt o cargá la narrativa de la escena primero)",
           });
         }
-        const videoTopic = (project as { title?: string }).title;
-        const contentPolicy = (project as { content_policy?: ContentPolicy | null }).content_policy ?? undefined;
-        const { visual_style_prompt: visualStyle } = await getChannelSettingsForProject(project.id);
-        const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
-          "generate_video_prompt",
-          {
-            scene_text: sceneText,
-            ...(videoTopic ? { video_topic: videoTopic } : {}),
-            ...(contentPolicy ? { content_policy: contentPolicy } : {}),
-            ...(visualStyle ? { visual_style: visualStyle } : {}),
-          },
-          { userId }
-        );
-        visualPrompt = promptResult.prompt;
+        const { prompts, errors } = await buildSceneVideoPrompts({
+          scriptId: scene.script_id,
+          videoProjectId: project.id,
+          userId,
+          sceneIds: [scene_id as string],
+        });
+        visualPrompt = prompts.get(scene_id as string) ?? null;
+        if (!visualPrompt) {
+          return res.status(400).json({ error: errors.get(scene_id as string) ?? "No se pudo armar el prompt de video" });
+        }
       }
 
       const segments: AiVideoSegment[] = [];

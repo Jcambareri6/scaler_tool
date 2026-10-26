@@ -9,7 +9,6 @@ import { searchStockTool } from "./searchStock.tool.js";
 import { generateStockKeywordsTool } from "./generateStockKeywords.tool.js";
 import { generateVisualContextTool } from "./generateVisualContext.tool.js";
 import { generateVideoTool } from "./generateVideo.tool.js";
-import { generateVideoPromptTool } from "./generateVideoPrompt.tool.js";
 import { generateImagePromptSequenceTool } from "./generateImagePromptSequence.tool.js";
 import { generateOverlayTool } from "./generateOverlay.tool.js";
 import { renderVideoTool } from "./renderVideo.tool.js";
@@ -29,12 +28,12 @@ registerTool(transcribeAudioTool);
 registerTool(searchStockTool);
 registerTool(generateStockKeywordsTool);
 registerTool(generateVisualContextTool);
-// generate_video y generate_video_prompt (SnapGen) se registran pero solo
-// los usan el pipeline y la regeneracion de escenas, y solo para admins
-// (ver isAdmin en orchestrator.ts y scene.service.ts). generate_image sigue
-// sin registrarse.
+// generate_video (SnapGen) se registra pero solo lo usan el pipeline y la
+// regeneracion de escenas, y solo para admins (ver isAdmin en
+// orchestrator.ts y scene.service.ts). Sus prompts salen de
+// generate_image_prompt_sequence con target "video" (como los de Flow).
+// generate_image y generate_video_prompt siguen sin registrarse.
 registerTool(generateVideoTool);
-registerTool(generateVideoPromptTool);
 registerTool(generateImagePromptSequenceTool);
 registerTool(generateOverlayTool);
 registerTool(renderVideoTool);
