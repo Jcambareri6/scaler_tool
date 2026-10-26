@@ -190,11 +190,17 @@ export const projectsService = {
 
   // Reprompteo del visual de UNA escena (scene.service.ts::regenerateSceneVisual):
   // vuelve a buscar en todos los Providers de stock activos y arma la
-  // secuencia de clips que cubre la escena entera. La generacion con IA
-  // (SnapGen) esta desactivada hasta que este terminada.
-  async regenerateSceneVisual(sceneId: string, options?: { prompt?: string }): Promise<Asset[]> {
+  // secuencia de clips que cubre la escena entera. source="ai" (solo
+  // admins): genera con SnapGen tantos clips seguidos como haga falta a
+  // partir de aiPrompt (si se deja vacio, se deriva uno de la narrativa).
+  async regenerateSceneVisual(
+    sceneId: string,
+    options?: { prompt?: string; source?: "stock" | "ai"; aiPrompt?: string }
+  ): Promise<Asset[]> {
     const rows = await api.post<Parameters<typeof mapAsset>[0][]>(`/scenes/${sceneId}/regenerate-visual`, {
       ...(options?.prompt ? { prompt: options.prompt } : {}),
+      ...(options?.source ? { source: options.source } : {}),
+      ...(options?.aiPrompt ? { ai_prompt: options.aiPrompt } : {}),
     });
     return rows.map(mapAsset);
   },

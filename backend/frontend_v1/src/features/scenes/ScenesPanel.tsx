@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { projectsService } from "@/services/projects.service";
 import StatusBadge from "@/components/StatusBadge";
 import BatchVisualsModal from "./BatchVisualsModal";
+import { useAccount } from "@/lib/accountContext";
 import type { Scene, Asset } from "@/types";
 
 interface Props {
@@ -69,10 +70,15 @@ function SceneDetail({
   assets: Asset[];
   onRegenerate: (
     sceneId: string,
-    options: { prompt?: string }
+    options: { prompt?: string; source?: "stock" | "ai"; aiPrompt?: string }
   ) => Promise<void>;
   onSaved: (scene: Scene) => void;
 }) {
+  // Video con IA (SnapGen): solo admins, el backend lo vuelve a chequear.
+  const { account } = useAccount();
+  const aiAllowed = !!account?.isAdmin;
+  const [source, setSource] = useState<"stock" | "ai">("stock");
+  const [aiPrompt, setAiPrompt] = useState("");
   const [editing, setEditing] = useState(false);
   const [narrative, setNarrative] = useState(scene.narrativeContent);
   const [visualPrompt, setVisualPrompt] = useState(scene.visualPrompt ?? "");
@@ -84,6 +90,8 @@ function SceneDetail({
   useEffect(() => {
     setNarrative(scene.narrativeContent);
     setVisualPrompt(scene.visualPrompt ?? "");
+    setSource("stock");
+    setAiPrompt("");
     setEditing(false);
     setError(null);
     setActiveIndex(0);
@@ -95,7 +103,11 @@ function SceneDetail({
     setRegenerating(true);
     setError(null);
     try {
-      await onRegenerate(scene.id, { prompt: visualPrompt.trim() });
+      if (source === "ai" && aiAllowed) {
+        await onRegenerate(scene.id, { source: "ai", aiPrompt: aiPrompt.trim() });
+      } else {
+        await onRegenerate(scene.id, { prompt: visualPrompt.trim() });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo regenerar el visual");
     } finally {
@@ -256,7 +268,45 @@ function SceneDetail({
         )}
       </div>
 
-      {/* Prompt de busqueda de stock (la generacion con IA esta desactivada) */}
+      {/* Fuente del visual: buscar en stock o, solo para admins, generar el
+          video con IA (SnapGen) */}
+      {aiAllowed && (
+        <div>
+          <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>Fuente del visual</label>
+          <div className="flex gap-2">
+            {(
+              [
+                { value: "stock" as const, label: "Buscar stock" },
+                { value: "ai" as const, label: "Video con IA" },
+              ]
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setSource(opt.value)}
+                className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+                style={source === opt.value ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" } : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {source === "ai" && aiAllowed ? (
+        <div>
+          <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
+            Prompt de generación (IA)
+          </label>
+          <textarea
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            rows={3}
+            placeholder="Describí la escena a generar (si lo dejás vacío, se deriva de la narrativa)..."
+            className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
+          />
+        </div>
+      ) : (
       <div>
         <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
           Prompt visual
@@ -279,6 +329,7 @@ function SceneDetail({
           className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
         />
       </div>
+      )}
 
       {/* Actions */}
       <div className="flex gap-2">
@@ -357,7 +408,7 @@ export default function ScenesPanel({ projectId }: Props) {
 
   const handleRegenerate = async (
     sceneId: string,
-    options: { prompt?: string }
+    options: { prompt?: string; source?: "stock" | "ai"; aiPrompt?: string }
   ) => {
     const assets = await projectsService.regenerateSceneVisual(sceneId, options);
     setAssetsByScene((prev) => ({ ...prev, [sceneId]: assets }));

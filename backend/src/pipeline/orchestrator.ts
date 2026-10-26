@@ -1,12 +1,23 @@
 import { runTool } from "../tools/index.js";
 import { supabase } from "../lib/supabase.js";
-import { replaceStockSegmentsForScene, appendStockHistory } from "../lib/stockSegments.js";
+import {
+  replaceStockSegmentsForScene,
+  setAiVideoSegmentsForScene,
+  appendStockHistory,
+  type AiVideoSegment,
+} from "../lib/stockSegments.js";
 import { syncProjectStatus } from "../lib/projectStatus.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
+import { isAdmin } from "../lib/accounts.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
+import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
+import type {
+  GenerateVideoPromptInput,
+  GenerateVideoPromptOutput,
+} from "../tools/generateVideoPrompt.tool.js";
 import type { GenerateVoiceInput, GenerateVoiceOutput } from "../tools/generateVoice.tool.js";
 import type {
   TranscribeAudioInput,
@@ -255,10 +266,13 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
   const contentPolicy = (project.content_policy as ContentPolicy | null) ?? undefined;
   const videoTopic = (project as { title?: string }).title;
-  // La generacion de visuales con IA (visual_source "ai"/"mixed") esta
-  // desactivada hasta que este terminada: esos proyectos buscan stock. Las
-  // imagenes de Flow llegan aparte (extension) y se conservan via
+  // Video con IA (SnapGen, visual_source "ai"/"mixed"): solo para admins.
+  // Para el resto esos proyectos buscan stock, sin importar lo guardado.
+  // Las imagenes de Flow llegan aparte (extension) y se conservan via
   // preservedVisuals.
+  const aiAllowed = isAdmin(ctx.userId);
+  const aiOnly = aiAllowed && project.visual_source === "ai";
+  const aiMixed = aiAllowed && project.visual_source === "mixed";
   // "flow": las escenas quedan vacias (sin contexto visual, keywords ni
   // stock, que es lo que mas tarda) y al final se arman los prompts de
   // imagen, asi la extension los encuentra hechos.
@@ -277,7 +291,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // que las 4 queries de cada escena (Fase 2, generate_stock_keywords) sean
   // coherentes entre si -- misma epoca, misma ubicacion, mismo tono.
   const sceneKeywords = new Map<string, string[]>();
-  if (sceneRows.length > 0 && !flowOnly) {
+  if (sceneRows.length > 0 && !flowOnly && !aiOnly) {
     const contextResult = await runTool<GenerateVisualContextInput, GenerateVisualContextOutput>(
       "generate_visual_context",
       { full_text: scriptText, ...(videoTopic ? { video_topic: videoTopic } : {}) },
@@ -309,6 +323,54 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     }
   }
 
+  // "mixed": si el mejor candidato de stock cubre menos de esta fraccion de
+  // la duracion de la escena (o no hay ninguno), se genera el clip con IA
+  // para esa escena en vez de rellenar con varios clips cortitos.
+  const MIXED_AI_FALLBACK_COVERAGE = 0.5;
+
+  // Tope de seguridad: los modelos de video (Veo 3.1 8s fijos, Seedance 2
+  // hasta 15s) generan clips mucho mas cortos que una escena tipica
+  // (30-40s), asi que hace falta pedir varios seguidos para cubrirla
+  // entera. El tope evita gasto descontrolado si `duration_seconds`
+  // llegara a venir en 0 por algun bug/respuesta rara del proveedor.
+  const MAX_AI_VIDEO_SEGMENTS = 10;
+
+  // Diseño visual del canal (recursos compartidos del workspace), solo hace
+  // falta para armar los prompts de video con IA.
+  const visualStyle = aiOnly || aiMixed
+    ? (await getChannelSettingsForProject(projectId)).visual_style_prompt || undefined
+    : undefined;
+
+  async function generateAiVisual(sceneId: string, sceneText: string, minDurationSeconds: number): Promise<void> {
+    const promptResult = await runTool<GenerateVideoPromptInput, GenerateVideoPromptOutput>(
+      "generate_video_prompt",
+      {
+        scene_text: sceneText,
+        ...(videoTopic ? { video_topic: videoTopic } : {}),
+        ...(contentPolicy ? { content_policy: contentPolicy } : {}),
+        ...(visualStyle ? { visual_style: visualStyle } : {}),
+      },
+      toolCtx
+    );
+
+    const segments: AiVideoSegment[] = [];
+    let remaining = minDurationSeconds;
+    for (let i = 0; i < MAX_AI_VIDEO_SEGMENTS && remaining > 0.5; i++) {
+      const video = await runTool<GenerateVideoInput, GenerateVideoOutput>(
+        "generate_video",
+        { prompt: promptResult.prompt, scene_id: sceneId, duration_seconds: remaining },
+        toolCtx
+      );
+      segments.push({
+        storage_key: video.storage_key,
+        duration_seconds: video.duration_seconds,
+        prompt: promptResult.prompt,
+      });
+      remaining -= video.duration_seconds || 0.5;
+    }
+    await setAiVideoSegmentsForScene(projectId, sceneId, segments);
+  }
+
   // Cada escena es independiente (keywords -> stock -> overlay no comparten
   // estado entre si), asi que se procesan varias a la vez en vez de una por
   // una -- con 20-30 escenas eso son minutos de espera secuencial sin
@@ -328,7 +390,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     // repetir la escena anterior (ver sceneKeywords mas arriba).
     const keywords = sceneKeywords.get(scene.id) ?? [];
 
-    if (!flowOnly) {
+    if (aiOnly) {
+      await generateAiVisual(scene.id, sceneText, minDurationSeconds);
+    } else if (!flowOnly) {
       // exclude_keys: sin esto, la cascada de search_stock se corta en la
       // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
       // saber si esos resultados ya estan gastados en otra escena de este
@@ -346,19 +410,27 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
         toolCtx
       );
 
-      const { usedKeys } = await replaceStockSegmentsForScene(
-        projectId,
-        scene.id,
-        stock.candidates,
-        minDurationSeconds,
-        usedStockKeys
-      );
-      // Deja registro de que clips ya se usaron en ESTA escena (sobrevive
-      // al borrado de Assets que hace cada regeneracion puntual, ver
-      // regenerateSceneVisual en scene.service.ts) -- sin esto, la primera
-      // vez que el usuario regenera una escena desde el pipeline
-      // automatico no tiene memoria de que candidato ya se probo aca.
-      await appendStockHistory(scene.id, scene.content as Record<string, unknown> | null, usedKeys);
+      const bestCandidateSeconds = stock.candidates[0]?.duration_seconds ?? 0;
+      const coverage = minDurationSeconds > 0 ? bestCandidateSeconds / minDurationSeconds : 1;
+      const stockFallsShort = stock.candidates.length === 0 || coverage < MIXED_AI_FALLBACK_COVERAGE;
+
+      if (aiMixed && stockFallsShort) {
+        await generateAiVisual(scene.id, sceneText, minDurationSeconds);
+      } else {
+        const { usedKeys } = await replaceStockSegmentsForScene(
+          projectId,
+          scene.id,
+          stock.candidates,
+          minDurationSeconds,
+          usedStockKeys
+        );
+        // Deja registro de que clips ya se usaron en ESTA escena (sobrevive
+        // al borrado de Assets que hace cada regeneracion puntual, ver
+        // regenerateSceneVisual en scene.service.ts) -- sin esto, la primera
+        // vez que el usuario regenera una escena desde el pipeline
+        // automatico no tiene memoria de que candidato ya se probo aca.
+        await appendStockHistory(scene.id, scene.content as Record<string, unknown> | null, usedKeys);
+      }
     }
 
     // Sin decision de producto todavia sobre que overlay corresponde a
@@ -388,7 +460,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
         progress,
         flowOnly
           ? `Armando las escenas (${completedScenes}/${sceneRows.length})...`
-          : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
+          : aiOnly
+            ? `Generando video con IA (escena ${completedScenes}/${sceneRows.length})...`
+            : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
         { force: completedScenes === sceneRows.length }
       );
     }
