@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { Asset, Scene } from "@/types";
+import { useAccount } from "@/lib/accountContext";
 
 interface Props {
   scene: Scene;
@@ -16,20 +17,23 @@ interface Props {
   onSubmit: (sceneId: string, params: ReplaceParams) => void;
 }
 
-type Tab = "stock" | "upload";
+type Tab = "stock" | "upload" | "ai";
 
 export type ReplaceParams =
   | { tab: "stock"; prompt: string }
+  | { tab: "ai"; aiPrompt: string }
   | { tab: "upload"; file: File };
 
 // Modal de reemplazo puntual de una escena (click en "Reemplazar clip" desde
-// el panel de escenas de StockReviewPanel): buscar stock o subir propio (la
-// via de generar con IA esta desactivada hasta que este terminada). La
-// llamada real a scene.service.ts (via projectsService) la hace el padre en
+// el panel de escenas de StockReviewPanel): buscar stock, subir propio o,
+// solo para admins, generar el video con IA (SnapGen). La llamada real a scene.service.ts (via projectsService) la hace el padre en
 // segundo plano (ver onSubmit arriba), no este modal.
 export default function SceneReplaceModal({ scene, currentAssets, onClose, onSubmit }: Props) {
   const [tab, setTab] = useState<Tab>("stock");
   const [stockPrompt, setStockPrompt] = useState(scene.visualPrompt ?? "");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const { account } = useAccount();
+  const aiAllowed = !!account?.isAdmin;
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -42,6 +46,8 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
         return;
       }
       onSubmit(scene.id, { tab: "upload", file });
+    } else if (tab === "ai" && aiAllowed) {
+      onSubmit(scene.id, { tab: "ai", aiPrompt: aiPrompt.trim() });
     } else {
       onSubmit(scene.id, { tab: "stock", prompt: stockPrompt.trim() });
     }
@@ -89,6 +95,7 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
             [
               { id: "stock" as const, label: "Buscar stock" },
               { id: "upload" as const, label: "Subir propio" },
+              ...(aiAllowed ? [{ id: "ai" as const, label: "Video con IA" }] : []),
             ]
           ).map((t) => (
             <button
@@ -133,6 +140,21 @@ export default function SceneReplaceModal({ scene, currentAssets, onClose, onSub
               onChange={(e) => setStockPrompt(e.target.value)}
               rows={3}
               placeholder="Si lo dejás vacío, se usa la narrativa de la escena..."
+              className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
+            />
+          </div>
+        )}
+
+        {tab === "ai" && aiAllowed && (
+          <div>
+            <label className="block text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
+              Prompt de generación
+            </label>
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              rows={3}
+              placeholder="Si lo dejás vacío, se deriva de la narrativa de la escena..."
               className="input-glass w-full rounded-xl px-3 py-2.5 text-sm resize-none font-mono"
             />
           </div>

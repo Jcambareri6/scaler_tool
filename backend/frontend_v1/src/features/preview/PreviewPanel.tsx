@@ -3,7 +3,8 @@ import { projectsService } from "@/services/projects.service";
 import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
-import type { Job, Asset, RenderQuality } from "@/types";
+import { useAccount } from "@/lib/accountContext";
+import type { Job, Asset, RenderQuality, VisualSource } from "@/types";
 
 interface Props {
   projectId: string;
@@ -288,7 +289,11 @@ export default function PreviewPanel({ projectId }: Props) {
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
-  const [flowOnly, setFlowOnly] = useState(false);
+  const [visualSource, setVisualSource] = useState<VisualSource>("stock");
+  // "Solo IA"/"Mixto" (video con SnapGen) solo para admins; el backend lo
+  // vuelve a chequear (orchestrator.ts) y para el resto busca stock.
+  const { account } = useAccount();
+  const aiAllowed = !!account?.isAdmin;
   const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
@@ -304,7 +309,7 @@ export default function PreviewPanel({ projectId }: Props) {
         setTransitionsEnabled(p.transitionsEnabled);
         setSubtitlesEnabled(p.subtitlesEnabled);
         setRenderQuality(p.renderQuality);
-        setFlowOnly(p.visualSource === "flow");
+        setVisualSource(p.visualSource);
       }
     });
   }, [projectId]);
@@ -400,11 +405,12 @@ export default function PreviewPanel({ projectId }: Props) {
     setError(null);
     try {
       // Las opciones se persisten antes de arrancar para que la corrida use
-      // lo que se eligio ahora. visual_source va en "stock" o "flow": la
-      // generacion con IA esta desactivada (proyectos viejos que la tenian
-      // elegida quedan normalizados aca).
+      // lo que se eligio ahora. "ai"/"mixed" solo los guarda un admin: para
+      // el resto (proyectos viejos que la tenian elegida) se normaliza a stock.
+      const source: VisualSource =
+        (visualSource === "ai" || visualSource === "mixed") && !aiAllowed ? "stock" : visualSource;
       await projectsService.updateProject(projectId, {
-        visualSource: flowOnly ? "flow" : "stock",
+        visualSource: source,
         transitionsEnabled,
         subtitlesEnabled,
         renderQuality,
@@ -442,24 +448,32 @@ export default function PreviewPanel({ projectId }: Props) {
       {/* De donde salen los visuales -- ver orchestrator.ts
           (video_projects.visual_source). "Vacío (solo Flow)" saltea el
           stock: deja las escenas vacias con sus prompts de imagen hechos
-          para cargarlas con la extension de Flow. */}
+          para cargarlas con la extension de Flow. "Solo IA"/"Mixto" (solo
+          admins) generan el video de cada escena con SnapGen: todas, o solo
+          las que no tienen stock que alcance. */}
       <div className="flex flex-col gap-1.5 w-full max-w-xs">
         <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
           Visuales
         </span>
-        <div className="flex gap-2">
+        <div className={aiAllowed ? "grid grid-cols-2 gap-2" : "flex gap-2"}>
           {(
             [
-              { value: false, label: "Stock" },
-              { value: true, label: "Vacío (solo Flow)" },
-            ]
+              { value: "stock", label: "Stock" },
+              { value: "flow", label: "Vacío (solo Flow)" },
+              ...(aiAllowed
+                ? [
+                    { value: "ai", label: "Solo IA" },
+                    { value: "mixed", label: "Mixto" },
+                  ]
+                : []),
+            ] as { value: VisualSource; label: string }[]
           ).map((opt) => (
             <button
               key={opt.label}
-              onClick={() => setFlowOnly(opt.value)}
+              onClick={() => setVisualSource(opt.value)}
               className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
               style={
-                flowOnly === opt.value
+                (visualSource === opt.value || (opt.value === "stock" && !aiAllowed && (visualSource === "ai" || visualSource === "mixed")))
                   ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                   : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
               }
