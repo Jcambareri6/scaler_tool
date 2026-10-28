@@ -1,4 +1,4 @@
-# Handoff: gráficos animados (Remotion) — rama `claude/lucid-mayer-89l0vo`
+# Handoff: gráficos animados (Remotion) — rama `formato-documental`
 
 Contexto para el agente que siga este trabajo. Leelo entero antes de tocar código.
 
@@ -19,7 +19,7 @@ barra de progreso arriba, subtítulos con palabra clave en color.
 
 ## Puesta en marcha local
 
-Desde la raíz del repo, con la rama ya bajada (`git checkout claude/lucid-mayer-89l0vo`):
+Desde la raíz del repo, con la rama ya bajada (`git checkout formato-documental`):
 
 ```bash
 cd backend && npm install
