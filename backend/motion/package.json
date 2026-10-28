@@ -1,0 +1,25 @@
+{
+  "name": "skaler-motion",
+  "private": true,
+  "type": "module",
+  "description": "Graficos animados (Remotion) que el render superpone sobre el video base -- ver README.md",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "render:sample": "tsx scripts/render-sample.ts"
+  },
+  "dependencies": {
+    "@fontsource/cormorant-garamond": "5.3.0",
+    "@fontsource/inter": "5.3.0",
+    "@remotion/bundler": "4.0.534",
+    "@remotion/renderer": "4.0.534",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  }
+}
