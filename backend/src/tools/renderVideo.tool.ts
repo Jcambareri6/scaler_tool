@@ -25,6 +25,8 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
+import { buildOverlayAss } from "../lib/overlayAss.js";
+import type { OverlaySpec } from "../types/shared/typeShared.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
@@ -137,6 +139,10 @@ interface TimelineAssetEntry {
 
 interface TimelineSceneEntry {
   scene_id: string;
+  // Metricas animadas ya validadas (ver plan_overlays/generate_overlay),
+  // dibujadas por lib/overlayAss.ts.
+  overlay?: OverlaySpec | null;
+  overlays?: OverlaySpec[] | null;
   order: number;
   start: string;
   end: string;
@@ -772,9 +778,17 @@ function subtitlesFilter(srtPath: string): string {
   return `subtitles=${escapeForSubtitlesFilter(srtPath)}:force_style='${style}'`;
 }
 
+// Overlays (metricas animadas) debajo y subtitulos arriba, en el mismo
+// filtro: una sola pasada de encode para los dos.
+function burnFilters(assPath: string | null, srtPath: string | null): string {
+  return [assPath ? `ass=${escapeForSubtitlesFilter(assPath)}` : null, srtPath ? subtitlesFilter(srtPath) : null]
+    .filter(Boolean)
+    .join(",");
+}
+
 async function burnSubtitles(
   inputPath: string,
-  srtPath: string,
+  filter: string,
   targetVideoBitrateBps: number | null,
   outputPath: string,
   onTime?: (seconds: number) => void
@@ -784,7 +798,7 @@ async function burnSubtitles(
       "-i",
       inputPath,
       "-vf",
-      subtitlesFilter(srtPath),
+      filter,
       ...videoCodecArgs(targetVideoBitrateBps),
       "-c:a",
       "copy",
@@ -861,6 +875,20 @@ async function realRender(
   }
   const transitionsEnabled = Boolean(project?.transitions_enabled) && segments.length > 1;
   const subtitlesEnabled = Boolean(project?.subtitles_enabled) && (content.segments?.length ?? 0) > 0;
+
+  // Consulta aparte: si la migracion de overlays no se corrio, falla solo
+  // esto y el resto de las opciones (transiciones/subtitulos) sigue igual.
+  const { data: overlayOptions, error: overlayOptionsError } = await supabase
+    .from("video_projects")
+    .select("overlays_enabled, overlay_theme")
+    .eq("id", videoProjectId)
+    .single();
+  if (overlayOptionsError) {
+    console.warn(`[render_video] no se pudo leer overlays_enabled (¿se corrio la migracion 20261028000000_video_overlays.sql?): ${overlayOptionsError.message}`);
+  }
+  const overlayAss = overlayOptions?.overlays_enabled ? buildOverlayAss(scenes, overlayOptions.overlay_theme) : null;
+  const overlaysEnabled = Boolean(overlayAss && overlayAss.count > 0);
+  const burnEnabled = subtitlesEnabled || overlaysEnabled;
   const { quality: renderQuality, size: outputSize } = resolveOutputSize(project?.render_quality);
   assignSegmentDurations(segments, transitionsEnabled);
 
@@ -903,7 +931,7 @@ async function realRender(
     // quemar subtitulos) -- se codifica casi sin perdida para no sumar
     // artefactos de compresion que despues la pasada final no puede
     // recuperar (ver INTERMEDIATE_CRF).
-    const batchQuality = !transitionsEnabled && !subtitlesEnabled ? "final" : "intermediate";
+    const batchQuality = !transitionsEnabled && !burnEnabled ? "final" : "intermediate";
     const totalBatches = Math.ceil(segments.length / BATCH_SIZE);
     const batchOutputPaths: string[] = [];
     const batchDurations: number[] = [];
@@ -968,6 +996,14 @@ async function realRender(
 
     const outputPath = path.join(workDir, "final.mp4");
     const srtPath = path.join(workDir, "subtitles.srt");
+    const assPath = path.join(workDir, "overlays.ass");
+    const writeBurnFiles = async (): Promise<string> => {
+      if (subtitlesEnabled) await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
+      if (overlaysEnabled) await writeFile(assPath, overlayAss!.ass, "utf-8");
+      return burnFilters(overlaysEnabled ? assPath : null, subtitlesEnabled ? srtPath : null);
+    };
+    const burnFiles = [...(subtitlesEnabled ? [srtPath] : []), ...(overlaysEnabled ? [assPath] : [])];
+    const burnLabel = overlaysEnabled && subtitlesEnabled ? "métricas y subtitulos" : overlaysEnabled ? "métricas animadas" : "subtitulos";
     // true si los subtitulos ya se quemaron en la pasada de audio (caso con
     // transiciones), para no hacer una pasada extra al final.
     let subtitlesBurned = false;
@@ -1031,15 +1067,14 @@ async function realRender(
       }
 
       let subtitlesChain = "";
-      if (subtitlesEnabled) {
-        await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
-        subtitlesChain = `,${subtitlesFilter(srtPath)}`;
+      if (burnEnabled) {
+        subtitlesChain = `,${await writeBurnFiles()}`;
         subtitlesBurned = true;
       }
 
       const safetyPadSeconds = 1;
       console.log(`[render_video] agregando audio${subtitlesBurned ? " + subtitulos" : ""}...`);
-      const finalMessage = subtitlesBurned ? "Codificando el video final con subtitulos" : "Codificando el video final";
+      const finalMessage = subtitlesBurned ? `Codificando el video final con ${burnLabel}` : "Codificando el video final";
       await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
       await runFfmpeg([
         "-i",
@@ -1064,24 +1099,26 @@ async function realRender(
       // assembledPath ya esta mezclado con audio en outputPath -- no hace
       // falta conservarlo (incluye el caso totalBatches===1, donde
       // assembledPath era la unica tanda).
-      await cleanupFiles(subtitlesBurned ? [assembledPath, srtPath] : [assembledPath]);
+      await cleanupFiles(subtitlesBurned ? [assembledPath, ...burnFiles] : [assembledPath]);
     }
 
     let finalOutputPath = outputPath;
-    if (subtitlesEnabled && !subtitlesBurned) {
-      console.log(`[render_video] quemando subtitulos (${content.segments!.length} segmentos)...`);
-      await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
+    if (burnEnabled && !subtitlesBurned) {
+      console.log(
+        `[render_video] quemando ${burnLabel} (${overlayAss?.count ?? 0} overlays, ${subtitlesEnabled ? content.segments!.length : 0} subtitulos)...`
+      );
+      const filter = await writeBurnFiles();
       finalOutputPath = path.join(workDir, "final-subtitled.mp4");
-      await progress(PROGRESS_FINAL_START + 2, "Agregando subtitulos...", true);
+      await progress(PROGRESS_FINAL_START + 2, `Agregando ${burnLabel}...`, true);
       await burnSubtitles(
         outputPath,
-        srtPath,
+        filter,
         targetVideoBitrateBps,
         finalOutputPath,
-        encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, "Agregando subtitulos")
+        encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, `Agregando ${burnLabel}`)
       );
-      // outputPath (sin subtitulos) ya quedo quemado en finalOutputPath.
-      await cleanupFiles([outputPath, srtPath]);
+      // outputPath (sin overlays/subtitulos) ya quedo quemado en finalOutputPath.
+      await cleanupFiles([outputPath, ...burnFiles]);
     }
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);

@@ -2,6 +2,10 @@ export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "E
 
 export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 
+// Paleta de las metricas animadas segun el genero del video (ver
+// backend lib/overlayAss.ts).
+export type OverlayTheme = "documental" | "ciencia" | "finanzas" | "historia" | "crimen" | "minimal";
+
 export type RenderQuality = "720p" | "1080p";
 
 export type SceneVisualStatus = "PENDING" | "GENERATING" | "DONE" | "ERROR";
@@ -21,6 +25,9 @@ export interface VideoProject {
   visualSource: VisualSource;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
+  // Metricas animadas (contadores, barras, versus...) quemadas en el render.
+  overlaysEnabled: boolean;
+  overlayTheme: OverlayTheme;
   renderQuality: RenderQuality;
   // true si el proyecto ya desconto su video (re-renderizarlo no descuenta).
   renderCharged: boolean;

@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
 import { useAccount } from "@/lib/accountContext";
-import type { Job, Asset, RenderQuality, VisualSource } from "@/types";
+import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme } from "@/types";
 
 interface Props {
   projectId: string;
@@ -288,6 +288,8 @@ export default function PreviewPanel({ projectId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
+  const [overlaysEnabled, setOverlaysEnabled] = useState(false);
+  const [overlayTheme, setOverlayTheme] = useState<OverlayTheme>("documental");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
   // "Solo IA"/"Mixto" (video con SnapGen) solo para admins; el backend lo
@@ -308,6 +310,8 @@ export default function PreviewPanel({ projectId }: Props) {
       if (p) {
         setTransitionsEnabled(p.transitionsEnabled);
         setSubtitlesEnabled(p.subtitlesEnabled);
+        setOverlaysEnabled(p.overlaysEnabled);
+        setOverlayTheme(p.overlayTheme);
         setRenderQuality(p.renderQuality);
         setVisualSource(p.visualSource);
       }
@@ -413,6 +417,8 @@ export default function PreviewPanel({ projectId }: Props) {
         visualSource: source,
         transitionsEnabled,
         subtitlesEnabled,
+        overlaysEnabled,
+        overlayTheme,
         renderQuality,
       });
       const newJob = await projectsService.runPipeline(projectId);
@@ -518,6 +524,41 @@ export default function PreviewPanel({ projectId }: Props) {
           className="w-4 h-4 accent-[#E30B10]"
         />
       </label>
+
+      {/* Metricas animadas (contadores, barras, versus, linea de tiempo,
+          ubicacion, capitulos) -- las elige plan_overlays al generar y las
+          dibuja render_video (video_projects.overlays_enabled). */}
+      <div
+        className="flex flex-col gap-2 w-full max-w-xs px-3 py-2.5 rounded-lg"
+        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
+      >
+        <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <span className="text-xs font-medium" style={{ color: "var(--foreground)" }}>
+            Métricas animadas
+          </span>
+          <input
+            type="checkbox"
+            checked={overlaysEnabled}
+            onChange={(e) => setOverlaysEnabled(e.target.checked)}
+            className="w-4 h-4 accent-[#E30B10]"
+          />
+        </label>
+        {overlaysEnabled && (
+          <select
+            value={overlayTheme}
+            onChange={(e) => setOverlayTheme(e.target.value as OverlayTheme)}
+            className="w-full text-xs rounded-md px-2 py-1.5"
+            style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--foreground)" }}
+          >
+            <option value="documental">Documental (ámbar)</option>
+            <option value="ciencia">Ciencia / espacio (cian)</option>
+            <option value="finanzas">Finanzas / negocios (verde)</option>
+            <option value="historia">Historia (dorado)</option>
+            <option value="crimen">True crime / misterio (rojo)</option>
+            <option value="minimal">Minimal (blanco)</option>
+          </select>
+        )}
+      </div>
 
       {/* Resolucion del render final -- ver render_video.tool.ts
           (video_projects.render_quality). 1080p tarda ~2x. */}

@@ -246,6 +246,7 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
 
       const sceneVisualAssets = visualAssetsByScene.get(scene.id) ?? [];
       const overlay = (scene.content as { overlay?: unknown } | null)?.overlay ?? null;
+      const overlays = (scene.content as { overlays?: unknown } | null)?.overlays ?? [];
 
       // Reparte [start, end] de la escena entre sus assets en orden,
       // usando metadata.duration_seconds como porcion de cada uno (el
@@ -302,6 +303,7 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
           ? { storage_key: sceneAssets[0].storage_key, metadata: sceneAssets[0].metadata, type: sceneAssets[0].type }
           : null,
         overlay,
+        overlays,
       });
     }
 

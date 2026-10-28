@@ -126,12 +126,31 @@ export type OverlayType =
   | "badge"
   | "data_viz_single"
   | "cta"
+  | "versus"
+  | "timeline"
+  | "location"
   | "ninguno";
+
+// Item de un overlay con varios valores (barras de data_viz_single, los dos
+// lados de versus, los hitos de timeline). `text` es el valor tal cual lo
+// dice el guion ("1,670 km/h"), `label` a que corresponde ("Quito").
+export interface OverlayItem {
+  label: string;
+  text: string;
+}
 
 export interface OverlaySpec {
   type: OverlayType;
   text: string;
   source: "script";
+  // Titulo/etiqueta corta (tambien literal del guion, ver generate_overlay).
+  label?: string;
+  items?: OverlayItem[];
+  // Posicion relativa (0-1) del texto dentro de la escena -- el render la
+  // usa para que el overlay aparezca cuando la narracion lo dice.
+  anchor?: number;
+  // Segundos en pantalla; sin esto el render usa el default de cada tipo.
+  duration?: number;
 }
 export interface Provider {
   id: string;
