@@ -218,18 +218,12 @@ export const projectsService = {
   // Prompts de imagen por escena para generar afuera (ej: Google Flow, sin
   // API) -- ver sceneBatch.service.ts::generateSceneImagePrompts. Solo genera
   // los que faltan salvo regenerate (opcionalmente limitado a sceneIds).
-  async getSceneImagePrompts(
-    projectId: string,
-    options?: { regenerate?: boolean; sceneIds?: string[] }
-  ): Promise<SceneImagePrompt[]> {
+  async getSceneImagePrompts(projectId: string): Promise<SceneImagePrompt[]> {
     const script = await this.getScript(projectId);
     if (!script) throw new Error("El proyecto todavía no tiene guion");
     const rows = await api.post<
       { scene_id: string; order: number; text: string; image_prompt: string | null; image_prompt_style_key?: string | null; image_prompt_edited?: boolean; has_visual: boolean; error?: string }[]
-    >(`/scripts/${script.id}/scenes/image-prompts`, {
-      ...(options?.regenerate ? { regenerate: true } : {}),
-      ...(options?.sceneIds ? { scene_ids: options.sceneIds } : {}),
-    });
+    >(`/scripts/${script.id}/scenes/image-prompts`, {});
     return rows.map((r) => ({
       sceneId: r.scene_id,
       order: r.order,
