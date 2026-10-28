@@ -1,7 +1,6 @@
--- Metricas animadas (contadores, barras, versus, linea de tiempo,
--- ubicacion, capitulos, CTA) quemadas en el render -- ver
--- tools/planOverlays.tool.ts (que va en cada escena) y lib/overlayAss.ts
--- (como se dibuja). Default false: no cambia el comportamiento de
+-- Graficos animados (cifras, comparaciones, mapas, diagramas...)
+-- superpuestos en el render -- ver tools/planOverlays.tool.ts (que va en
+-- cada momento del guion) y motion/ (Remotion, como se dibuja). Default false: no cambia el comportamiento de
 -- proyectos existentes. Mismo patron que subtitles_enabled.
 alter table public.video_projects
   add column if not exists overlays_enabled boolean not null default false;

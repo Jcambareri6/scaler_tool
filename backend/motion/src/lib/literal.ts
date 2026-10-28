@@ -5,8 +5,6 @@
 export interface CompactNumber {
   value: number;
   decimals: number;
-  decimalSep: string;
-  thousandsSep: string;
   prefix: string;
   unit: string;
 }
@@ -59,16 +57,17 @@ export function parseLiteralNumber(text: string): CompactNumber | null {
   return {
     value,
     decimals: decimalSep ? (normalized.split(".")[1]?.length ?? 0) : 0,
-    decimalSep: decimalSep || ",",
-    // Miles siempre agrupados en pantalla (el lector no los ve escritos).
-    thousandsSep: thousandsSep || (decimalSep === "." ? "," : "."),
     prefix,
     unit,
   };
 }
 
-export function formatNumber(value: number, fmt: CompactNumber): string {
-  const [intPart, decPart] = value.toFixed(fmt.decimals).split(".");
-  const grouped = intPart!.length > 3 ? intPart!.replace(/\B(?=(\d{3})+(?!\d))/g, fmt.thousandsSep) : intPart!;
-  return decPart ? `${grouped}${fmt.decimalSep}${decPart}` : grouped;
+// Todas las cifras de un video con el mismo formato (el del idioma del
+// canal), aunque el guion mezcle "1.500" y "1,000".
+export function formatNumber(value: number, fmt: CompactNumber, locale = "es-AR"): string {
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: fmt.decimals,
+    maximumFractionDigits: fmt.decimals,
+    useGrouping: true,
+  }).format(value);
 }

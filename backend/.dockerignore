@@ -6,3 +6,6 @@ supabase
 .env
 .env.*
 *.log
+motion/node_modules
+motion/build
+motion/out

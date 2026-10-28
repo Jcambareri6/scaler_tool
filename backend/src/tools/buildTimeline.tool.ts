@@ -3,6 +3,8 @@ import type { TranscribedWord } from "./transcribeAudio.tool.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
 import { alignScriptTokens, tokenizeScript, type TokenTiming } from "../lib/wordAlignment.js";
+import { anchorSceneOverlays } from "../lib/overlayTiming.js";
+import type { OverlaySpec } from "../types/shared/typeShared.js";
 
 export interface BuildTimelineInput {
   video_project_id: string;
@@ -240,13 +242,25 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
 
     const timelineScenes: Record<string, unknown>[] = [];
 
+    // Indice del primer token de cada escena dentro de scriptWords (mismo
+    // orden que wordTimings) -- para anclar los overlays a su palabra.
+    let tokenCursor = 0;
+    const firstTokenIndex = sceneRows.map((scene) => {
+      const first = tokenCursor;
+      tokenCursor += sceneTokens(scene).length;
+      return first;
+    });
+
     for (const [sceneIndex, scene] of sceneRows.entries()) {
       const { start, end } = ranges[sceneIndex]!;
       const durationSeconds = end - start;
 
       const sceneVisualAssets = visualAssetsByScene.get(scene.id) ?? [];
       const overlay = (scene.content as { overlay?: unknown } | null)?.overlay ?? null;
-      const overlays = (scene.content as { overlays?: unknown } | null)?.overlays ?? [];
+      const rawOverlays = (scene.content as { overlays?: OverlaySpec[] } | null)?.overlays;
+      const overlays = Array.isArray(rawOverlays)
+        ? anchorSceneOverlays(rawOverlays, sceneTokens(scene), firstTokenIndex[sceneIndex]!, wordTimings, start, end)
+        : [];
 
       // Reparte [start, end] de la escena entre sus assets en orden,
       // usando metadata.duration_seconds como porcion de cada uno (el

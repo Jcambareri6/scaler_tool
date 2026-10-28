@@ -3,7 +3,7 @@ export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "E
 export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 
 // Paleta de las metricas animadas segun el genero del video (ver
-// backend lib/overlayAss.ts).
+// backend motion/src/theme.ts).
 export type OverlayTheme = "documental" | "ciencia" | "finanzas" | "historia" | "crimen" | "minimal";
 
 export type RenderQuality = "720p" | "1080p";

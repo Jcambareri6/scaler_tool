@@ -534,7 +534,7 @@ export default function PreviewPanel({ projectId }: Props) {
       >
         <label className="flex items-center justify-between gap-3 cursor-pointer">
           <span className="text-xs font-medium" style={{ color: "var(--foreground)" }}>
-            Métricas animadas
+            Gráficos animados
           </span>
           <input
             type="checkbox"

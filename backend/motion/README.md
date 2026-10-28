@@ -1,45 +1,60 @@
 # motion — gráficos animados con Remotion
 
 Componentes animados (cifras, comparaciones, mapas, diagramas…) que el render
-superpone sobre el video base de ffmpeg. Arquitectura:
+superpone sobre el video base de ffmpeg.
 
-1. El backend decide qué gráfico va en cada momento del guion (spec en `src/spec.ts`).
-2. Remotion renderiza **solo esos tramos** como clips con transparencia (ProRes 4444).
-3. ffmpeg los superpone sobre el video base en el segundo exacto.
+## Cómo encaja en el pipeline
 
-Temas por canal/género en `src/theme.ts`; cifras del guion → forma compacta en
-`src/lib/literal.ts` ("más de 1.000 km por hora" → `+` `1.000` `km/h`, mismo número).
+1. `plan_overlays` (backend) lee el guion completo y elige qué gráfico va en
+   cada momento, **solo entre los tipos de `catalog.json`**.
+2. `generate_overlay` valida en modo estricto (textos literales del guion).
+3. `build_timeline` ancla cada gráfico a la palabra exacta donde se narra
+   (timing de Whisper, `src/lib/overlayTiming.ts` del backend).
+4. `render_video` ubica los gráficos sin que se pisen, llama a
+   `scripts/render-overlays.ts` (un solo navegador para todo el video) y
+   superpone los clips en la pasada final de ffmpeg (`src/lib/motion.ts`).
 
-## Fase 0 (prueba técnica)
+Remotion renderiza **solo la animación de entrada** de cada gráfico
+(`introSeconds` en `catalog.json`); ffmpeg congela el último frame el resto
+del tiempo y hace el fundido de salida. Los gráficos salen a la resolución
+del proyecto (720p/1080p) y con el formato de números del idioma del canal.
+
+Si el paquete no está instalado (ej. la API en Render sin worker) o el render
+de gráficos falla, el video sale igual, sin gráficos.
+
+## Agregar un componente
+
+1. Componente en `src/components/` (recibe `spec`, `theme`, `exit`, `locale`).
+2. Caso en `src/Overlay.tsx`.
+3. Entrada en `catalog.json` con su `introSeconds`.
+4. Descripción para el planificador en `TYPE_GUIDE` de
+   `backend/src/tools/planOverlays.tool.ts`.
+
+## Comandos
 
 ```bash
 npm install
-REMOTION_BROWSER_EXECUTABLE=/ruta/a/chrome-headless-shell \
-FFMPEG_PATH=/ruta/a/ffmpeg \
-npm run render:sample -- out video-base.mp4 1
+npm run build            # compila los componentes a build/ (lo hace el Dockerfile)
+npm run ensure-browser   # baja el Chrome Headless Shell (lo hace el Dockerfile)
+npm run typecheck
+npm run render:sample -- out video-base.mp4 1   # prueba suelta
 ```
 
-Sin `REMOTION_BROWSER_EXECUTABLE`, Remotion baja su propio Chrome Headless Shell.
-`SAMPLE_SECONDS` cambia la duración del clip; `REMOTION_CONCURRENCY` los hilos.
+Variables: `REMOTION_BROWSER_EXECUTABLE` (usar un Chrome ya instalado),
+`REMOTION_CONCURRENCY`, y en el backend `MOTION_DIR` (default `./motion`).
 
-### Resultados (contenedor de 4 núcleos, 1080p, 30 fps)
+## Mediciones (contenedor de 4 núcleos)
 
-| Paso | Tiempo |
+| Caso | Tiempo |
 |---|---|
-| bundle (una vez por proceso, se puede cachear) | 14.7 s |
-| abrir navegador + elegir composición | 2.5 s |
-| render 135 frames (4.5 s de gráfico) | 14.1 s |
-| render 540 frames (18 s) | 48.2 s → ~11 frames/s |
-| superponer con ffmpeg (6.5 s de video) | 10.3 s |
+| Fase 0: gráfico completo de 4.5 s a 1080p (135 frames) | 14.1 s |
+| Fase 1: 2 gráficos a 720p, solo entrada (2 × 51 frames), con arranque del navegador | 8.9 s |
+| Superponer 2 gráficos en 16 s de video 720p | 6.2 s |
 
-Concurrencia 4 no mejoró (14.2 s): el costo está en capturar PNG + codificar ProRes.
-ProRes 4444 pesa ~14 MB/s (temporal, se borra después de componer).
+Proyección para un video de 20 min con un gráfico cada 30 s (40 gráficos):
+~2–3 min a 720p, ~5 min a 1080p. La pasada final de ffmpeg ya existía.
 
-Proyección: un video de 20 min con un gráfico cada 30 s (40 × 4.5 s = 5.400 frames)
-≈ 8 min extra de render. Optimizaciones pendientes para la Fase 1:
+## Licencia
 
-- Renderizar solo la parte animada y congelar el último frame en ffmpeg
-  (la mayoría de los gráficos quedan quietos después de ~1.5 s): −50 % o más.
-- Renderizar a 720p cuando el proyecto es 720p: ~−55 % de píxeles.
-- Todos los gráficos de un video en un solo proceso (bundle y navegador una vez).
-- Si hace falta escalar: Remotion Lambda (render en paralelo en AWS).
+Remotion es gratis para empresas de hasta 3 personas; con 4 o más hace falta
+la Company License (ver https://remotion.dev/docs/license).

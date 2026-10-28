@@ -1,19 +1,29 @@
-// Contrato entre el planificador (backend) y los componentes. En la Fase 0
-// hay un solo tipo; el resto de los componentes se suman aca.
-export interface BigNumberSpec {
-  type: "big_number";
-  // Cifra tal cual la dice el guion ("más de 1.000 km por hora").
+// Contrato entre el backend (OverlaySpec en typeShared.ts) y los
+// componentes. Mismo shape: `text`/`label`/`items` salen literales del guion.
+export interface OverlayItem {
+  label: string;
   text: string;
-  // Que es la cifra ("viento hacia el este").
-  label?: string;
 }
 
-export type OverlaySpec = BigNumberSpec;
+export interface OverlaySpec {
+  type: string;
+  text: string;
+  label?: string;
+  items?: OverlayItem[];
+}
 
 export interface OverlayProps {
   spec: OverlaySpec;
   theme?: string;
+  // Duracion total en pantalla (preview/editor). Al renderizar para el
+  // video final solo se genera la entrada (ver catalog.ts) y `exit` va en
+  // false: la salida la hace ffmpeg.
   durationSeconds: number;
+  exit?: boolean;
+  // Formato de las cifras ("es-AR" -> 1.500,5; "en-US" -> 1,500.5).
+  locale?: string;
+  width?: number;
+  height?: number;
   // Necesario para que <Composition> acepte los props (Record<string, unknown>).
   [key: string]: unknown;
 }

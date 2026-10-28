@@ -1,12 +1,22 @@
 import { AbsoluteFill, Easing, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
-import type { BigNumberSpec } from "../spec";
+import type { OverlaySpec } from "../spec";
 import type { Theme } from "../theme";
 import { formatNumber, parseLiteralNumber } from "../lib/literal";
 
 // Cifra que impacta: guion de acento arriba, prefijo y unidad en acento,
 // numero enorme que cuenta desde 0, descripcion debajo. Sin caja: va
 // directo sobre el video, con un velo suave a la izquierda para que se lea.
-export function BigNumber({ spec, theme }: { spec: BigNumberSpec; theme: Theme }) {
+export function BigNumber({
+  spec,
+  theme,
+  exit: withExit = true,
+  locale,
+}: {
+  spec: OverlaySpec;
+  theme: Theme;
+  exit?: boolean | undefined;
+  locale?: string | undefined;
+}) {
   const frame = useCurrentFrame();
   const { fps, durationInFrames, height } = useVideoConfig();
   const s = height / 1080;
@@ -19,10 +29,12 @@ export function BigNumber({ spec, theme }: { spec: BigNumberSpec; theme: Theme }
     extrapolateRight: "clamp",
   });
   const enter = (delay: number) => spring({ frame: frame - delay, fps, config: { damping: 200 }, durationInFrames: 18 });
-  const exit = interpolate(frame, [durationInFrames - 12, durationInFrames - 1], [1, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  const exit = withExit
+    ? interpolate(frame, [durationInFrames - 12, durationInFrames - 1], [1, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      })
+    : 1;
   const dash = interpolate(frame, [0, 14], [0, 1], { easing: Easing.out(Easing.cubic), extrapolateRight: "clamp" });
 
   const shadow = "0 2px 24px rgba(0,0,0,0.45)";
@@ -61,7 +73,7 @@ export function BigNumber({ spec, theme }: { spec: BigNumberSpec; theme: Theme }
                   fontVariantNumeric: "tabular-nums",
                 }}
               >
-                {formatNumber(parsed.value * counted, parsed)}
+                {formatNumber(parsed.value * counted, parsed, locale)}
               </span>
               {parsed.unit && (
                 <span style={{ color: theme.accent, fontWeight: 600, fontSize: 64 * s }}>{parsed.unit}</span>

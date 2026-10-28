@@ -5,6 +5,8 @@
   "description": "Graficos animados (Remotion) que el render superpone sobre el video base -- ver README.md",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsx scripts/build-bundle.ts",
+    "ensure-browser": "tsx scripts/ensure-browser.ts",
     "render:sample": "tsx scripts/render-sample.ts"
   },
   "dependencies": {
@@ -14,12 +16,12 @@
     "@remotion/renderer": "4.0.534",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "remotion": "4.0.534"
+    "remotion": "4.0.534",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
-    "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   }
 }

@@ -25,8 +25,16 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
-import { buildOverlayAss } from "../lib/overlayAss.js";
-import type { OverlaySpec } from "../types/shared/typeShared.js";
+import { placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
+import {
+  motionCatalog,
+  motionOverlayGraph,
+  numberLocale,
+  renderMotionClips,
+  supportedOverlayTypes,
+  type MotionClip,
+} from "../lib/motion.js";
+import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
@@ -139,10 +147,10 @@ interface TimelineAssetEntry {
 
 interface TimelineSceneEntry {
   scene_id: string;
-  // Metricas animadas ya validadas (ver plan_overlays/generate_overlay),
-  // dibujadas por lib/overlayAss.ts.
-  overlay?: OverlaySpec | null;
-  overlays?: OverlaySpec[] | null;
+  // Graficos animados ya validados y anclados a su palabra (ver
+  // plan_overlays/generate_overlay/build_timeline), dibujados por motion/.
+  overlay?: OverlaySceneTiming["overlay"];
+  overlays?: OverlaySceneTiming["overlays"];
   order: number;
   start: string;
   end: string;
@@ -778,27 +786,41 @@ function subtitlesFilter(srtPath: string): string {
   return `subtitles=${escapeForSubtitlesFilter(srtPath)}:force_style='${style}'`;
 }
 
-// Overlays (metricas animadas) debajo y subtitulos arriba, en el mismo
-// filtro: una sola pasada de encode para los dos.
-function burnFilters(assPath: string | null, srtPath: string | null): string {
-  return [assPath ? `ass=${escapeForSubtitlesFilter(assPath)}` : null, srtPath ? subtitlesFilter(srtPath) : null]
-    .filter(Boolean)
-    .join(",");
+// Graficos animados (clips de motion/) debajo y subtitulos arriba, en el
+// mismo filtergraph: una sola pasada de encode para los dos. Termina en
+// [vout]; los clips entran como inputs a partir de `firstInputIndex`.
+function burnGraph(
+  sourceLabel: string,
+  clips: MotionClip[],
+  firstInputIndex: number,
+  srtPath: string | null
+): { inputArgs: string[]; filter: string } {
+  const overlays = motionOverlayGraph(clips, sourceLabel, firstInputIndex);
+  const parts = overlays.filter ? [overlays.filter] : [];
+  parts.push(`[${overlays.outLabel}]${srtPath ? subtitlesFilter(srtPath) : "null"}[vout]`);
+  return { inputArgs: overlays.inputArgs, filter: parts.join(";") };
 }
 
 async function burnSubtitles(
   inputPath: string,
-  filter: string,
+  clips: MotionClip[],
+  srtPath: string | null,
   targetVideoBitrateBps: number | null,
   outputPath: string,
   onTime?: (seconds: number) => void
 ): Promise<void> {
+  const graph = burnGraph("0:v", clips, 1, srtPath);
   await runFfmpeg(
     [
       "-i",
       inputPath,
-      "-vf",
-      filter,
+      ...graph.inputArgs,
+      "-filter_complex",
+      graph.filter,
+      "-map",
+      "[vout]",
+      "-map",
+      "0:a",
       ...videoCodecArgs(targetVideoBitrateBps),
       "-c:a",
       "copy",
@@ -886,9 +908,14 @@ async function realRender(
   if (overlayOptionsError) {
     console.warn(`[render_video] no se pudo leer overlays_enabled (¿se corrio la migracion 20261028000000_video_overlays.sql?): ${overlayOptionsError.message}`);
   }
-  const overlayAss = overlayOptions?.overlays_enabled ? buildOverlayAss(scenes, overlayOptions.overlay_theme) : null;
-  const overlaysEnabled = Boolean(overlayAss && overlayAss.count > 0);
-  const burnEnabled = subtitlesEnabled || overlaysEnabled;
+  if (overlayOptions?.overlays_enabled && !motionCatalog()) {
+    console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
+  }
+  const placedOverlays =
+    overlayOptions?.overlays_enabled && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
+  // Planificado: si despues falla el render de los graficos, el video sale
+  // igual sin ellos (ver motionClips).
+  const burnEnabled = subtitlesEnabled || placedOverlays.length > 0;
   const { quality: renderQuality, size: outputSize } = resolveOutputSize(project?.render_quality);
   assignSegmentDurations(segments, transitionsEnabled);
 
@@ -995,15 +1022,39 @@ async function realRender(
     }
 
     const outputPath = path.join(workDir, "final.mp4");
+    // Graficos animados: Remotion en un proceso aparte, todos de una (un
+    // solo navegador). Un fallo no tira el video -- sale sin graficos.
+    let motionClips: MotionClip[] = [];
+    if (placedOverlays.length > 0) {
+      console.log(`[render_video] animando ${placedOverlays.length} graficos...`);
+      await progress(PROGRESS_BATCHES_END, "Animando los gráficos...", true);
+      try {
+        motionClips = await renderMotionClips(placedOverlays, {
+          width: outputSize.width,
+          height: outputSize.height,
+          theme: (overlayOptions?.overlay_theme as string | null | undefined) ?? null,
+          locale: numberLocale((await getChannelSettingsForProject(videoProjectId)).channel_language),
+          workDir,
+          onProgress: (done, total) =>
+            void progress(
+              PROGRESS_BATCHES_END + (done / total) * (PROGRESS_FINAL_START - PROGRESS_BATCHES_END - 1),
+              `Animando los gráficos (${done}/${total})...`
+            ),
+        });
+      } catch (motionError) {
+        console.warn("[render_video] no se pudieron animar los graficos, el video sale sin ellos:", motionError);
+      }
+    }
+
     const srtPath = path.join(workDir, "subtitles.srt");
-    const assPath = path.join(workDir, "overlays.ass");
-    const writeBurnFiles = async (): Promise<string> => {
-      if (subtitlesEnabled) await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
-      if (overlaysEnabled) await writeFile(assPath, overlayAss!.ass, "utf-8");
-      return burnFilters(overlaysEnabled ? assPath : null, subtitlesEnabled ? srtPath : null);
+    const writeSrt = async (): Promise<string | null> => {
+      if (!subtitlesEnabled) return null;
+      await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
+      return srtPath;
     };
-    const burnFiles = [...(subtitlesEnabled ? [srtPath] : []), ...(overlaysEnabled ? [assPath] : [])];
-    const burnLabel = overlaysEnabled && subtitlesEnabled ? "métricas y subtitulos" : overlaysEnabled ? "métricas animadas" : "subtitulos";
+    const burnFiles = [...(subtitlesEnabled ? [srtPath] : []), ...motionClips.map((c) => c.path)];
+    const burnLabel =
+      motionClips.length > 0 && subtitlesEnabled ? "gráficos y subtitulos" : motionClips.length > 0 ? "gráficos animados" : "subtitulos";
     // true si los subtitulos ya se quemaron en la pasada de audio (caso con
     // transiciones), para no hacer una pasada extra al final.
     let subtitlesBurned = false;
@@ -1066,13 +1117,17 @@ async function realRender(
         await assembleBatchesWithTransitions(batchOutputPaths, batchDurations, targetVideoBitrateBps, workDir, assembledPath, "intermediate");
       }
 
-      let subtitlesChain = "";
+      const safetyPadSeconds = 1;
+      let graph = { inputArgs: [] as string[], filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[vout]` };
       if (burnEnabled) {
-        subtitlesChain = `,${await writeBurnFiles()}`;
+        const burn = burnGraph("padded", motionClips, 2, await writeSrt());
+        graph = {
+          inputArgs: burn.inputArgs,
+          filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[padded];${burn.filter}`,
+        };
         subtitlesBurned = true;
       }
 
-      const safetyPadSeconds = 1;
       console.log(`[render_video] agregando audio${subtitlesBurned ? " + subtitulos" : ""}...`);
       const finalMessage = subtitlesBurned ? `Codificando el video final con ${burnLabel}` : "Codificando el video final";
       await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
@@ -1081,10 +1136,11 @@ async function realRender(
         assembledPath,
         "-i",
         audioPath,
+        ...graph.inputArgs,
         "-filter_complex",
-        `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}${subtitlesChain}[padded]`,
+        graph.filter,
         "-map",
-        "[padded]",
+        "[vout]",
         "-map",
         "1:a",
         ...videoCodecArgs(targetVideoBitrateBps, "final"),
@@ -1105,14 +1161,15 @@ async function realRender(
     let finalOutputPath = outputPath;
     if (burnEnabled && !subtitlesBurned) {
       console.log(
-        `[render_video] quemando ${burnLabel} (${overlayAss?.count ?? 0} overlays, ${subtitlesEnabled ? content.segments!.length : 0} subtitulos)...`
+        `[render_video] quemando ${burnLabel} (${motionClips.length} graficos, ${subtitlesEnabled ? content.segments!.length : 0} subtitulos)...`
       );
-      const filter = await writeBurnFiles();
+      const srt = await writeSrt();
       finalOutputPath = path.join(workDir, "final-subtitled.mp4");
       await progress(PROGRESS_FINAL_START + 2, `Agregando ${burnLabel}...`, true);
       await burnSubtitles(
         outputPath,
-        filter,
+        motionClips,
+        srt,
         targetVideoBitrateBps,
         finalOutputPath,
         encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, `Agregando ${burnLabel}`)

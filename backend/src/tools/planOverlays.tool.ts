@@ -5,11 +5,12 @@ import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { providerApiError } from "../lib/errors.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
+import { supportedOverlayTypes } from "../lib/motion.js";
 
 // Decide QUE metrica animada va en cada escena (contador, barras, versus,
 // linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
 // una sola vez -- asi el ritmo se reparte en todo el video y no se repite
-// el mismo tipo escena tras escena. El render (lib/overlayAss.ts) los
+// el mismo tipo escena tras escena. El render (motion/, Remotion) los
 // dibuja; generate_overlay valida despues que cada texto salga del guion.
 //
 // Patrones sacados de canales documentales tipo "¿Que pasaria si...?"
@@ -30,18 +31,26 @@ const MAX_SCRIPT_CHARS = 60000;
 const TARGET_SECONDS_PER_OVERLAY = 25;
 const MAX_OVERLAYS_PER_SCENE = 3;
 
-const PLANNABLE_TYPES: OverlayType[] = [
-  "big_number",
-  "data_viz_single",
-  "versus",
-  "timeline",
-  "location",
-  "title_card",
-  "lower_third",
-  "rank_reveal",
-  "badge",
-  "cta",
-];
+// Que hace cada tipo (para el prompt). Solo se le ofrecen al LLM los que
+// tienen componente en motion/ (ver supportedOverlayTypes): el catalogo
+// crece por fases sin tocar este archivo.
+const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
+  big_number: 'una cifra con unidad que impacta ("1.500 km por hora", "el 70% de las personas", "40.000 millones"). Se anima como contador. "label" = de que es la cifra.',
+  data_viz_single: 'comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.',
+  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados.',
+  timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6.',
+  location: 'cuando la narracion nos lleva a un lugar concreto ("Quito", "el Serengueti"). "text" = el lugar, "label" opcional = el dato del lugar.',
+  title_card: 'inicio de un capitulo/parte o la pregunta central del video. "text" = el titulo, "label" opcional = subtitulo.',
+  rank_reveal: 'posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.',
+  lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis").',
+  badge: 'etiqueta corta de contexto arriba ("Dato real", una fecha).',
+  cta: 'cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").',
+};
+
+function plannableTypes(): OverlayType[] {
+  const supported = new Set(supportedOverlayTypes());
+  return (Object.keys(TYPE_GUIDE) as OverlayType[]).filter((t) => supported.has(t));
+}
 
 export interface PlanOverlaysScene {
   order: number;
@@ -64,27 +73,20 @@ export interface PlanOverlaysOutput {
   source: "anthropic" | "openai" | "heuristic";
 }
 
-const SYSTEM_PROMPT = `Sos el motion designer de un canal de YouTube faceless (documentales, explicativos, tops, finanzas, historia, curiosidades). Sobre el video de stock/IA se superponen METRICAS ANIMADAS que refuerzan lo que dice la narracion. Te paso el guion dividido en escenas numeradas con su duracion. Elegi que overlays van en cada escena.
+function buildSystemPrompt(types: OverlayType[]): string {
+  return `Sos el motion designer de un canal de YouTube faceless de cualquier nicho (ciencia, animales, psicologia, finanzas, historia, curiosidades...). Sobre el video de stock/IA se superponen GRAFICOS ANIMADOS que refuerzan lo que dice la narracion. Te paso el guion dividido en escenas numeradas con su duracion. Elegi que graficos van en cada escena.
 
-TIPOS DISPONIBLES (usa el que mejor encaje con lo que se narra):
-- big_number: una cifra con unidad que impacta ("1.500 km por hora", "21 km", "4.600 millones de años"). Se anima como contador. "label" = de que es la cifra.
-- data_viz_single: comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.
-- versus: exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora", "6 meses de luz" vs "6 meses de oscuridad"). "items" = los 2 lados.
-- timeline: progresion o hitos en orden (duracion del dia que crece "24 horas"->"30 horas"->"40"->"100", o fechas/eras). "items" = hitos en orden, 2 a 6.
-- location: cuando la narracion nos lleva a un lugar concreto ("Quito", "la Antártida"). "text" = el lugar, "label" opcional = el dato del lugar ("a casi 3,000 m").
-- title_card: inicio de un capitulo/escenario/parte ("Escenario 1", "La Tierra se detiene en seco") o la pregunta central del video. "text" = el titulo, "label" opcional = subtitulo.
-- rank_reveal: posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.
-- lower_third: dato clave o nombre propio que conviene fijar en pantalla sin ser una cifra (concepto, nombre de un fenomeno: "fuerza de Coriolis").
-- badge: etiqueta corta de contexto arriba ("Dato real", "Hoy", una fecha).
-- cta: cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").
+TIPOS DISPONIBLES (usa el que mejor encaje con lo que se narra; no hay otros):
+${types.map((t) => `- ${t}: ${TYPE_GUIDE[t]}`).join("\n")}
 
 REGLAS ESTRICTAS:
 1. "text", "label" y cada items[].text / items[].label tienen que ser fragmentos COPIADOS LITERALMENTE del guion (mismas palabras, mismos numeros, misma forma de escribirlos). Nunca inventes, redondees, traduzcas ni reformules. Si no podes copiarlo literal, no lo pongas. items[].text tiene que estar en el texto de ESA escena.
 2. Textos cortos: text <= 6 palabras (salvo title_card <= 8), label <= 5 palabras, items[].label <= 3 palabras.
 3. Ritmo: aproximadamente un overlay cada ${TARGET_SECONDS_PER_OVERLAY} segundos de video en total, maximo ${MAX_OVERLAYS_PER_SCENE} por escena. Muchas escenas pueden no tener ninguno. Prioriza las cifras y comparaciones mas impactantes; la primera cifra fuerte del gancho siempre va.
-4. Varia los tipos: no pongas tres big_number seguidos si hay una comparacion que se puede mostrar como barras o versus.
-5. Si el guion no tiene cifras (relato, historia), usa title_card, location, lower_third y timeline con fechas.
+4. Si hay mas de un tipo disponible, varia: no repitas el mismo tipo tres veces seguidas si otro muestra mejor lo que se narra.
+5. Si un tramo no tiene nada que encaje con los tipos disponibles, no pongas nada: es mejor un grafico menos que uno forzado.
 6. Dentro de cada escena, lista los overlays en el orden en que se narran.`;
+}
 
 function buildUserPrompt(input: PlanOverlaysInput): string {
   const totalSeconds = input.scenes.reduce((sum, s) => sum + (s.duration_seconds ?? 0), 0);
@@ -109,7 +111,8 @@ function buildUserPrompt(input: PlanOverlaysInput): string {
   return `${header}\n\nGUION POR ESCENAS:\n\n${body.join("\n\n")}`;
 }
 
-const RETURN_OVERLAYS_TOOL: Anthropic.Tool = {
+function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
+  return {
   name: "return_overlays",
   description: "Devuelve los overlays elegidos, agrupados por numero de escena.",
   input_schema: {
@@ -126,7 +129,7 @@ const RETURN_OVERLAYS_TOOL: Anthropic.Tool = {
               items: {
                 type: "object",
                 properties: {
-                  type: { type: "string", enum: PLANNABLE_TYPES },
+                  type: { type: "string", enum: types },
                   text: { type: "string" },
                   label: { type: "string" },
                   items: {
@@ -148,9 +151,10 @@ const RETURN_OVERLAYS_TOOL: Anthropic.Tool = {
     },
     required: ["scenes"],
   },
-};
+  };
+}
 
-async function planWithAnthropic(user: string): Promise<unknown[] | null> {
+async function planWithAnthropic(user: string, types: OverlayType[]): Promise<unknown[] | null> {
   const provider = await getActiveProvider("anthropic");
   if (!provider?.api_key) return null;
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_ANTHROPIC_MODEL;
@@ -161,9 +165,9 @@ async function planWithAnthropic(user: string): Promise<unknown[] | null> {
       .stream({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
-        system: SYSTEM_PROMPT,
-        tools: [RETURN_OVERLAYS_TOOL],
-        tool_choice: { type: "tool", name: RETURN_OVERLAYS_TOOL.name },
+        system: buildSystemPrompt(types),
+        tools: [returnOverlaysTool(types)],
+        tool_choice: { type: "tool", name: "return_overlays" },
         messages: [{ role: "user", content: user }],
       })
       .finalMessage()
@@ -173,7 +177,7 @@ async function planWithAnthropic(user: string): Promise<unknown[] | null> {
   return Array.isArray(scenes) ? scenes : [];
 }
 
-async function planWithOpenAI(user: string): Promise<unknown[] | null> {
+async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unknown[] | null> {
   const provider = await getActiveProvider("openai");
   if (!provider?.api_key) return null;
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_OPENAI_MODEL;
@@ -190,7 +194,7 @@ async function planWithOpenAI(user: string): Promise<unknown[] | null> {
           messages: [
             {
               role: "system",
-              content: `${SYSTEM_PROMPT}\n\nRespondé EXCLUSIVAMENTE con un objeto JSON { "scenes": [ { "order": number, "overlays": [ { "type": string, "text": string, "label"?: string, "items"?: [ { "label": string, "text": string } ] } ] } ] }.`,
+              content: `${buildSystemPrompt(types)}\n\nRespondé EXCLUSIVAMENTE con un objeto JSON { "scenes": [ { "order": number, "overlays": [ { "type": string, "text": string, "label"?: string, "items"?: [ { "label": string, "text": string } ] } ] } ] }.`,
             },
             { role: "user", content: user },
           ],
@@ -214,10 +218,10 @@ async function planWithOpenAI(user: string): Promise<unknown[] | null> {
   }
 }
 
-function toOverlaySpec(raw: unknown): OverlaySpec | null {
+function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown };
-  if (typeof r.type !== "string" || !(PLANNABLE_TYPES as string[]).includes(r.type)) return null;
+  if (typeof r.type !== "string" || !(types as string[]).includes(r.type)) return null;
   if (typeof r.text !== "string" || !r.text.trim()) return null;
   const items = Array.isArray(r.items)
     ? r.items
@@ -286,32 +290,36 @@ export const planOverlaysTool: ToolDefinition<PlanOverlaysInput, PlanOverlaysOut
   },
   async execute(input) {
     const scenes = input.scenes.filter((s) => s.text?.trim());
-    if (scenes.length === 0) return { overlays: {}, source: "heuristic" };
+    const types = plannableTypes();
+    // Sin componentes instalados (motion/ ausente) no tiene sentido pedir nada.
+    if (scenes.length === 0 || types.length === 0) return { overlays: {}, source: "heuristic" };
 
     const user = buildUserPrompt({ ...input, scenes });
     let raw: unknown[] | null = null;
     let source: PlanOverlaysOutput["source"] = "heuristic";
     try {
-      raw = await planWithAnthropic(user);
+      raw = await planWithAnthropic(user, types);
       if (raw) source = "anthropic";
     } catch (err) {
       console.warn("[plan_overlays] Claude fallo, probando OpenAI:", err);
     }
     if (!raw) {
       try {
-        raw = await planWithOpenAI(user);
+        raw = await planWithOpenAI(user, types);
         if (raw) source = "openai";
       } catch (err) {
         console.warn("[plan_overlays] OpenAI fallo, uso la heuristica:", err);
       }
     }
-    if (!raw) return { overlays: heuristicOverlays(scenes), source: "heuristic" };
+    if (!raw) {
+      return { overlays: types.includes("big_number") ? heuristicOverlays(scenes) : {}, source: "heuristic" };
+    }
 
     const overlays: Record<number, OverlaySpec[]> = {};
     for (const entry of raw) {
       const e = entry as { order?: unknown; overlays?: unknown };
       if (typeof e.order !== "number" || !Array.isArray(e.overlays)) continue;
-      const specs = e.overlays.map(toOverlaySpec).filter((o): o is OverlaySpec => o !== null);
+      const specs = e.overlays.map((o) => toOverlaySpec(o, types)).filter((o): o is OverlaySpec => o !== null);
       if (specs.length) overlays[e.order] = specs.slice(0, MAX_OVERLAYS_PER_SCENE);
     }
     return { overlays, source };

@@ -1,0 +1,6 @@
+{
+  "fps": 30,
+  "components": {
+    "big_number": { "introSeconds": 1.7 }
+  }
+}

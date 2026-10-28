@@ -330,7 +330,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // las escenas quedan sin overlays.
   let plannedOverlays: Record<number, OverlaySpec[]> = {};
   if (sceneRows.length > 0 && project.overlays_enabled) {
-    await reportJobProgress(ctx.jobId, 28, "Eligiendo las métricas animadas...", { force: true });
+    await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
     try {
       const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
         "plan_overlays",

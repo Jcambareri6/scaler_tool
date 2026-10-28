@@ -1,11 +1,11 @@
 import { Composition } from "remotion";
 import { Overlay } from "./Overlay";
+import { FPS } from "./catalog";
 import type { OverlayProps } from "./spec";
 
-const FPS = 30;
-
-// Una sola composicion generica: el tipo de grafico, el tema y la duracion
-// llegan por props (los arma el backend por cada momento del guion).
+// Una sola composicion generica: el tipo de grafico, el tema, la duracion y
+// la resolucion llegan por props (los arma el backend por cada momento del
+// guion; ver scripts/render-overlays.ts).
 export function Root() {
   return (
     <Composition
@@ -20,7 +20,11 @@ export function Root() {
         theme: "documental",
         durationSeconds: 4.5,
       } satisfies OverlayProps}
-      calculateMetadata={({ props }) => ({ durationInFrames: Math.max(1, Math.round(props.durationSeconds * FPS)) })}
+      calculateMetadata={({ props }) => ({
+        durationInFrames: Math.max(1, Math.round(props.durationSeconds * FPS)),
+        width: props.width ?? 1920,
+        height: props.height ?? 1080,
+      })}
     />
   );
 }
