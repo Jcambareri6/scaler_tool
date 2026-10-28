@@ -1052,6 +1052,10 @@ async function realRender(
       await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
       return srtPath;
     };
+    // burnEnabled se decidio antes de animar (calidad de las tandas); si
+    // Remotion fallo y no hay subtitulos, no queda nada que quemar y se
+    // evita una pasada de encode que no agrega nada.
+    const burnNeeded = subtitlesEnabled || motionClips.length > 0;
     const burnFiles = [...(subtitlesEnabled ? [srtPath] : []), ...motionClips.map((c) => c.path)];
     const burnLabel =
       motionClips.length > 0 && subtitlesEnabled ? "gráficos y subtitulos" : motionClips.length > 0 ? "gráficos animados" : "subtitulos";
@@ -1118,40 +1122,53 @@ async function realRender(
       }
 
       const safetyPadSeconds = 1;
-      let graph = { inputArgs: [] as string[], filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[vout]` };
-      if (burnEnabled) {
-        const burn = burnGraph("padded", motionClips, 2, await writeSrt());
-        graph = {
-          inputArgs: burn.inputArgs,
-          filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[padded];${burn.filter}`,
-        };
-        subtitlesBurned = true;
-      }
-
-      console.log(`[render_video] agregando audio${subtitlesBurned ? " + subtitulos" : ""}...`);
+      const srt = burnNeeded ? await writeSrt() : null;
+      subtitlesBurned = burnNeeded;
       const finalMessage = subtitlesBurned ? `Codificando el video final con ${burnLabel}` : "Codificando el video final";
+      const finalPass = (clips: MotionClip[]) => {
+        let graph = { inputArgs: [] as string[], filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[vout]` };
+        if (burnNeeded) {
+          const burn = burnGraph("padded", clips, 2, srt);
+          graph = {
+            inputArgs: burn.inputArgs,
+            filter: `[0:v]tpad=stop_mode=clone:stop_duration=${safetyPadSeconds}[padded];${burn.filter}`,
+          };
+        }
+        return runFfmpeg([
+          "-i",
+          assembledPath,
+          "-i",
+          audioPath,
+          ...graph.inputArgs,
+          "-filter_complex",
+          graph.filter,
+          "-map",
+          "[vout]",
+          "-map",
+          "1:a",
+          ...videoCodecArgs(targetVideoBitrateBps, "final"),
+          "-c:a",
+          "aac",
+          "-b:a",
+          `${AUDIO_BITRATE_BPS}`,
+          "-shortest",
+          "-y",
+          outputPath,
+        ], encodeProgress(PROGRESS_FINAL_START, PROGRESS_FINAL_END, finalMessage));
+      };
+
+      console.log(`[render_video] agregando audio${subtitlesBurned ? ` + ${burnLabel}` : ""}...`);
       await progress(PROGRESS_FINAL_START, `${finalMessage}...`, true);
-      await runFfmpeg([
-        "-i",
-        assembledPath,
-        "-i",
-        audioPath,
-        ...graph.inputArgs,
-        "-filter_complex",
-        graph.filter,
-        "-map",
-        "[vout]",
-        "-map",
-        "1:a",
-        ...videoCodecArgs(targetVideoBitrateBps, "final"),
-        "-c:a",
-        "aac",
-        "-b:a",
-        `${AUDIO_BITRATE_BPS}`,
-        "-shortest",
-        "-y",
-        outputPath,
-      ], encodeProgress(PROGRESS_FINAL_START, PROGRESS_FINAL_END, finalMessage));
+      try {
+        await finalPass(motionClips);
+      } catch (finalError) {
+        // Plan B: los clips de motion/ (ProRes con alfa, uno por grafico)
+        // son lo unico nuevo en esta pasada -- si algo de eso rompe ffmpeg,
+        // se repite sin ellos y el video sale igual, sin graficos.
+        if (motionClips.length === 0) throw finalError;
+        console.warn("[render_video] la pasada final con graficos fallo, se repite sin ellos:", finalError);
+        await finalPass([]);
+      }
       // assembledPath ya esta mezclado con audio en outputPath -- no hace
       // falta conservarlo (incluye el caso totalBatches===1, donde
       // assembledPath era la unica tanda).
@@ -1159,23 +1176,40 @@ async function realRender(
     }
 
     let finalOutputPath = outputPath;
-    if (burnEnabled && !subtitlesBurned) {
+    if (burnNeeded && !subtitlesBurned) {
       console.log(
         `[render_video] quemando ${burnLabel} (${motionClips.length} graficos, ${subtitlesEnabled ? content.segments!.length : 0} subtitulos)...`
       );
       const srt = await writeSrt();
-      finalOutputPath = path.join(workDir, "final-subtitled.mp4");
+      const burnedPath = path.join(workDir, "final-subtitled.mp4");
       await progress(PROGRESS_FINAL_START + 2, `Agregando ${burnLabel}...`, true);
-      await burnSubtitles(
-        outputPath,
-        motionClips,
-        srt,
-        targetVideoBitrateBps,
-        finalOutputPath,
-        encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, `Agregando ${burnLabel}`)
-      );
-      // outputPath (sin overlays/subtitulos) ya quedo quemado en finalOutputPath.
-      await cleanupFiles([outputPath, ...burnFiles]);
+      const burn = (clips: MotionClip[]) =>
+        burnSubtitles(
+          outputPath,
+          clips,
+          srt,
+          targetVideoBitrateBps,
+          burnedPath,
+          encodeProgress(PROGRESS_FINAL_START + 2, PROGRESS_FINAL_END, `Agregando ${burnLabel}`)
+        );
+      let burned = true;
+      try {
+        await burn(motionClips);
+      } catch (burnError) {
+        // Plan B (mismo criterio que la pasada con transiciones): sin los
+        // graficos; si tampoco hay subtitulos, outputPath ya es el video final.
+        if (motionClips.length === 0) throw burnError;
+        console.warn("[render_video] no se pudieron superponer los graficos, el video sale sin ellos:", burnError);
+        if (srt) await burn([]);
+        else burned = false;
+      }
+      if (burned) {
+        finalOutputPath = burnedPath;
+        // outputPath (sin overlays/subtitulos) ya quedo quemado en finalOutputPath.
+        await cleanupFiles([outputPath, ...burnFiles]);
+      } else {
+        await cleanupFiles(burnFiles);
+      }
     }
 
     console.log(`[render_video] ffmpeg listo, subiendo...`);
