@@ -17,6 +17,33 @@ elegante para títulos, sans muy bold para cifras, bajadas en mayúsculas
 espaciadas, fondo oscurecido/desenfocado cuando entra un gráfico, capítulos con
 barra de progreso arriba, subtítulos con palabra clave en color.
 
+## Hoja de ruta (8 fases)
+
+| Fase | Qué es | Estado |
+|---|---|---|
+| **0** | Prueba técnica con Remotion | ✅ Hecha |
+| **1** | Base: conexión al pipeline, sincronía a la palabra, render y Docker | ✅ Hecha — falta probarla en el entorno real |
+| **2** | Los otros 14 componentes (ver tabla en "Próximo trabajo") | Siguiente |
+| **3** | Subtítulos nuevos con palabra clave resaltada, por tema | Pendiente |
+| **4** | Mapas con anotaciones | Pendiente |
+| **5** | Diagramas a medida (cortes, ciclos, etiquetas sobre imágenes) | Pendiente |
+| **6** | Editor para revisar y editar los gráficos antes del render | Pendiente |
+| **7** | Versiones verticales para Shorts | Pendiente |
+
+Orden recomendado:
+
+1. **Validar la Fase 1 en el entorno real** antes de sumar nada: migración,
+   worker con Docker y un video real con gráficos. Revisar logs del worker
+   (`[render_video] animando N graficos...`) y mirar el video resultante.
+2. **Fase 2**, empezando por lo que más se usa en cualquier nicho:
+   capítulos + barra de progreso → frase cinética → barras/versus →
+   definición → lista → lugar → después ranking, ficha, línea de tiempo,
+   escala, mito vs realidad, dato fijo en esquina y CTA.
+3. Fases 3 a 7 en orden.
+
+Las fases más largas son la 2 (cantidad de componentes); las más complejas
+técnicamente, la 4 (mapas) y la 5 (diagramas).
+
 ## Puesta en marcha local
 
 Desde la raíz del repo, con la rama ya bajada (`git checkout formato-documental`):
