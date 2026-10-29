@@ -27,13 +27,21 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        // Graficos animados: los MISMOS componentes que dibuja el render
+        // (backend/motion), reproducidos en vivo en la revision de stock.
+        '@motion': path.resolve(__dirname, '../motion/src'),
       },
+      // motion/ tiene su propio node_modules (React 18, para el render) y
+      // en Netlify ni siquiera esta instalado: sus imports se resuelven
+      // siempre contra los de este front, con una sola copia de React.
+      dedupe: ['react', 'react-dom', 'remotion', '@fontsource/inter', '@fontsource/cormorant-garamond'],
     },
     server: {
       host: '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
       watch: { ignored: ['**/.figma/**'] },
+      fs: { allow: [path.resolve(__dirname), path.resolve(__dirname, '../motion/src')] },
     },
     preview: {
       host: '0.0.0.0',

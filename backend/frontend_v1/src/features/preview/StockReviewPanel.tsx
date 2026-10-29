@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
 import { useAccount } from "@/lib/accountContext";
 import ScenePanel from "./ScenePanel";
 import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
-import type { Asset, Job, Scene } from "@/types";
+// Lazy: Remotion pesa ~400 kB y solo hace falta en esta pantalla.
+const OverlayLayer = lazy(() => import("./OverlayLayer"));
+import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
 
 interface Props {
   projectId: string;
@@ -94,6 +96,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // que ya maneja este componente, para que la revision del gate humano se
   // vea lo mas parecido posible al resultado final.
   const [captionSegments, setCaptionSegments] = useState<{ text: string; start: number; end: number }[]>([]);
+  // Graficos animados que va a superponer el render, en vivo sobre el clip.
+  const [overlays, setOverlays] = useState<ProjectOverlays | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +157,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       setCaptionSegments(segments);
       setLoading(false);
     });
+    // Aparte: si falla, la revision sigue igual, solo sin graficos.
+    projectsService.getOverlays(projectId).then(setOverlays).catch(() => setOverlays(null));
   }, [projectId]);
 
   // Solo Flow: las imagenes se cargan desde otra pestaña (Escenas ->
@@ -392,6 +398,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>
                   {flowOnly ? "Escena vacía: falta cargar su imagen de Flow" : "Sin clip para esta escena"}
                 </p>
+              )}
+
+              {overlays?.enabled && overlays.overlays.length > 0 && (
+                <Suspense fallback={null}>
+                  <OverlayLayer data={overlays} currentTime={currentTime} isPlaying={isPlaying} playbackRate={playbackRate} />
+                </Suspense>
               )}
 
               {/* Preview de los subtitulos que van a quedar quemados en el

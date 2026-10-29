@@ -6,6 +6,21 @@ export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 // backend motion/src/theme.ts).
 export type OverlayTheme = "documental" | "ciencia" | "finanzas" | "historia" | "crimen" | "minimal";
 
+// Grafico animado ubicado en el tiempo del video (segundos absolutos), tal
+// como lo va a superponer el render (backend placeOverlays).
+export interface PlacedOverlay {
+  spec: { type: string; text: string; label?: string; items?: { label: string; text: string }[] };
+  start: number;
+  end: number;
+}
+
+export interface ProjectOverlays {
+  enabled: boolean;
+  theme: OverlayTheme;
+  locale: string;
+  overlays: PlacedOverlay[];
+}
+
 export type RenderQuality = "720p" | "1080p";
 
 export type SceneVisualStatus = "PENDING" | "GENERATING" | "DONE" | "ERROR";

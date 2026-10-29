@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { createProject, deleteProject, getProjects, getProjectById,updateProject,getProjectDetail,getProjectChannelSettings
-    
+
  } from "./project.service.js";
+import { getProjectOverlays } from "./projectOverlays.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 const Projectrouter = Router();
@@ -15,4 +16,5 @@ Projectrouter.patch("/:project_id", authMiddleware, updateProject);
 Projectrouter.delete("/:project_id", authMiddleware, deleteProject);
 Projectrouter.get("/:project_id/details", authMiddleware, getProjectDetail);
 Projectrouter.get("/:project_id/channel-settings", authMiddleware, getProjectChannelSettings);
+Projectrouter.get("/:project_id/overlays", authMiddleware, getProjectOverlays);
 export default Projectrouter;

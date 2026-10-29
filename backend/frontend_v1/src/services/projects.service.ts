@@ -1,6 +1,6 @@
 import { api, ApiError } from "@/lib/api";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
-import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt } from "@/types";
+import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt, ProjectOverlays } from "@/types";
 
 function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -171,6 +171,12 @@ export const projectsService = {
   // transcribe_audio.tool.ts / orchestrator.ts, fusionados en
   // timelines.content.segments) -- usados para armar los subtitulos del
   // preview (PreviewPanel arma un WebVTT client-side a partir de esto).
+  // Graficos animados ya ubicados en el tiempo (mismo calculo que el render,
+  // ver backend projectOverlays.service.ts) para la revision de stock.
+  async getOverlays(projectId: string): Promise<ProjectOverlays> {
+    return api.get<ProjectOverlays>(`/projects/${projectId}/overlays`);
+  },
+
   async getTimelineSegments(projectId: string): Promise<{ text: string; start: number; end: number }[]> {
     const detail = await api.get<{
       timeline: { content?: { segments?: { text: string; start: number; end: number }[] } } | null;
