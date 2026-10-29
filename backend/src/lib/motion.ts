@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PlacedOverlay } from "./overlayTiming.js";
+import type { PaletteTheme } from "./niches.js";
 
 // Puente con el paquete motion/ (Remotion): los graficos animados se
 // renderizan en un proceso aparte (Chromium) y vuelven como clips con
@@ -72,7 +73,8 @@ export async function renderMotionClips(
   options: {
     width: number;
     height: number;
-    theme: string | null;
+    // Nombre de tema viejo ("documental") o la paleta resuelta (lib/niches.ts).
+    theme: string | PaletteTheme | null;
     locale: string;
     workDir: string;
     onProgress?: (done: number, total: number) => void;

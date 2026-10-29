@@ -35,6 +35,7 @@ import {
   type MotionClip,
 } from "../lib/motion.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
+import { resolveProjectStyle } from "../lib/niches.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
@@ -1032,7 +1033,9 @@ async function realRender(
         motionClips = await renderMotionClips(placedOverlays, {
           width: outputSize.width,
           height: outputSize.height,
-          theme: (overlayOptions?.overlay_theme as string | null | undefined) ?? null,
+          // Paleta del video > del canal > del nicho (lib/niches.ts); sin
+          // niches.json, el tema viejo del proyecto.
+          theme: (await resolveProjectStyle(videoProjectId))?.theme ?? (overlayOptions?.overlay_theme as string | null | undefined) ?? null,
           locale: numberLocale((await getChannelSettingsForProject(videoProjectId)).channel_language),
           workDir,
           onProgress: (done, total) =>

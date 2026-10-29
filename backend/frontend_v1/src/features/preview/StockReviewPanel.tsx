@@ -7,6 +7,7 @@ import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
 const OverlayLayer = lazy(() => import("./OverlayLayer"));
 import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
 import { CATALOG } from "@motion/catalog";
+import StylePicker from "./StylePicker";
 
 interface Props {
   projectId: string;
@@ -99,6 +100,9 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   const [captionSegments, setCaptionSegments] = useState<{ text: string; start: number; end: number }[]>([]);
   // Graficos animados que va a superponer el render, en vivo sobre el clip.
   const [overlays, setOverlays] = useState<ProjectOverlays | null>(null);
+  // Paleta que se esta probando en el preview antes de guardarla (StylePicker).
+  const [previewPaletteKey, setPreviewPaletteKey] = useState<string | null>(null);
+  const [savingPalette, setSavingPalette] = useState(false);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -361,6 +365,25 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     })();
   };
 
+  // Guarda la paleta que se esta viendo: para el canal (videos siguientes
+  // incluidos) o solo para este video. Se relee el estilo para que el
+  // selector muestre de donde sale ahora.
+  const handleSavePalette = async (scope: "channel" | "video") => {
+    const key = previewPaletteKey ?? overlays?.style?.paletteKey;
+    if (!key) return;
+    setSavingPalette(true);
+    setError(null);
+    try {
+      await projectsService.setOverlayPalette(projectId, key, scope);
+      setOverlays(await projectsService.getOverlays(projectId));
+      setPreviewPaletteKey(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el estilo");
+    } finally {
+      setSavingPalette(false);
+    }
+  };
+
   const handleApprove = async () => {
     setApproving(true);
     setError(null);
@@ -394,6 +417,19 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
             : "Estos son los clips que el sistema eligió automáticamente para cada escena."}
         </p>
         {error && <p className="text-xs mt-2" style={{ color: "#f87171" }}>{error}</p>}
+        {overlays?.enabled && overlays.style && overlays.style.options.length > 0 && (
+          <StylePicker
+            key={overlays.style.paletteKey + overlays.style.source}
+            style={overlays.style}
+            activeKey={previewPaletteKey ?? overlays.style.paletteKey}
+            saving={savingPalette}
+            onPreview={(key, theme) => {
+              setPreviewPaletteKey(key);
+              setOverlays((prev) => (prev ? { ...prev, theme } : prev));
+            }}
+            onSave={handleSavePalette}
+          />
+        )}
       </div>
 
       <div className="flex-1 min-h-0 flex">

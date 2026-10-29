@@ -543,20 +543,13 @@ export default function PreviewPanel({ projectId }: Props) {
             className="w-4 h-4 accent-[#E30B10]"
           />
         </label>
+        {/* El estilo ya no se elige aca: es del canal y se elige en la
+            revision de stock del primer video, viendo las paletas del nicho
+            sobre el propio video (StylePicker). */}
         {overlaysEnabled && (
-          <select
-            value={overlayTheme}
-            onChange={(e) => setOverlayTheme(e.target.value as OverlayTheme)}
-            className="w-full text-xs rounded-md px-2 py-1.5"
-            style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--foreground)" }}
-          >
-            <option value="documental">Documental (ámbar)</option>
-            <option value="ciencia">Ciencia / espacio (cian)</option>
-            <option value="finanzas">Finanzas / negocios (verde)</option>
-            <option value="historia">Historia (dorado)</option>
-            <option value="crimen">True crime / misterio (rojo)</option>
-            <option value="minimal">Minimal (blanco)</option>
-          </select>
+          <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+            Los colores se eligen en la revisión, sobre tu propio video.
+          </p>
         )}
       </div>
 

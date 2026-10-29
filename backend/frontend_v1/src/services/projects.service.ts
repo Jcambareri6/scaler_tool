@@ -1,6 +1,6 @@
 import { api, ApiError } from "@/lib/api";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
-import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt, ProjectOverlays } from "@/types";
+import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt, ProjectOverlays, PaletteTheme, OverlayStyle } from "@/types";
 
 function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -175,6 +175,16 @@ export const projectsService = {
   // ver backend projectOverlays.service.ts) para la revision de stock.
   async getOverlays(projectId: string): Promise<ProjectOverlays> {
     return api.get<ProjectOverlays>(`/projects/${projectId}/overlays`);
+  },
+
+  // Paleta de los graficos: "channel" la fija para el canal (videos
+  // siguientes incluidos, requiere admin), "video" solo para este proyecto.
+  async setOverlayPalette(
+    projectId: string,
+    palette: string,
+    scope: "channel" | "video"
+  ): Promise<{ theme: PaletteTheme | null; paletteKey: string | null; source: OverlayStyle["source"] | null }> {
+    return api.post(`/projects/${projectId}/overlay-palette`, { palette, scope });
   },
 
   async getTimelineSegments(projectId: string): Promise<{ text: string; start: number; end: number }[]> {

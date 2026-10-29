@@ -17,7 +17,8 @@ interface Job {
   outDir: string;
   width: number;
   height: number;
-  theme?: string;
+  // Nombre de tema o la paleta resuelta por el backend (ver theme.ts).
+  theme?: OverlayProps["theme"];
   locale?: string;
   items: { id: string; spec: OverlaySpec }[];
 }

@@ -25,6 +25,22 @@ export const THEMES: Record<ThemeName, Theme> = {
   minimal: { accent: "#FFFFFF", text: "#FFFFFF", textMuted: "rgba(255,255,255,0.7)", scrim: "rgba(0,0,0,0.5)", fontSans: SANS, fontSerif: SERIF },
 };
 
-export function resolveTheme(name: string | undefined): Theme {
-  return THEMES[(name as ThemeName) in THEMES ? (name as ThemeName) : "documental"];
+// Paleta de un nicho (motion/niches.json) ya resuelta por el backend
+// (lib/niches.ts: la del video, la del canal o la del nicho).
+export interface PaletteTheme {
+  accent: string;
+  text: string;
+  textMuted: string;
+  scrim: string;
+  // Fuente de los titulos (capitulos, frases en serif...): en nichos "sans"
+  // (crimen, deportes, tecnologia) todo va en sans.
+  titleFont: "serif" | "sans";
+}
+
+export function resolveTheme(theme: string | PaletteTheme | undefined): Theme {
+  if (theme && typeof theme === "object") {
+    const { titleFont, ...colors } = theme;
+    return { ...colors, fontSans: SANS, fontSerif: titleFont === "sans" ? SANS : SERIF };
+  }
+  return THEMES[(theme as ThemeName) in THEMES ? (theme as ThemeName) : "documental"];
 }

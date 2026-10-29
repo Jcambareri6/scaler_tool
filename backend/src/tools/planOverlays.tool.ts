@@ -6,6 +6,7 @@ import { fetchWithTimeout } from "../lib/http.js";
 import { providerApiError } from "../lib/errors.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
 import { supportedOverlayIcons, supportedOverlayTypes } from "../lib/motion.js";
+import { getNiche, guessNiche, nicheIds } from "../lib/niches.js";
 
 // Decide QUE metrica animada va en cada escena (contador, barras, versus,
 // linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
@@ -76,6 +77,9 @@ export interface PlanOverlaysOutput {
   // order de la escena -> overlays (todavia sin validar contra el guion).
   overlays: Record<number, OverlaySpec[]>;
   source: "anthropic" | "openai" | "heuristic";
+  // Nicho del video (motion/niches.json): lo clasifica el LLM en la misma
+  // llamada; sin LLM, por palabras clave (guessNiche).
+  niche: string;
 }
 
 function buildSystemPrompt(types: OverlayType[]): string {
@@ -90,7 +94,8 @@ REGLAS ESTRICTAS:
 3. Ritmo: aproximadamente un overlay cada ${TARGET_SECONDS_PER_OVERLAY} segundos de video en total, maximo ${MAX_OVERLAYS_PER_SCENE} por escena. Muchas escenas pueden no tener ninguno. Prioriza las cifras y comparaciones mas impactantes; la primera cifra fuerte del gancho siempre va.
 4. Si hay mas de un tipo disponible, varia: no repitas el mismo tipo tres veces seguidas si otro muestra mejor lo que se narra.
 5. Si un tramo no tiene nada que encaje con los tipos disponibles, no pongas nada: es mejor un grafico menos que uno forzado.
-6. Dentro de cada escena, lista los overlays en el orden en que se narran.`;
+6. Dentro de cada escena, lista los overlays en el orden en que se narran.
+${nicheIds().length ? `\nNICHO: ademas, clasifica el video entero en UNO de estos nichos (campo "niche", el id), segun de que trata el guion y no solo su titulo:\n${nicheIds().map((id) => `- ${id}: ${getNiche(id)!.name}`).join("\n")}` : ""}`;
 }
 
 function buildUserPrompt(input: PlanOverlaysInput): string {
@@ -156,13 +161,23 @@ function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
           required: ["order", "overlays"],
         },
       },
+      ...(nicheIds().length ? { niche: { type: "string", enum: nicheIds() } } : {}),
     },
-    required: ["scenes"],
+    required: nicheIds().length ? ["scenes", "niche"] : ["scenes"],
   },
   };
 }
 
-async function planWithAnthropic(user: string, types: OverlayType[]): Promise<unknown[] | null> {
+interface RawPlan {
+  scenes: unknown[];
+  niche: string | null;
+}
+
+function pickNiche(value: unknown): string | null {
+  return typeof value === "string" && getNiche(value) ? value : null;
+}
+
+async function planWithAnthropic(user: string, types: OverlayType[]): Promise<RawPlan | null> {
   const provider = await getActiveProvider("anthropic");
   if (!provider?.api_key) return null;
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_ANTHROPIC_MODEL;
@@ -181,7 +196,8 @@ async function planWithAnthropic(user: string, types: OverlayType[]): Promise<un
       .finalMessage()
   );
   const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  return sceneList((toolUse?.input as { scenes?: unknown } | undefined)?.scenes);
+  const input = toolUse?.input as { scenes?: unknown; niche?: unknown } | undefined;
+  return { scenes: sceneList(input?.scenes), niche: pickNiche(input?.niche) };
 }
 
 // Claude a veces devuelve el array anidado como texto JSON (visto con
@@ -201,7 +217,7 @@ function sceneList(value: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unknown[] | null> {
+async function planWithOpenAI(user: string, types: OverlayType[]): Promise<RawPlan | null> {
   const provider = await getActiveProvider("openai");
   if (!provider?.api_key) return null;
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_OPENAI_MODEL;
@@ -218,7 +234,7 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unkno
           messages: [
             {
               role: "system",
-              content: `${buildSystemPrompt(types)}\n\nRespondé EXCLUSIVAMENTE con un objeto JSON { "scenes": [ { "order": number, "overlays": [ { "type": string, "text": string, "label"?: string, "items"?: [ { "label": string, "text": string } ] } ] } ] }.`,
+              content: `${buildSystemPrompt(types)}\n\nRespondé EXCLUSIVAMENTE con un objeto JSON { "scenes": [ { "order": number, "overlays": [ { "type": string, "text": string, "label"?: string, "items"?: [ { "label": string, "text": string } ], "icon"?: string } ] } ], "niche": string }.`,
             },
             { role: "user", content: user },
           ],
@@ -233,11 +249,12 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unkno
   });
 
   const raw = data.choices[0]?.message.content;
-  if (!raw) return [];
+  if (!raw) return { scenes: [], niche: null };
   try {
-    return sceneList((JSON.parse(raw) as { scenes?: unknown }).scenes);
+    const parsed = JSON.parse(raw) as { scenes?: unknown; niche?: unknown };
+    return { scenes: sceneList(parsed.scenes), niche: pickNiche(parsed.niche) };
   } catch {
-    return [];
+    return { scenes: [], niche: null };
   }
 }
 
@@ -316,37 +333,38 @@ export const planOverlaysTool: ToolDefinition<PlanOverlaysInput, PlanOverlaysOut
   async execute(input) {
     const scenes = input.scenes.filter((s) => s.text?.trim());
     const types = plannableTypes();
+    const fallbackNiche = guessNiche(`${input.video_topic ?? ""}\n${scenes.map((s) => s.text).join("\n")}`);
     // Sin componentes instalados (motion/ ausente) no tiene sentido pedir nada.
-    if (scenes.length === 0 || types.length === 0) return { overlays: {}, source: "heuristic" };
+    if (scenes.length === 0 || types.length === 0) return { overlays: {}, source: "heuristic", niche: fallbackNiche };
 
     const user = buildUserPrompt({ ...input, scenes });
-    let raw: unknown[] | null = null;
+    let plan: RawPlan | null = null;
     let source: PlanOverlaysOutput["source"] = "heuristic";
     try {
-      raw = await planWithAnthropic(user, types);
-      if (raw) source = "anthropic";
+      plan = await planWithAnthropic(user, types);
+      if (plan) source = "anthropic";
     } catch (err) {
       console.warn("[plan_overlays] Claude fallo, probando OpenAI:", err);
     }
-    if (!raw) {
+    if (!plan) {
       try {
-        raw = await planWithOpenAI(user, types);
-        if (raw) source = "openai";
+        plan = await planWithOpenAI(user, types);
+        if (plan) source = "openai";
       } catch (err) {
         console.warn("[plan_overlays] OpenAI fallo, uso la heuristica:", err);
       }
     }
-    if (!raw) {
-      return { overlays: types.includes("big_number") ? heuristicOverlays(scenes) : {}, source: "heuristic" };
+    if (!plan) {
+      return { overlays: types.includes("big_number") ? heuristicOverlays(scenes) : {}, source: "heuristic", niche: fallbackNiche };
     }
 
     const overlays: Record<number, OverlaySpec[]> = {};
-    for (const entry of raw) {
+    for (const entry of plan.scenes) {
       const e = entry as { order?: unknown; overlays?: unknown };
       if (typeof e.order !== "number" || !Array.isArray(e.overlays)) continue;
       const specs = e.overlays.map((o) => toOverlaySpec(o, types)).filter((o): o is OverlaySpec => o !== null);
       if (specs.length) overlays[e.order] = specs.slice(0, MAX_OVERLAYS_PER_SCENE);
     }
-    return { overlays, source };
+    return { overlays, source, niche: plan.niche ?? fallbackNiche };
   },
 };

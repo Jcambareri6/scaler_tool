@@ -1,3 +1,4 @@
+import type { PaletteTheme } from "./theme";
 // Contrato entre el backend (OverlaySpec en typeShared.ts) y los
 // componentes. Mismo shape: `text`/`label`/`items` salen literales del guion.
 export interface OverlayItem {
@@ -20,7 +21,8 @@ export interface OverlaySpec {
 
 export interface OverlayProps {
   spec: OverlaySpec;
-  theme?: string;
+  // Nombre de tema ("documental") o la paleta del canal/nicho (theme.ts).
+  theme?: string | PaletteTheme;
   // Duracion total en pantalla (preview/editor). Al renderizar para el
   // video final solo se genera la entrada (ver catalog.ts) y `exit` va en
   // false: la salida la hace ffmpeg.

@@ -22,11 +22,34 @@ export interface PlacedOverlay {
   end: number;
 }
 
+// Paleta de un nicho (backend/motion/niches.json), tal como la reciben los
+// componentes de motion/ como `theme`.
+export interface PaletteTheme {
+  accent: string;
+  text: string;
+  textMuted: string;
+  scrim: string;
+  titleFont: "serif" | "sans";
+}
+
+export interface OverlayStyle {
+  niche: string;
+  nicheName: string;
+  paletteKey: string;
+  paletteName: string;
+  // video: excepcion de este video; channel: la elegida para el canal;
+  // default: el canal todavia no eligio (se ofrece elegir en la revision).
+  source: "video" | "channel" | "default";
+  canSaveChannel: boolean;
+  options: { key: string; name: string; theme: PaletteTheme }[];
+}
+
 export interface ProjectOverlays {
   enabled: boolean;
-  theme: OverlayTheme;
+  theme: OverlayTheme | PaletteTheme;
   locale: string;
   overlays: PlacedOverlay[];
+  style: OverlayStyle | null;
 }
 
 export type RenderQuality = "720p" | "1080p";
