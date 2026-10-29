@@ -58,3 +58,11 @@ Proyección para un video de 20 min con un gráfico cada 30 s (40 gráficos):
 
 Remotion es gratis para empresas de hasta 3 personas; con 4 o más hace falta
 la Company License (ver https://remotion.dev/docs/license).
+
+## Desenfoque del fondo
+
+Cada tipo del catálogo puede pedir que el video de abajo se desenfoque
+mientras está en pantalla (`blur`, en px a 1080p; 0 = nada). Lo aplica quien
+junta las capas: ffmpeg en el render (`motionOverlayGraph`: un solo `gblur`
+apagado fuera de esas ventanas, con rampas por `sendcmd`) y CSS en la revisión
+de stock del front. Hoy: cifras 0, barras 6, frase cinética 10, capítulos 14.

@@ -41,7 +41,8 @@ export default defineConfig(({ mode }) => {
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
       watch: { ignored: ['**/.figma/**'] },
-      fs: { allow: [path.resolve(__dirname), path.resolve(__dirname, '../motion/src')] },
+      // motion/src (componentes) y motion/catalog.json (tipos, desenfoque).
+      fs: { allow: [path.resolve(__dirname), path.resolve(__dirname, '../motion')] },
     },
     preview: {
       host: '0.0.0.0',

@@ -4,6 +4,7 @@ import { resolveTheme } from "./theme";
 import { BigNumber } from "./components/BigNumber";
 import { TitleCard } from "./components/TitleCard";
 import { KineticQuote } from "./components/KineticQuote";
+import { BarChart } from "./components/BarChart";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -14,6 +15,8 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <TitleCard spec={spec} theme={theme} exit={exit} />;
     case "kinetic_quote":
       return <KineticQuote spec={spec} theme={theme} exit={exit} />;
+    case "data_viz_single":
+      return <BarChart spec={spec} theme={theme} exit={exit} locale={locale} />;
     default:
       return null;
   }

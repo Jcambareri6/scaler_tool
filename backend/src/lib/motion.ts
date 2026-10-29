@@ -14,8 +14,15 @@ const EXIT_FADE_SECONDS = 0.4;
 
 interface Catalog {
   fps: number;
-  components: Record<string, { introSeconds: number }>;
+  // blur: desenfoque del video de abajo mientras el grafico esta en
+  // pantalla, en px a 1080p (ver motionOverlayGraph).
+  components: Record<string, { introSeconds: number; blur?: number }>;
 }
+
+// Rampa de entrada del desenfoque (la salida acompaña el fundido del
+// grafico, EXIT_FADE_SECONDS) y cuantos pasos tiene cada rampa.
+const BLUR_RAMP_IN_SECONDS = 0.3;
+const BLUR_RAMP_STEPS = 5;
 
 let cachedCatalog: Catalog | null | undefined;
 
@@ -49,6 +56,9 @@ export interface MotionClip {
   end: number;
   // Lo que dura la animacion renderizada; el resto se congela.
   introSeconds: number;
+  // Desenfoque del video de abajo (sigma de gblur), ya escalado a la
+  // resolucion del video desde el px-a-1080p del catalogo.
+  blur: number;
 }
 
 export async function renderMotionClips(
@@ -107,7 +117,8 @@ export async function renderMotionClips(
   const byId = new Map(manifest.map((m) => [m.id, m]));
   return placed.flatMap((p, i) => {
     const m = byId.get(`overlay-${i}`);
-    return m ? [{ path: m.path, start: p.start, end: p.end, introSeconds: m.durationSeconds }] : [];
+    const blur = ((motionCatalog()?.components[p.spec.type]?.blur ?? 0) * options.height) / 1080;
+    return m ? [{ path: m.path, start: p.start, end: p.end, introSeconds: m.durationSeconds, blur }] : [];
   });
 }
 
@@ -122,6 +133,31 @@ export function motionOverlayGraph(
   const inputArgs: string[] = [];
   const parts: string[] = [];
   let current = baseLabel;
+
+  // Desenfoque del video de abajo mientras hay un grafico que lo pide
+  // (capitulos, frases...): un solo gblur para todo el video, apagado
+  // (enable) fuera de esas ventanas, y sendcmd le sube/baja el sigma en
+  // rampas cortas para que no salte de golpe.
+  const blurred = clips.filter((c) => c.blur > 0);
+  if (blurred.length > 0) {
+    const cmds: string[] = [];
+    const windows: string[] = [];
+    for (const clip of blurred) {
+      const end = clip.start + Math.max(clip.introSeconds, clip.end - clip.start);
+      windows.push(`between(t,${clip.start.toFixed(3)},${end.toFixed(3)})`);
+      for (let k = 1; k <= BLUR_RAMP_STEPS; k++) {
+        const f = k / BLUR_RAMP_STEPS;
+        cmds.push(`${(clip.start + BLUR_RAMP_IN_SECONDS * (f - 1 / BLUR_RAMP_STEPS)).toFixed(3)} gblur@bg sigma ${(clip.blur * f).toFixed(2)}`);
+        cmds.push(`${(end - EXIT_FADE_SECONDS * (1 - (k - 1) / BLUR_RAMP_STEPS)).toFixed(3)} gblur@bg sigma ${(clip.blur * (1 - f)).toFixed(2)}`);
+      }
+    }
+    cmds.sort((a, b) => parseFloat(a) - parseFloat(b));
+    parts.push(
+      `[${current}]sendcmd=c='${cmds.join(";")}',gblur@bg=sigma=0:enable='${windows.join("+")}'[mblur]`
+    );
+    current = "mblur";
+  }
+
   clips.forEach((clip, i) => {
     const input = firstInputIndex + i;
     const total = Math.max(clip.introSeconds, clip.end - clip.start);

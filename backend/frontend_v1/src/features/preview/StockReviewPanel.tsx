@@ -6,6 +6,7 @@ import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
 // Lazy: Remotion pesa ~400 kB y solo hace falta en esta pantalla.
 const OverlayLayer = lazy(() => import("./OverlayLayer"));
 import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
+import { CATALOG } from "@motion/catalog";
 
 interface Props {
   projectId: string;
@@ -232,6 +233,24 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
   const activeSegment = segments[activeSegmentIndex] ?? null;
 
+  // Desenfoque del clip mientras hay un grafico que lo pide (capitulos,
+  // frases...): mismo valor del catalogo que usa ffmpeg en el render, en px
+  // a 1080p, escalado al alto real del player.
+  const playerBoxRef = useRef<HTMLDivElement>(null);
+  const backdropBlur = useMemo(() => {
+    if (!overlays?.enabled) return 0;
+    const active = overlays.overlays.find((o) => currentTime >= o.start && currentTime < o.end);
+    const px = active ? (CATALOG[active.spec.type]?.blur ?? 0) : 0;
+    return px * ((playerBoxRef.current?.clientHeight ?? 1080) / 1080);
+  }, [overlays, currentTime]);
+  // scale: el blur de CSS deja los bordes transparentes; agrandar apenas el
+  // clip los saca de cuadro (overflow-hidden del contenedor).
+  const mediaStyle = {
+    filter: backdropBlur > 0 ? `blur(${backdropBlur.toFixed(1)}px)` : "none",
+    transform: backdropBlur > 0 ? "scale(1.05)" : "none",
+    transition: "filter 0.3s ease, transform 0.3s ease",
+  };
+
   const activeCaption = useMemo(
     () => captionSegments.find((c) => currentTime >= c.start && currentTime < c.end) ?? null,
     [captionSegments, currentTime]
@@ -385,14 +404,15 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               el ancho y empujaba la barra de abajo fuera de la vista. */}
           <div className="flex-1 min-h-0 flex items-center justify-center px-4 xl:px-6 py-2" style={{ containerType: "size" }}>
             <div
+              ref={playerBoxRef}
               className="relative rounded-2xl overflow-hidden flex items-center justify-center"
               style={{ aspectRatio: "16/9", width: "min(100%, 42rem, calc(100cqh * 16 / 9))", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
             >
               {activeSegment?.asset ? (
                 activeSegment.asset.type === "IMAGE" ? (
-                  <img key={activeSegment.asset.id} src={activeSegment.asset.storageKey} className="w-full h-full object-cover" alt="Visual de la escena" />
+                  <img key={activeSegment.asset.id} src={activeSegment.asset.storageKey} className="w-full h-full object-cover" style={mediaStyle} alt="Visual de la escena" />
                 ) : (
-                  <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" />
+                  <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" style={mediaStyle} />
                 )
               ) : (
                 <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>

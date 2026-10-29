@@ -127,7 +127,7 @@ Catálogo objetivo (intención → componente):
 | Componente | Intención | Notas de diseño |
 |---|---|---|
 | `big_number` ✅ | Cifra que impacta | Hecho |
-| Barras/columnas (`data_viz_single`) | Comparar 2–5 valores | Columnas que aparecen de a una; la destacada en acento con brillo |
+| Barras/columnas (`data_viz_single`) ✅ | Comparar 2–5 valores | Hecho: columnas de a una con su cifra contando; la más alta en acento con brillo |
 | `versus` | X contra Y | Barras horizontales finas + conclusión en acento |
 | Escala/analogía | "pesa como 3 autos" | Íconos repetidos (Lucide/Phosphor, siluetas PhyloPic) |
 | `timeline` / proceso | Secuencia, etapas, fechas | Línea que se completa, hitos que se marcan |

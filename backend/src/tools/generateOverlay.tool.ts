@@ -122,6 +122,11 @@ export const generateOverlayTool: ToolDefinition<
           .filter((item) => appearsIn(normalizedScript, item.text) && appearsIn(normalizedFull, item.label))
           .map((item) => ({ label: item.label.trim(), text: item.text.trim() }))
       : undefined;
+    // Barras, versus o linea de tiempo con menos de 2 valores validos no
+    // comparan nada: se descarta el grafico entero.
+    if (items && items.length < 2) {
+      throw new Error(`overlay ${overlay.type} con menos de 2 items validos (modo estricto)`);
+    }
 
     return {
       overlay: {

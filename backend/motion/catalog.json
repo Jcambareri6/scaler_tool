@@ -1,8 +1,9 @@
 {
   "fps": 30,
   "components": {
-    "big_number": { "introSeconds": 1.7 },
-    "title_card": { "introSeconds": 1.4 },
-    "kinetic_quote": { "introSeconds": 2.2 }
+    "big_number": { "introSeconds": 1.7, "blur": 0 },
+    "title_card": { "introSeconds": 1.4, "blur": 14 },
+    "kinetic_quote": { "introSeconds": 2.2, "blur": 10 },
+    "data_viz_single": { "introSeconds": 2.0, "blur": 6 }
   }
 }
