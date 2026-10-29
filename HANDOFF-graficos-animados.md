@@ -128,19 +128,19 @@ Catálogo objetivo (intención → componente):
 |---|---|---|
 | `big_number` ✅ | Cifra que impacta | Hecho |
 | Barras/columnas (`data_viz_single`) ✅ | Comparar 2–5 valores | Hecho: columnas de a una con su cifra contando; la más alta en acento con brillo |
-| `versus` | X contra Y | Barras horizontales finas + conclusión en acento |
-| Escala/analogía | "pesa como 3 autos" | Íconos repetidos (Lucide/Phosphor, siluetas PhyloPic) |
-| `timeline` / proceso | Secuencia, etapas, fechas | Línea que se completa, hitos que se marcan |
-| Definición (`lower_third`) | Concepto o término | Término + definición corta |
-| Lista | Enumeración | Ítems que se van sumando |
-| `rank_reveal` | Top N | Número grande + nombre |
-| Ficha | Protagonista (especie, persona) | Datos clave en columnas |
-| `location` | Lugar | Barra de acento + nombre + dato |
-| Mito vs realidad | Desmentir | Tachado → verdad |
+| `versus` ✅ | X contra Y | Hecho: barras horizontales finas + conclusión en acento |
+| Escala/analogía (`scale_compare`) ✅ | "pesa como 3 autos" | Hecho: ícono Lucide repetido (lista en `catalog.json` "icons") |
+| `timeline` / proceso ✅ | Secuencia, etapas, fechas | Hecho: línea que se dibuja y enciende cada hito |
+| Definición (`lower_third`) ✅ | Concepto o término | Hecho: término + definición corta abajo a la izquierda |
+| Lista (`list`) ✅ | Enumeración | Hecho: ítems que se van sumando con número calado |
+| `rank_reveal` ✅ | Top N | Hecho: "#N" gigante + nombre en serif |
+| Ficha (`profile_card`) ✅ | Protagonista (especie, persona) | Hecho: a la derecha, datos clave en columnas |
+| `location` ✅ | Lugar | Hecho: pin que cae + barra de acento + nombre + dato (sin mapa: eso es la Fase 4) |
+| Mito vs realidad (`myth_fact`) ✅ | Desmentir | Hecho: tachado → verdad en acento |
 | Frase cinética (`kinetic_quote`) ✅ | Frase clave | Hecho: mayúsculas bold palabra por palabra, palabra clave (`label`) en acento |
 | `title_card` + progreso ✅ | Capítulos | Hecho: número calado gigante detrás, barra de progreso arriba (el tag fijo persistente queda pendiente) |
-| Dato fijo en esquina | Estado persistente | "UN DÍA DURA / 1 AÑO" |
-| `cta` | Suscribirse/comentar | Píldora en acento |
+| Dato fijo en esquina (`badge`) ✅ | Estado persistente | Hecho: arriba a la derecha, 7 s por defecto (no convive con otro gráfico) |
+| `cta` ✅ | Suscribirse/comentar | Hecho: píldora en acento + campana que se sacude |
 
 Fases siguientes: 3) subtítulos con palabra clave resaltada por tema;
 4) mapas (d3-geo + Natural Earth; fondos NASA Blue/Black Marble o MapTiler/Mapbox;

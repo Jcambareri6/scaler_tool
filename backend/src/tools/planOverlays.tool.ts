@@ -5,7 +5,7 @@ import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { providerApiError } from "../lib/errors.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
-import { supportedOverlayTypes } from "../lib/motion.js";
+import { supportedOverlayIcons, supportedOverlayTypes } from "../lib/motion.js";
 
 // Decide QUE metrica animada va en cada escena (contador, barras, versus,
 // linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
@@ -37,13 +37,17 @@ const MAX_OVERLAYS_PER_SCENE = 3;
 const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   big_number: 'una cifra con unidad que impacta ("1.500 km por hora", "el 70% de las personas", "40.000 millones"). Se anima como contador. "label" = de que es la cifra.',
   data_viz_single: 'comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.',
-  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados.',
-  timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6.',
+  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados ({label: que es, text: su valor}). "text" = la conclusion o el titulo de la comparacion.',
+  timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6 ({label: la fecha/etapa, text: que pasa}). "text" = titulo corto.',
   location: 'cuando la narracion nos lleva a un lugar concreto ("Quito", "el Serengueti"). "text" = el lugar, "label" opcional = el dato del lugar.',
+  list: 'enumeracion de 2 a 5 cosas ("tres razones", "los sintomas son..."). "text" = el titulo de la lista, "items" = las entradas en orden ({label: "", text: la entrada, <= 6 palabras}).',
+  profile_card: 'cuando se presenta un protagonista (una especie, una persona, un objeto) con 2 a 4 datos clave. "text" = el nombre, "items" = los datos ({label: que dato, text: el valor}).',
+  myth_fact: 'cuando el guion desmiente una creencia ("muchos creen que... pero en realidad..."). "text" = el mito tal cual, "label" = la realidad tal cual. Los dos literales.',
+  scale_compare: 'analogia de tamaño o cantidad con un numero chico ("pesa como 3 autos", "10 veces más grande"). "text" = la frase con el numero. "icon" = el objeto que se repite, de la lista de iconos.',
   title_card: 'inicio de un capitulo/parte ("Escenario 1", "Pero hay algo peor") o la pregunta central del video al arrancar. Pocos: 2 a 5 en todo el video, solo donde de verdad cambia de parte. "text" = el titulo, "label" opcional = subtitulo. El numero de capitulo y la barra de progreso se agregan solos.',
   rank_reveal: 'posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.',
-  lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis").',
-  badge: 'etiqueta corta de contexto arriba ("Dato real", una fecha).',
+  lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis"). "text" = el termino, "label" = su definicion corta del guion.',
+  badge: 'dato de estado que sigue valiendo un buen rato y conviene dejar fijo en una esquina ("un día dura / 1 año"). "text" = el valor corto, "label" = de que es.',
   cta: 'cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").',
   kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 3 a 8 palabras. "label" = UNA palabra (dos como mucho) de esa misma frase que se resalta en color, la de mas peso ("nunca", no "no terminaría nunca"). Para los momentos fuertes, no para cualquier oracion.',
 };
@@ -79,7 +83,7 @@ function buildSystemPrompt(types: OverlayType[]): string {
 
 TIPOS DISPONIBLES (usa el que mejor encaje con lo que se narra; no hay otros):
 ${types.map((t) => `- ${t}: ${TYPE_GUIDE[t]}`).join("\n")}
-
+${types.includes("scale_compare") && supportedOverlayIcons().length ? `\nICONOS (campo "icon", solo scale_compare): ${supportedOverlayIcons().join(", ")}. Si ninguno representa el objeto, no uses scale_compare.\n` : ""}
 REGLAS ESTRICTAS:
 1. "text", "label" y cada items[].text / items[].label tienen que ser fragmentos COPIADOS LITERALMENTE del guion (mismas palabras, mismos numeros, misma forma de escribirlos). Nunca inventes, redondees, traduzcas ni reformules. Si no podes copiarlo literal, no lo pongas. items[].text tiene que estar en el texto de ESA escena.
 2. Textos cortos: text <= 6 palabras (salvo title_card y kinetic_quote <= 8), label <= 5 palabras, items[].label <= 3 palabras.
@@ -133,12 +137,15 @@ function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
                   type: { type: "string", enum: types },
                   text: { type: "string" },
                   label: { type: "string" },
+                  ...(supportedOverlayIcons().length > 0
+                    ? { icon: { type: "string", enum: supportedOverlayIcons() } }
+                    : {}),
                   items: {
                     type: "array",
                     items: {
                       type: "object",
                       properties: { label: { type: "string" }, text: { type: "string" } },
-                      required: ["label", "text"],
+                      required: ["text"],
                     },
                   },
                 },
@@ -236,16 +243,17 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unkno
 
 function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown };
+  const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown; icon?: unknown };
   if (typeof r.type !== "string" || !(types as string[]).includes(r.type)) return null;
   if (typeof r.text !== "string" || !r.text.trim()) return null;
   const items = Array.isArray(r.items)
     ? r.items
         .filter(
-          (i): i is { label: string; text: string } =>
-            Boolean(i) && typeof (i as { label?: unknown }).label === "string" && typeof (i as { text?: unknown }).text === "string"
+          (i): i is { label?: string; text: string } =>
+            Boolean(i) && typeof (i as { text?: unknown }).text === "string"
         )
-        .map((i) => ({ label: i.label, text: i.text }))
+        // label opcional (entradas de una lista).
+        .map((i) => ({ label: typeof i.label === "string" ? i.label : "", text: i.text }))
     : undefined;
   return {
     type: r.type as OverlayType,
@@ -253,6 +261,7 @@ function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
     source: "script",
     ...(typeof r.label === "string" && r.label.trim() ? { label: r.label.trim() } : {}),
     ...(items?.length ? { items } : {}),
+    ...(typeof r.icon === "string" && r.icon ? { icon: r.icon } : {}),
   };
 }
 

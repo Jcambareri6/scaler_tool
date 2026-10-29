@@ -16,6 +16,7 @@ export interface PlacedOverlay {
     items?: { label: string; text: string }[];
     chapter?: number;
     progress?: number;
+    icon?: string;
   };
   start: number;
   end: number;

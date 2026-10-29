@@ -4,6 +4,22 @@
     "big_number": { "introSeconds": 1.7, "blur": 0 },
     "title_card": { "introSeconds": 1.4, "blur": 14 },
     "kinetic_quote": { "introSeconds": 2.2, "blur": 10 },
-    "data_viz_single": { "introSeconds": 2.0, "blur": 6 }
-  }
+    "data_viz_single": { "introSeconds": 2.0, "blur": 6 },
+    "versus": { "introSeconds": 2.0, "blur": 6 },
+    "scale_compare": { "introSeconds": 2.2, "blur": 6 },
+    "timeline": { "introSeconds": 3.0, "blur": 6 },
+    "lower_third": { "introSeconds": 1.3, "blur": 0 },
+    "list": { "introSeconds": 2.1, "blur": 4 },
+    "rank_reveal": { "introSeconds": 1.3, "blur": 8 },
+    "profile_card": { "introSeconds": 1.7, "blur": 0 },
+    "location": { "introSeconds": 1.3, "blur": 0 },
+    "myth_fact": { "introSeconds": 1.9, "blur": 10 },
+    "badge": { "introSeconds": 1.0, "blur": 0 },
+    "cta": { "introSeconds": 1.4, "blur": 0 }
+  },
+  "icons": [
+    "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",
+    "egg", "fish", "fire", "footprint", "globe", "heart", "house", "mountain", "person", "plane",
+    "rabbit", "rocket", "ship", "phone", "sun", "train", "tree", "truck", "weight"
+  ]
 }

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "./tool.types.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
+import { supportedOverlayIcons } from "../lib/motion.js";
 
 export interface GenerateOverlayInput {
   scene_id: string;
@@ -26,11 +27,17 @@ const VALID_TYPES: OverlayType[] = [
   "timeline",
   "location",
   "kinetic_quote",
+  "list",
+  "profile_card",
+  "myth_fact",
+  "scale_compare",
   "ninguno",
 ];
 
 // Tipos que se arman con varios valores (items) en vez de un solo texto.
-const MULTI_ITEM_TYPES: OverlayType[] = ["data_viz_single", "versus", "timeline"];
+const MULTI_ITEM_TYPES: OverlayType[] = ["data_viz_single", "versus", "timeline", "list", "profile_card"];
+// En una lista cada entrada es solo su texto: el label es opcional.
+const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list"];
 
 // "1. 600" == "1.600": las escenas armadas antes del arreglo de
 // build_scenes (que cortaba en el punto de miles) quedaron con ese espacio,
@@ -78,6 +85,7 @@ export const generateOverlayTool: ToolDefinition<
           },
           anchor: { type: "number" },
           duration: { type: "number" },
+          icon: { type: "string" },
         },
         required: ["type", "text", "source"],
       },
@@ -119,9 +127,20 @@ export const generateOverlayTool: ToolDefinition<
     const label = appearsIn(normalizedFull, overlay.label) ? overlay.label!.trim() : undefined;
     const items = MULTI_ITEM_TYPES.includes(overlay.type)
       ? (overlay.items ?? [])
-          .filter((item) => appearsIn(normalizedScript, item.text) && appearsIn(normalizedFull, item.label))
-          .map((item) => ({ label: item.label.trim(), text: item.text.trim() }))
+          .filter(
+            (item) =>
+              appearsIn(normalizedScript, item.text) &&
+              (appearsIn(normalizedFull, item.label) ||
+                (OPTIONAL_ITEM_LABEL_TYPES.includes(overlay.type) && !item.label?.trim()))
+          )
+          .map((item) => ({ label: (item.label ?? "").trim(), text: item.text.trim() }))
       : undefined;
+    // Mito vs realidad sin la realidad seria solo afirmar el mito.
+    if (overlay.type === "myth_fact" && !label) {
+      throw new Error("myth_fact sin label (la realidad) literal del guion — se descarta");
+    }
+    // El icono no es texto del guion: solo se valida que exista.
+    const icon = overlay.icon && supportedOverlayIcons().includes(overlay.icon) ? overlay.icon : undefined;
     // Barras, versus o linea de tiempo con menos de 2 valores validos no
     // comparan nada: se descarta el grafico entero.
     if (items && items.length < 2) {
@@ -135,6 +154,7 @@ export const generateOverlayTool: ToolDefinition<
         source: "script",
         ...(label ? { label } : {}),
         ...(items?.length ? { items } : {}),
+        ...(icon ? { icon } : {}),
         ...(typeof overlay.anchor === "number" ? { anchor: Math.min(1, Math.max(0, overlay.anchor)) } : {}),
         ...(typeof overlay.duration === "number" && overlay.duration > 0 ? { duration: Math.min(12, overlay.duration) } : {}),
       },

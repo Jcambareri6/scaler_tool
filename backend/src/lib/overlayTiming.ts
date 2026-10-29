@@ -28,9 +28,14 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   title_card: 3.5,
   lower_third: 4,
   rank_reveal: 4,
-  badge: 4,
+  // Dato fijo en esquina: acompaña un tramo largo, no un instante.
+  badge: 7,
   cta: 4,
   kinetic_quote: 3.5,
+  list: 6.5,
+  profile_card: 6,
+  myth_fact: 5.5,
+  scale_compare: 5,
 };
 
 export interface TimedOverlay extends OverlaySpec {

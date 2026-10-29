@@ -14,6 +14,8 @@ export interface OverlaySpec {
   // arranca; los calcula placeOverlays en el backend.
   chapter?: number;
   progress?: number;
+  // scale_compare: clave de lib/icons.ts (lista en catalog.json "icons").
+  icon?: string;
 }
 
 export interface OverlayProps {

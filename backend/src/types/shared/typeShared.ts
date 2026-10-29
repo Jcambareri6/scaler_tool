@@ -132,6 +132,14 @@ export type OverlayType =
   // Frase clave en mayusculas, palabra por palabra; `label` = la palabra
   // (o palabras) de `text` que va en el color de acento.
   | "kinetic_quote"
+  // Enumeracion: `text` = titulo, `items` = entradas (label opcional).
+  | "list"
+  // Ficha de un protagonista: `text` = nombre, `items` = datos clave.
+  | "profile_card"
+  // Mito vs realidad: `text` = el mito (se tacha), `label` = la realidad.
+  | "myth_fact"
+  // Escala/analogia ("pesa como 3 autos"): `icon` repetido N veces.
+  | "scale_compare"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos
@@ -158,6 +166,9 @@ export interface OverlaySpec {
   // en que fraccion del video arranca (0-1, barra de progreso).
   chapter?: number;
   progress?: number;
+  // Icono (scale_compare): uno de motion/catalog.json "icons". No es texto
+  // del guion, asi que no pasa por el modo estricto.
+  icon?: string;
 }
 export interface Provider {
   id: string;

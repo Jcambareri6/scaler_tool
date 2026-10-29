@@ -17,6 +17,8 @@ interface Catalog {
   // blur: desenfoque del video de abajo mientras el grafico esta en
   // pantalla, en px a 1080p (ver motionOverlayGraph).
   components: Record<string, { introSeconds: number; blur?: number }>;
+  // Iconos que saben dibujar los componentes (scale_compare).
+  icons?: string[];
 }
 
 // Rampa de entrada del desenfoque (la salida acompaña el fundido del
@@ -39,6 +41,10 @@ export function motionCatalog(): Catalog | null {
 
 export function supportedOverlayTypes(): string[] {
   return Object.keys(motionCatalog()?.components ?? {});
+}
+
+export function supportedOverlayIcons(): string[] {
+  return motionCatalog()?.icons ?? [];
 }
 
 // Idioma del canal (texto libre de la configuracion del canal) -> formato
