@@ -25,6 +25,7 @@ const VALID_TYPES: OverlayType[] = [
   "versus",
   "timeline",
   "location",
+  "kinetic_quote",
   "ninguno",
 ];
 

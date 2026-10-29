@@ -28,6 +28,7 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   rank_reveal: 4,
   badge: 4,
   cta: 4,
+  kinetic_quote: 3.5,
 };
 
 export interface TimedOverlay extends OverlaySpec {

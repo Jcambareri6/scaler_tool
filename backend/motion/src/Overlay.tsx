@@ -3,6 +3,7 @@ import type { OverlayProps } from "./spec";
 import { resolveTheme } from "./theme";
 import { BigNumber } from "./components/BigNumber";
 import { TitleCard } from "./components/TitleCard";
+import { KineticQuote } from "./components/KineticQuote";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -11,6 +12,8 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <BigNumber spec={spec} theme={theme} exit={exit} locale={locale} />;
     case "title_card":
       return <TitleCard spec={spec} theme={theme} exit={exit} />;
+    case "kinetic_quote":
+      return <KineticQuote spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

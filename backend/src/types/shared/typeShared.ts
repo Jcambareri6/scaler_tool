@@ -129,6 +129,9 @@ export type OverlayType =
   | "versus"
   | "timeline"
   | "location"
+  // Frase clave en mayusculas, palabra por palabra; `label` = la palabra
+  // (o palabras) de `text` que va en el color de acento.
+  | "kinetic_quote"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos

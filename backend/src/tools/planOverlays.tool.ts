@@ -45,6 +45,7 @@ const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis").',
   badge: 'etiqueta corta de contexto arriba ("Dato real", una fecha).',
   cta: 'cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").',
+  kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 3 a 8 palabras. "label" = la palabra (o 2) de esa misma frase que se resalta en color. Para los momentos fuertes, no para cualquier oracion.',
 };
 
 function plannableTypes(): OverlayType[] {
@@ -81,7 +82,7 @@ ${types.map((t) => `- ${t}: ${TYPE_GUIDE[t]}`).join("\n")}
 
 REGLAS ESTRICTAS:
 1. "text", "label" y cada items[].text / items[].label tienen que ser fragmentos COPIADOS LITERALMENTE del guion (mismas palabras, mismos numeros, misma forma de escribirlos). Nunca inventes, redondees, traduzcas ni reformules. Si no podes copiarlo literal, no lo pongas. items[].text tiene que estar en el texto de ESA escena.
-2. Textos cortos: text <= 6 palabras (salvo title_card <= 8), label <= 5 palabras, items[].label <= 3 palabras.
+2. Textos cortos: text <= 6 palabras (salvo title_card y kinetic_quote <= 8), label <= 5 palabras, items[].label <= 3 palabras.
 3. Ritmo: aproximadamente un overlay cada ${TARGET_SECONDS_PER_OVERLAY} segundos de video en total, maximo ${MAX_OVERLAYS_PER_SCENE} por escena. Muchas escenas pueden no tener ninguno. Prioriza las cifras y comparaciones mas impactantes; la primera cifra fuerte del gancho siempre va.
 4. Si hay mas de un tipo disponible, varia: no repitas el mismo tipo tres veces seguidas si otro muestra mejor lo que se narra.
 5. Si un tramo no tiene nada que encaje con los tipos disponibles, no pongas nada: es mejor un grafico menos que uno forzado.
