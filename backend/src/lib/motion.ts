@@ -176,7 +176,11 @@ export function motionOverlayGraph(
         `setpts=PTS-STARTPTS+${clip.start.toFixed(3)}/TB[mo${i}]`
     );
     const next = `mv${i}`;
-    parts.push(`[${current}][mo${i}]overlay=eof_action=pass:format=auto[${next}]`);
+    // enable: fuera de su ventana el overlay deja pasar el cuadro sin
+    // procesarlo -- sin esto cada grafico mezclaba TODOS los cuadros del
+    // video y la pasada final crecia con (cuadros x graficos).
+    const window = `between(t,${clip.start.toFixed(3)},${(clip.start + total).toFixed(3)})`;
+    parts.push(`[${current}][mo${i}]overlay=eof_action=pass:format=auto:enable='${window}'[${next}]`);
     current = next;
   });
   return { inputArgs, filter: parts.join(";"), outLabel: current };
