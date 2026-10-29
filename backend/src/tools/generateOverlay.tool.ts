@@ -31,8 +31,11 @@ const VALID_TYPES: OverlayType[] = [
 // Tipos que se arman con varios valores (items) en vez de un solo texto.
 const MULTI_ITEM_TYPES: OverlayType[] = ["data_viz_single", "versus", "timeline"];
 
+// "1. 600" == "1.600": las escenas armadas antes del arreglo de
+// build_scenes (que cortaba en el punto de miles) quedaron con ese espacio,
+// y se conservan tal cual al regenerar con imagenes cargadas.
 function normalize(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
+  return text.toLowerCase().replace(/\s+/g, " ").replace(/(\d[.,]) (?=\d)/g, "$1").trim();
 }
 
 function appearsIn(haystack: string, needle: string | undefined): boolean {

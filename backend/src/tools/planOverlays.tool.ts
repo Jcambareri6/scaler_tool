@@ -173,8 +173,24 @@ async function planWithAnthropic(user: string, types: OverlayType[]): Promise<un
       .finalMessage()
   );
   const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  const scenes = (toolUse?.input as { scenes?: unknown } | undefined)?.scenes;
-  return Array.isArray(scenes) ? scenes : [];
+  return sceneList((toolUse?.input as { scenes?: unknown } | undefined)?.scenes);
+}
+
+// Claude a veces devuelve el array anidado como texto JSON (visto con
+// claude-sonnet-5: `scenes: "{\"scenes\":[...]}"`) en vez de un array --
+// sin esto el plan entero se perdia en silencio y el video salia sin
+// graficos. Acepta el array, el texto JSON y el objeto envuelto.
+function sceneList(value: unknown): unknown[] {
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return [];
+    }
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) v = (v as { scenes?: unknown }).scenes;
+  return Array.isArray(v) ? v : [];
 }
 
 async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unknown[] | null> {
@@ -211,8 +227,7 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<unkno
   const raw = data.choices[0]?.message.content;
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as { scenes?: unknown };
-    return Array.isArray(parsed.scenes) ? parsed.scenes : [];
+    return sceneList((JSON.parse(raw) as { scenes?: unknown }).scenes);
   } catch {
     return [];
   }

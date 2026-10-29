@@ -327,15 +327,39 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // eligen UNA vez con el guion completo para repartir el ritmo en todo el
   // video (ver plan_overlays), y despues cada escena valida las suyas en
   // modo estricto con generate_overlay. Un fallo aca nunca tira el video:
-  // las escenas quedan sin overlays.
+  // las escenas quedan sin overlays. Se planifica sobre TODAS las escenas,
+  // tambien las conservadas con sus imagenes (Flow, "Regenerar"): esas no
+  // pasan por el loop de stock de abajo, asi que se validan aca mismo.
+  const allScenes = (scenes ?? []) as SceneRow[];
   let plannedOverlays: Record<number, OverlaySpec[]> = {};
-  if (sceneRows.length > 0 && project.overlays_enabled) {
+  const validateOverlays = async (scene: SceneRow, sceneText: string): Promise<OverlaySpec[]> => {
+    // Cada overlay planificado se valida en modo estricto (texto literal del
+    // guion); el que no pasa se descarta solo, sin tirar la escena. `anchor`
+    // = donde cae el texto dentro de la escena, para que el render lo
+    // muestre cuando la narracion lo dice.
+    const valid: OverlaySpec[] = [];
+    for (const planned of plannedOverlays[scene.order] ?? []) {
+      try {
+        const { overlay } = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
+          "generate_overlay",
+          { scene_id: scene.id, script_text: sceneText, full_text: scriptText, overlay: planned },
+          toolCtx
+        );
+        const at = sceneText.toLowerCase().indexOf(overlay.text.toLowerCase());
+        valid.push({ ...overlay, anchor: at >= 0 && sceneText.length > 0 ? at / sceneText.length : 0 });
+      } catch (err) {
+        console.warn(`[pipeline] escena ${scene.order}: overlay descartado (${(err as Error).message})`);
+      }
+    }
+    return valid;
+  };
+  if (allScenes.length > 0 && project.overlays_enabled) {
     await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
     try {
       const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
         "plan_overlays",
         {
-          scenes: sceneRows.map((s) => ({
+          scenes: allScenes.map((s) => ({
             order: s.order,
             text: ((s.content as { text?: string } | null)?.text) ?? "",
             ...(() => {
@@ -351,6 +375,16 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       plannedOverlays = plan.overlays;
     } catch (err) {
       console.warn(`[pipeline] ${projectId}: no se pudieron planificar los overlays:`, err);
+    }
+
+    for (const scene of allScenes.filter((s) => preservedVisuals?.has(s.id))) {
+      const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
+      const overlays = await validateOverlays(scene, sceneText);
+      const { error: overlaysError } = await supabase
+        .from("scenes")
+        .update({ content: { ...(scene.content ?? {}), overlays } })
+        .eq("id", scene.id);
+      if (overlaysError) throw new Error(overlaysError.message);
     }
   }
 
@@ -446,24 +480,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       }
     }
 
-    // Cada overlay planificado se valida en modo estricto (texto literal del
-    // guion); el que no pasa se descarta solo, sin tirar la escena. `anchor`
-    // = donde cae el texto dentro de la escena, para que el render lo
-    // muestre cuando la narracion lo dice.
-    const validOverlays: OverlaySpec[] = [];
-    for (const planned of plannedOverlays[scene.order] ?? []) {
-      try {
-        const { overlay } = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
-          "generate_overlay",
-          { scene_id: scene.id, script_text: sceneText, full_text: scriptText, overlay: planned },
-          toolCtx
-        );
-        const at = sceneText.toLowerCase().indexOf(overlay.text.toLowerCase());
-        validOverlays.push({ ...overlay, anchor: at >= 0 && sceneText.length > 0 ? at / sceneText.length : 0 });
-      } catch (err) {
-        console.warn(`[pipeline] escena ${scene.order}: overlay descartado (${(err as Error).message})`);
-      }
-    }
+    const validOverlays = await validateOverlays(scene, sceneText);
     const overlayResult = validOverlays[0]
       ? { overlay: validOverlays[0] }
       : await runTool<GenerateOverlayInput, GenerateOverlayOutput>(

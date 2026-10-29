@@ -53,10 +53,12 @@ interface RawFragment {
 // maximo un signo de puntuacion (una corrida de ".","!","?" cuenta como uno
 // solo, asi "..." no se parte en tres). El texto se preserva tal cual
 // (incluye espacios) para poder reconstruir el original sin tocar una sola
-// palabra.
+// palabra. Un "." o "," entre dos digitos ("1.600", "3,5") es parte del
+// numero, no un corte: antes "107.000" terminaba una escena en "107." y
+// la siguiente arrancaba con "000", y la cifra quedaba "1. 600" en el texto.
 function tokenizeFragments(fullText: string): RawFragment[] {
   const fragments: RawFragment[] = [];
-  const regex = /([^.!?;:,]+)([.!?]+|[;:,])?/g;
+  const regex = /((?:[^.!?;:,]|(?<=\d)[.,](?=\d))+)([.!?]+|[;:,])?/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(fullText)) !== null) {
     const text = match[1] ?? "";
