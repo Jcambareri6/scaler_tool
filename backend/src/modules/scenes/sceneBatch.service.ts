@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { createHash } from "crypto";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedScript } from "../../lib/ownership.js";
 import { mapWithConcurrency } from "../../lib/concurrency.js";
@@ -12,7 +11,7 @@ import type {
 } from "../../tools/generateImagePromptSequence.tool.js";
 import { singleBlock } from "../../tools/generateImagePromptSequence.tool.js";
 import type { ContentPolicy } from "../../types/shared/typeShared.js";
-import { getChannelSettingsForProject, visualStyleKey } from "../../lib/channelSettings.js";
+import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 
 // Flujo "generar afuera y cargar en lote" (ej: Google Flow, que no tiene
 // API): 1) la app arma un prompt de imagen por escena y el usuario los
@@ -86,10 +85,6 @@ function promptOf(scene: SceneRow | undefined): string | null {
   return typeof prompt === "string" && prompt.trim() ? singleBlock(prompt) : null;
 }
 
-function hashOf(...parts: string[]): string {
-  return createHash("sha1").update(parts.join("\u0000")).digest("hex").slice(0, 12);
-}
-
 interface VisualContext {
   projectId: string;
   scriptId: string;
@@ -152,38 +147,20 @@ function consecutiveChunks(scenes: SceneRow[], needs: Set<string>): number[][] {
 }
 
 // POST /scripts/:script_id/scenes/image-prompts
-// Body: { regenerate?: boolean, scene_ids?: string[] }
-// Devuelve un prompt de imagen por escena (en orden). Los que ya existen en
-// scene.content.imagePrompt se reusan (asi el usuario puede editarlos a mano
-// y exportar de nuevo sin perderlos); solo se generan los que faltan, salvo
-// regenerate=true (opcionalmente limitado a scene_ids). Un fallo del LLM en
-// un tramo no corta el resto: esas escenas vuelven con `error`.
-// Cada prompt guarda la huella (imagePromptStyleKey) del diseño del canal
-// con que se armo: si el diseño cambia, los prompts viejos se rehacen solos
-// -- salvo los editados a mano (imagePromptEdited), que no se pisan nunca
-// sin regenerate explicito.
+// Devuelve el prompt de imagen guardado de cada escena (en orden): los que
+// el usuario pego o edito a mano. Ya no se generan con IA (costaba mucho
+// por video).
 export async function generateSceneImagePrompts(req: Request, res: Response) {
   try {
     const { script_id } = req.params;
     const userId = req.user!.id;
-    const { regenerate, scene_ids } = (req.body ?? {}) as { regenerate?: boolean; scene_ids?: unknown };
 
     const script = await getOwnedScript(script_id, userId);
     if (!script) {
       return res.status(404).json({ error: "Script not found" });
     }
 
-    const onlyIds = Array.isArray(scene_ids)
-      ? new Set(scene_ids.filter((id): id is string => typeof id === "string"))
-      : null;
-
-    const result = await buildSceneImagePrompts({
-      scriptId: script.id,
-      videoProjectId: script.video_project_id,
-      userId,
-      regenerate: regenerate === true,
-      onlyIds,
-    });
+    const result = await buildSceneImagePrompts({ scriptId: script.id });
     return res.status(200).json(result);
   } catch (error) {
     if (error instanceof ImagePromptsInputError) {
@@ -340,19 +317,12 @@ export async function buildSceneVideoPrompts(params: {
 // Pedido invalido (sin escenas, sin diseño visual legible): 400, no 500.
 export class ImagePromptsInputError extends Error {}
 
-// Nucleo de POST /image-prompts, compartido con el pipeline: en un proyecto
-// "flow" (ver orchestrator.ts) los prompts se arman solos al terminar de
-// armar las escenas, asi la extension ya los encuentra hechos. El ownership
-// lo resuelve quien llama.
+// Nucleo de POST /image-prompts (lo usan el modal de Flow y la extension).
+// El ownership lo resuelve quien llama.
 export async function buildSceneImagePrompts(params: {
   scriptId: string;
-  videoProjectId: string;
-  userId: string;
-  regenerate?: boolean;
-  onlyIds?: Set<string> | null;
 }): Promise<SceneImagePrompt[]> {
-  const { scriptId, videoProjectId, userId, regenerate } = params;
-  const onlyIds = params.onlyIds ?? null;
+  const { scriptId } = params;
   const sceneList = await loadScenes(scriptId);
   if (sceneList.length === 0) {
     throw new ImagePromptsInputError("El guion todavia no tiene escenas");
@@ -369,82 +339,17 @@ export async function buildSceneImagePrompts(params: {
   if (assetsError) throw new ImagePromptsInputError(assetsError.message);
   const scenesWithVisual = new Set((visualAssets ?? []).map((a) => a.scene_id as string));
 
-  // Los prompts se arman con el diseño visual del canal + el guion
-  // completo con timestamps (el prompt del equipo, ver
-  // generateImagePromptSequence.tool.ts).
-  let ctx: VisualContext;
-  try {
-    ctx = await loadVisualContext(scriptId, videoProjectId, userId);
-  } catch (err) {
-    throw new ImagePromptsInputError(err instanceof Error ? err.message : "No se pudo leer el diseño visual del canal");
-  }
-  // La huella cambia cuando cambia el diseño del canal o la forma de armar
-  // los prompts ("estilo-integrado": desde que el LLM integra el diseño en
-  // cada prompt en vez de pegarlo al final; "es": siempre en español): los
-  // no editados a mano se rehacen solos una vez.
-  const contextKey = hashOf(visualStyleKey(ctx.visualStyle), "estilo-integrado", "es");
-
-  const errors = new Map<string, string>();
-  const needs = new Set<string>();
-  for (const scene of sceneList) {
-    const existing = promptOf(scene);
-    const storedKey = typeof scene.content?.imagePromptStyleKey === "string" ? scene.content.imagePromptStyleKey : "none";
-    const editedByUser = scene.content?.imagePromptEdited === true;
-    const stale = !!existing && !editedByUser && storedKey !== contextKey;
-    const wanted = regenerate ? !onlyIds || onlyIds.has(scene.id) : !existing || stale;
-    if (!wanted) continue;
-    if (!textOf(scene).trim()) {
-      errors.set(scene.id, "La escena no tiene narrativa para derivar el prompt");
-      continue;
-    }
-    needs.add(scene.id);
-  }
-
-  const generated = await writeSequencePrompts({
-    sceneList,
-    needs,
-    ctx,
-    target: "image",
-    existingPrompt: promptOf,
-    errors,
-    // Se relee content justo antes de escribir: entre la lectura inicial y
-    // aca pueden haber pasado varios segundos de LLM, y el UPDATE pisa el
-    // JSON entero.
-    onPrompt: async (scene, prompt) => {
-      const { data: fresh } = await supabase.from("scenes").select("content").eq("id", scene.id).single();
-      const { error: updateError } = await supabase
-        .from("scenes")
-        .update({
-          content: {
-            ...((fresh?.content as Record<string, unknown> | null) ?? scene.content ?? {}),
-            imagePrompt: prompt,
-            imagePromptStyleKey: contextKey,
-            imagePromptEdited: false,
-          },
-        })
-        .eq("id", scene.id);
-      if (updateError) throw new Error(updateError.message);
-    },
-  });
-
-  const result: SceneImagePrompt[] = sceneList.map((scene) => {
-    const fresh = generated.get(scene.id);
-    const error = errors.get(scene.id);
-    return {
-      scene_id: scene.id,
-      order: scene.order,
-      text: textOf(scene),
-      has_visual: scenesWithVisual.has(scene.id),
-      image_prompt: fresh ?? promptOf(scene),
-      image_prompt_style_key: fresh
-        ? contextKey
-        : typeof scene.content?.imagePromptStyleKey === "string"
-          ? scene.content.imagePromptStyleKey
-          : null,
-      image_prompt_edited: fresh ? false : scene.content?.imagePromptEdited === true,
-      ...(error ? { error } : {}),
-    };
-  });
+  // Sin LLM: los prompts de imagen los arma el usuario afuera y los pega
+  // ("Pegar mis prompts"); aca solo se devuelven los guardados.
+  const result: SceneImagePrompt[] = sceneList.map((scene) => ({
+    scene_id: scene.id,
+    order: scene.order,
+    text: textOf(scene),
+    has_visual: scenesWithVisual.has(scene.id),
+    image_prompt: promptOf(scene),
+    image_prompt_style_key: typeof scene.content?.imagePromptStyleKey === "string" ? scene.content.imagePromptStyleKey : null,
+    image_prompt_edited: scene.content?.imagePromptEdited === true,
+  }));
 
   return result;
 }

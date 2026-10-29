@@ -63,8 +63,8 @@ const tabStyle = (active: boolean) =>
 const panelStyle = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" };
 
 // Flujo "generar afuera y cargar en lote" (Google Flow no tiene API):
-// 1) Prompts: arma un prompt de imagen por escena, para copiar/descargar
-//    numerados y pegarlos en Flow.
+// 1) Prompts: el usuario pega sus propios prompts (uno por escena) y los
+//    copia/descarga numerados para Flow. No se generan con IA.
 // 2) Cargar: el usuario sube todo lo que bajo de Flow junto; cada archivo
 //    se empareja con su escena (numero en el nombre o, si no, por orden) y
 //    se revisa antes de subir. Un archivo que falla queda marcado para
@@ -83,7 +83,6 @@ export default function BatchVisualsModal({
   const [prompts, setPrompts] = useState<SceneImagePrompt[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loadingPrompts, setLoadingPrompts] = useState(false);
-  const [regeneratingIds, setRegeneratingIds] = useState<Set<string>>(new Set());
   const [promptsError, setPromptsError] = useState<string | null>(null);
   const [onlyMissingPrompts, setOnlyMissingPrompts] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -121,13 +120,12 @@ export default function BatchVisualsModal({
     );
   };
 
-  const loadPrompts = async (options?: { regenerate?: boolean; sceneIds?: string[] }) => {
+  const loadPrompts = async () => {
     setPromptsError(null);
     try {
-      const rows = await projectsService.getSceneImagePrompts(projectId, options);
-      applyPrompts(options?.sceneIds ? rows.filter((r) => options.sceneIds!.includes(r.sceneId)) : rows);
+      applyPrompts(await projectsService.getSceneImagePrompts(projectId));
     } catch (err) {
-      setPromptsError(err instanceof Error ? err.message : "No se pudieron generar los prompts");
+      setPromptsError(err instanceof Error ? err.message : "No se pudieron cargar los prompts");
     }
   };
 
@@ -140,16 +138,6 @@ export default function BatchVisualsModal({
     reloadAllPrompts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  const regenerateOne = async (sceneId: string) => {
-    setRegeneratingIds((prev) => new Set(prev).add(sceneId));
-    await loadPrompts({ regenerate: true, sceneIds: [sceneId] });
-    setRegeneratingIds((prev) => {
-      const next = new Set(prev);
-      next.delete(sceneId);
-      return next;
-    });
-  };
 
   // Persiste un prompt editado a mano (al salir del textarea).
   const saveDraft = async (sceneId: string) => {
@@ -168,7 +156,7 @@ export default function BatchVisualsModal({
   };
 
   // --- prompts pegados a mano ------------------------------------------
-  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(true);
   const [pasteText, setPasteText] = useState("");
   const [pasteStart, setPasteStart] = useState(1);
   const [pasteSaving, setPasteSaving] = useState(false);
@@ -531,7 +519,6 @@ export default function BatchVisualsModal({
                 }}
                 disabled={loadingPrompts}
                 className="btn-secondary text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50"
-                title={loadingPrompts ? "Esperá a que terminen de armarse los prompts" : undefined}
               >
                 {pasteOpen ? "Cerrar" : "Pegar mis prompts"}
               </button>
@@ -554,7 +541,7 @@ export default function BatchVisualsModal({
             {pasteOpen && (
               <div className="rounded-xl p-3 space-y-2" style={panelStyle}>
                 <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
-                  Pegá tus prompts, uno por párrafo y separados por una línea en blanco. Se cargan en orden, uno por escena, y la IA no los pisa.
+                  Pegá tus prompts, uno por párrafo y separados por una línea en blanco. Se cargan en orden, uno por escena.
                 </p>
                 <textarea
                   value={pasteText}
@@ -612,12 +599,11 @@ export default function BatchVisualsModal({
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
                   <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(227,11,16,0.2)", borderTopColor: "#FF8A8D" }} />
                   <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                    Leyendo el guion completo y armando los prompts de {scenes.length} escenas en secuencia...
+                    Cargando los prompts de {scenes.length} escenas...
                   </p>
                 </div>
               ) : (
                 visiblePrompts.map((p) => {
-                  const busy = regeneratingIds.has(p.sceneId);
                   return (
                     <div key={p.sceneId} className="rounded-xl p-3 space-y-2" style={panelStyle}>
                       <div className="flex items-center gap-2">
@@ -631,14 +617,6 @@ export default function BatchVisualsModal({
                           {scenesWithVisual.has(p.sceneId) || uploadedSceneIds.has(p.sceneId) ? "con visual" : "sin visual"}
                         </span>
                         <div className="ml-auto flex gap-1.5">
-                          <button
-                            onClick={() => regenerateOne(p.sceneId)}
-                            disabled={busy}
-                            className="text-[11px] px-2 py-1 rounded-md transition-opacity hover:opacity-80 disabled:opacity-50"
-                            style={{ color: "var(--muted-foreground)", border: "1px solid rgba(255,255,255,0.08)" }}
-                          >
-                            {busy ? "Generando..." : "Otro prompt"}
-                          </button>
                           <button
                             onClick={() => copy(singleBlock(drafts[p.sceneId] ?? ""), p.sceneId)}
                             disabled={!(drafts[p.sceneId] ?? "").trim()}
