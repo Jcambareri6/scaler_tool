@@ -11,7 +11,9 @@ import { normalizeToken, tokenizeScript, type TokenTiming } from "./wordAlignmen
 
 // Cuanto antes de la palabra entra el grafico (que ya este en pantalla
 // cuando el oyente escucha la cifra).
-const LEAD_IN_SECONDS = 0.35;
+// 0.2: con 0.35 se sentia adelantado en el preview (la cifra ya estaba
+// armada antes de que la voz llegara a decirla).
+const LEAD_IN_SECONDS = 0.2;
 const MIN_ON_SCREEN_SECONDS = 1.5;
 const GAP_BETWEEN_SECONDS = 0.2;
 
@@ -37,15 +39,30 @@ export interface TimedOverlay extends OverlaySpec {
 }
 
 // Posicion (indice de token) de `text` dentro de los tokens de la escena,
-// comparando normalizado ("1.500" vs "1500", acentos, puntuacion).
+// comparando normalizado ("1.500" vs "1500", acentos, puntuacion) y sin
+// espacios entre palabras: una cifra partida en dos tokens ("1." "600", de
+// escenas armadas antes del fix de build_scenes) igual matchea "1.600" --
+// antes caia al inicio de la escena y el grafico entraba segundos antes de
+// que la voz dijera la cifra. El match tiene que empezar y terminar en un
+// limite de palabra, para no encontrar pedazos sueltos.
 function findTokenIndex(sceneTokens: string[], text: string): number {
   const needle = tokenizeScript(text).map(normalizeToken).filter(Boolean);
   if (needle.length === 0) return -1;
   const hay = sceneTokens.map(normalizeToken);
-  for (let i = 0; i + needle.length <= hay.length; i++) {
-    let ok = true;
-    for (let k = 0; k < needle.length && ok; k++) ok = hay[i + k] === needle[k];
-    if (ok) return i;
+  const target = needle.join("");
+
+  const starts: number[] = [];
+  let joined = "";
+  for (const token of hay) {
+    starts.push(joined.length);
+    joined += token;
+  }
+  const boundaries = new Set([...starts, joined.length]);
+  for (let pos = joined.indexOf(target); pos >= 0; pos = joined.indexOf(target, pos + 1)) {
+    if (!boundaries.has(pos) || !boundaries.has(pos + target.length)) continue;
+    // Primer token con contenido que arranca en `pos` (los vacios, "—",
+    // comparten posicion con el siguiente).
+    for (let i = 0; i < hay.length; i++) if (starts[i] === pos && hay[i]) return i;
   }
   // Sin match completo: al menos la primera palabra con contenido.
   return hay.indexOf(needle[0]!);
