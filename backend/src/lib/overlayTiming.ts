@@ -114,5 +114,17 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
     }
     placed.push(c);
   }
-  return placed.filter((p) => p.end - p.start >= MIN_ON_SCREEN_SECONDS);
+  const result = placed.filter((p) => p.end - p.start >= MIN_ON_SCREEN_SECONDS);
+
+  // Capitulos: numero en orden y en que parte del video caen (barra de
+  // progreso del title_card). Se calcula aca, que ve el video entero, para
+  // que el render y el preview del front reciban lo mismo.
+  const videoEnd = Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0));
+  let chapter = 0;
+  for (const p of result) {
+    if (p.spec.type !== "title_card") continue;
+    chapter += 1;
+    p.spec = { ...p.spec, chapter, ...(videoEnd > 0 ? { progress: Math.min(1, p.start / videoEnd) } : {}) };
+  }
+  return result;
 }

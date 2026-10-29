@@ -23,9 +23,13 @@ const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
   return result;
 };
 
+// SAMPLE_SPEC='{"type":"title_card",...}' y SAMPLE_THEME para probar otros
+// componentes/temas sin tocar este archivo.
 const inputProps: OverlayProps = {
-  spec: { type: "big_number", text: "más de 1.000 km por hora", label: "viento hacia el este" },
-  theme: "documental",
+  spec: process.env.SAMPLE_SPEC
+    ? JSON.parse(process.env.SAMPLE_SPEC)
+    : { type: "big_number", text: "más de 1.000 km por hora", label: "viento hacia el este" },
+  theme: process.env.SAMPLE_THEME ?? "documental",
   durationSeconds: Number(process.env.SAMPLE_SECONDS ?? 4.5),
 };
 

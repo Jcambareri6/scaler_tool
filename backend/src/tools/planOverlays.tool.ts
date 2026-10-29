@@ -40,7 +40,7 @@ const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados.',
   timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6.',
   location: 'cuando la narracion nos lleva a un lugar concreto ("Quito", "el Serengueti"). "text" = el lugar, "label" opcional = el dato del lugar.',
-  title_card: 'inicio de un capitulo/parte o la pregunta central del video. "text" = el titulo, "label" opcional = subtitulo.',
+  title_card: 'inicio de un capitulo/parte ("Escenario 1", "Pero hay algo peor") o la pregunta central del video al arrancar. Pocos: 2 a 5 en todo el video, solo donde de verdad cambia de parte. "text" = el titulo, "label" opcional = subtitulo. El numero de capitulo y la barra de progreso se agregan solos.',
   rank_reveal: 'posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.',
   lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis").',
   badge: 'etiqueta corta de contexto arriba ("Dato real", una fecha).',

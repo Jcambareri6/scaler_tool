@@ -10,6 +10,10 @@ export interface OverlaySpec {
   text: string;
   label?: string;
   items?: OverlayItem[];
+  // title_card: numero de capitulo y fraccion del video (0-1) en que
+  // arranca; los calcula placeOverlays en el backend.
+  chapter?: number;
+  progress?: number;
 }
 
 export interface OverlayProps {

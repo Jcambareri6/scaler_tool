@@ -138,7 +138,7 @@ Catálogo objetivo (intención → componente):
 | `location` | Lugar | Barra de acento + nombre + dato |
 | Mito vs realidad | Desmentir | Tachado → verdad |
 | Frase cinética | Frase clave | Mayúsculas bold, palabra clave en acento |
-| `title_card` + progreso | Capítulos | Número calado gigante detrás, tag fijo y barra de progreso arriba |
+| `title_card` + progreso ✅ | Capítulos | Hecho: número calado gigante detrás, barra de progreso arriba (el tag fijo persistente queda pendiente) |
 | Dato fijo en esquina | Estado persistente | "UN DÍA DURA / 1 AÑO" |
 | `cta` | Suscribirse/comentar | Píldora en acento |
 

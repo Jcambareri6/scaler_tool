@@ -9,7 +9,14 @@ export type OverlayTheme = "documental" | "ciencia" | "finanzas" | "historia" | 
 // Grafico animado ubicado en el tiempo del video (segundos absolutos), tal
 // como lo va a superponer el render (backend placeOverlays).
 export interface PlacedOverlay {
-  spec: { type: string; text: string; label?: string; items?: { label: string; text: string }[] };
+  spec: {
+    type: string;
+    text: string;
+    label?: string;
+    items?: { label: string; text: string }[];
+    chapter?: number;
+    progress?: number;
+  };
   start: number;
   end: number;
 }

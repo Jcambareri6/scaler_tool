@@ -151,6 +151,10 @@ export interface OverlaySpec {
   anchor?: number;
   // Segundos en pantalla; sin esto el render usa el default de cada tipo.
   duration?: number;
+  // Solo title_card, los pone placeOverlays: numero de capitulo (1, 2...) y
+  // en que fraccion del video arranca (0-1, barra de progreso).
+  chapter?: number;
+  progress?: number;
 }
 export interface Provider {
   id: string;
