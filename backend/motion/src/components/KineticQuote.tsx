@@ -33,7 +33,10 @@ export function KineticQuote({
   // El punto final no se muestra (en pantalla la frase se lee mejor sin el);
   // "?" y "!" si, cambian el sentido.
   const words = spec.text.trim().replace(/[.…]+$/, "").split(/\s+/);
-  const keyWords = new Set((spec.label ?? "").split(/\s+/).map(bare).filter(Boolean));
+  // Maximo 2 palabras resaltadas: si el planificador manda mas ("no
+  // terminaria nunca"), se queda con la ultima, que suele ser el remate.
+  const labelWords = (spec.label ?? "").split(/\s+/).map(bare).filter(Boolean);
+  const keyWords = new Set(labelWords.length > 2 ? labelWords.slice(-1) : labelWords);
   const exit = withExit
     ? interpolate(frame, [durationInFrames - 12, durationInFrames - 1], [1, 0], {
         extrapolateLeft: "clamp",
@@ -72,9 +75,12 @@ export function KineticQuote({
             const delay = 4 + i * WORD_STAGGER;
             const t = spring({ frame: frame - delay, fps, config: { damping: 200 }, durationInFrames: 16 });
             const isKey = keyWords.has(bare(word));
-            const pop = isKey
-              ? interpolate(spring({ frame: frame - delay - 6, fps, config: { damping: 12, stiffness: 180 } }), [0, 1], [1, 1.08])
-              : 1;
+            // Golpe de la palabra clave: un salto corto hacia arriba y vuelta,
+            // sin escalar -- con scale(), dos palabras resaltadas seguidas se
+            // comian el espacio entre ellas y quedaban pegadas.
+            const hop = isKey
+              ? Math.sin(Math.PI * interpolate(frame - delay - 6, [0, 10], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })) * -10 * s
+              : 0;
             return (
               <span
                 key={i}
@@ -83,7 +89,7 @@ export function KineticQuote({
                   color: isKey ? theme.accent : theme.text,
                   opacity: t,
                   filter: `blur(${(1 - t) * 8 * s}px)`,
-                  transform: `translateY(${(1 - t) * 40 * s}px) scale(${pop})`,
+                  transform: `translateY(${(1 - t) * 40 * s + hop}px)`,
                   textShadow: isKey ? `0 0 ${28 * s}px ${theme.accent}66, 0 2px 24px rgba(0,0,0,0.5)` : "0 2px 24px rgba(0,0,0,0.5)",
                 }}
               >
