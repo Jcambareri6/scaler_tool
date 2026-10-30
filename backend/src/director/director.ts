@@ -24,6 +24,7 @@ import { INTENTS, MANUAL, manualSummary } from "./manual.js";
 // siempre: este modulo devuelve null y nunca tira el video.
 
 const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_DESIGNER_MODEL = "claude-haiku-5-5";
 const LLM_TIMEOUT_MS = 180 * 1000;
 const DIRECTOR_MAX_TOKENS = 10000;
 const DESIGNER_MAX_TOKENS = 8000;
@@ -69,6 +70,8 @@ export interface Storyboard {
   };
   moments: StoryMoment[];
   models: { director: string; designer: string };
+  // Tokens por modelo (entrada / salida) de este video.
+  usage: Record<string, { input: number; output: number }>;
 }
 
 export interface DirectorResult {
@@ -305,13 +308,18 @@ function designerTool(): Anthropic.Tool {
   };
 }
 
+// Tokens gastados por modelo en un video (se guardan en el storyboard para
+// saber el costo real del director).
+type Usage = Record<string, { input: number; output: number }>;
+
 async function callTool(
   client: Anthropic,
   model: string,
   maxTokens: number,
   system: string,
   tool: Anthropic.Tool,
-  user: string
+  user: string,
+  usage: Usage
 ): Promise<Record<string, unknown> | undefined> {
   const response = await withRetry(() =>
     client.messages
@@ -325,6 +333,9 @@ async function callTool(
       })
       .finalMessage()
   );
+  const spent = (usage[model] ??= { input: 0, output: 0 });
+  spent.input += response.usage.input_tokens;
+  spent.output += response.usage.output_tokens;
   const block = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   return block?.input as Record<string, unknown> | undefined;
 }
@@ -337,8 +348,11 @@ export async function directOverlays(scenes: DirectorScene[], videoTopic: string
   if (!provider?.api_key) return null;
   const config = provider.configuration ?? {};
   const directorModel = (config.director_model as string | undefined) ?? (config.model as string | undefined) ?? DEFAULT_MODEL;
-  const designerModel = (config.designer_model as string | undefined) ?? directorModel;
+  // Disenadores en Haiku: copian datos del guion con instrucciones cerradas,
+  // no necesitan el modelo del director y salen ~20 veces mas baratos.
+  const designerModel = (config.designer_model as string | undefined) ?? DEFAULT_DESIGNER_MODEL;
   const client = new Anthropic({ apiKey: provider.api_key, timeout: LLM_TIMEOUT_MS });
+  const usage: Usage = {};
 
   const starts = new Map<number, number>();
   let at = 0;
@@ -365,7 +379,8 @@ export async function directOverlays(scenes: DirectorScene[], videoTopic: string
     DIRECTOR_MAX_TOKENS,
     directorSystem(deps.types),
     directorTool(deps.types),
-    `${header}\n\nGUION POR ESCENAS (numero · minuto · duracion):\n\n${scriptBlock(scenes, starts)}`
+    `${header}\n\nGUION POR ESCENAS (numero · minuto · duracion):\n\n${scriptBlock(scenes, starts)}`,
+    usage
   );
   if (!raw) return null;
 
@@ -443,7 +458,8 @@ export async function directOverlays(scenes: DirectorScene[], videoTopic: string
           DESIGNER_MAX_TOKENS,
           designerSys,
           designerTool(),
-          `${title}\n\nGUION DE TUS ESCENAS:\n\n${sceneTexts}\n\nMOMENTOS A COMPLETAR:\n${momentLines(pending)}${feedback}`
+          `${title}\n\nGUION DE TUS ESCENAS:\n\n${sceneTexts}\n\nMOMENTOS A COMPLETAR:\n${momentLines(pending)}${feedback}`,
+          usage
         );
       } catch (err) {
         console.warn(`[director] disenador "${title}" fallo:`, (err as Error).message);
@@ -484,6 +500,6 @@ export async function directOverlays(scenes: DirectorScene[], videoTopic: string
   return {
     overlays,
     niche: typeof raw.niche === "string" && getNiche(raw.niche) ? raw.niche : null,
-    storyboard: { structure, moments, models: { director: directorModel, designer: designerModel } },
+    storyboard: { structure, moments, models: { director: directorModel, designer: designerModel }, usage },
   };
 }
