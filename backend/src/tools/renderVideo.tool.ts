@@ -36,6 +36,7 @@ import {
 } from "../lib/motion.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { resolveProjectStyle } from "../lib/niches.js";
+import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
@@ -178,7 +179,7 @@ interface TimelineContent {
   // Fusionado por orchestrator.ts justo despues de transcribe_audio (ver
   // comentario ahi: "es solo plumbing de datos") -- mismo transcript que
   // usan los overlays, reusado aca para los subtitulos quemados.
-  segments?: TimelineSegmentEntry[];
+  segments?: CaptionCue[];
 }
 
 interface RenderSegment {
@@ -782,6 +783,8 @@ function escapeForSubtitlesFilter(filePath: string): string {
 // memoria es bajo, y no hace falta tocar la logica ya delicada de
 // buildFfmpegArgsForBatch/assembleBatchesWithTransitions.
 function subtitlesFilter(srtPath: string): string {
+  // El .ass (palabra por palabra) trae su propio estilo.
+  if (srtPath.endsWith(".ass")) return `subtitles=${escapeForSubtitlesFilter(srtPath)}`;
   const style =
     "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
     "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=60";
@@ -1053,10 +1056,21 @@ async function realRender(
       }
     }
 
-    const srtPath = path.join(workDir, "subtitles.srt");
+    // Con graficos animados (formato stock con graficos, solo admins) los
+    // subtitulos van palabra por palabra en el acento del canal; si no, los
+    // de siempre.
+    const wordCaptions = overlaysOn;
+    const srtPath = path.join(workDir, wordCaptions ? "subtitles.ass" : "subtitles.srt");
     const writeSrt = async (): Promise<string | null> => {
       if (!subtitlesEnabled) return null;
-      await writeFile(srtPath, buildSrt(content.segments!), "utf-8");
+      const subtitles = wordCaptions
+        ? buildWordAss(content.segments!, {
+            width: outputSize.width,
+            height: outputSize.height,
+            accent: (await resolveProjectStyle(videoProjectId))?.theme.accent ?? "#E8B65A",
+          })
+        : buildSrt(content.segments!);
+      await writeFile(srtPath, subtitles, "utf-8");
       return srtPath;
     };
     // burnEnabled se decidio antes de animar (calidad de las tandas); si

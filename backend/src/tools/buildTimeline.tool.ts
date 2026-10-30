@@ -3,6 +3,7 @@ import type { TranscribedWord } from "./transcribeAudio.tool.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
 import { alignScriptTokens, tokenizeScript, type TokenTiming } from "../lib/wordAlignment.js";
+import type { CaptionCue } from "../lib/captions.js";
 import { anchorSceneOverlays } from "../lib/overlayTiming.js";
 import type { OverlaySpec } from "../types/shared/typeShared.js";
 
@@ -62,14 +63,16 @@ function sceneTokens(scene: SceneRow): string[] {
 function buildCaptionSegments(
   scriptWords: string[],
   timings: TokenTiming[]
-): { text: string; start: number; end: number }[] {
-  const cues: { text: string; start: number; end: number }[] = [];
+): CaptionCue[] {
+  const cues: CaptionCue[] = [];
   for (let i = 0; i < scriptWords.length; i += CAPTION_WORDS_PER_CUE) {
     const last = Math.min(i + CAPTION_WORDS_PER_CUE, scriptWords.length) - 1;
     cues.push({
       text: scriptWords.slice(i, last + 1).join(" "),
       start: timings[i]!.start,
       end: timings[last]!.end,
+      // Para los subtitulos palabra por palabra (lib/captions.ts).
+      words: timings.slice(i, last + 1).map((t) => ({ start: t.start, end: t.end })),
     });
   }
   return cues;

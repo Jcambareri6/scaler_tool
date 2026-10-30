@@ -1,4 +1,5 @@
 import { api, ApiError } from "@/lib/api";
+import type { CaptionCue } from "@/lib/captions";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
 import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt, ProjectOverlays, PaletteTheme, OverlayStyle } from "@/types";
 
@@ -187,9 +188,9 @@ export const projectsService = {
     return api.post(`/projects/${projectId}/overlay-palette`, { palette, scope });
   },
 
-  async getTimelineSegments(projectId: string): Promise<{ text: string; start: number; end: number }[]> {
+  async getTimelineSegments(projectId: string): Promise<CaptionCue[]> {
     const detail = await api.get<{
-      timeline: { content?: { segments?: { text: string; start: number; end: number }[] } } | null;
+      timeline: { content?: { segments?: CaptionCue[] } } | null;
     }>(`/projects/${projectId}/details`);
     return detail.timeline?.content?.segments ?? [];
   },

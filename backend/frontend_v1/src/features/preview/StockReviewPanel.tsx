@@ -6,6 +6,7 @@ import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
 // Lazy: Remotion pesa ~400 kB y solo hace falta en esta pantalla.
 const OverlayLayer = lazy(() => import("./OverlayLayer"));
 import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
+import { captionChunks, type CaptionCue } from "@/lib/captions";
 import { CATALOG } from "@motion/catalog";
 import StylePicker from "./StylePicker";
 
@@ -97,7 +98,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // render, mostrados aca sincronizados con el mismo audio-clock (currentTime)
   // que ya maneja este componente, para que la revision del gate humano se
   // vea lo mas parecido posible al resultado final.
-  const [captionSegments, setCaptionSegments] = useState<{ text: string; start: number; end: number }[]>([]);
+  const [captionSegments, setCaptionSegments] = useState<CaptionCue[]>([]);
   // Graficos animados que va a superponer el render, en vivo sobre el clip.
   const [overlays, setOverlays] = useState<ProjectOverlays | null>(null);
   // Paleta que se esta probando en el preview antes de guardarla (StylePicker).
@@ -259,6 +260,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     () => captionSegments.find((c) => currentTime >= c.start && currentTime < c.end) ?? null,
     [captionSegments, currentTime]
   );
+  // Con graficos animados, subtitulos palabra por palabra en el acento del
+  // canal (lo mismo que quema el render, ver backend lib/captions.ts).
+  const wordCaptions = Boolean(overlays?.enabled);
+  const chunks = useMemo(() => (wordCaptions ? captionChunks(captionSegments) : []), [wordCaptions, captionSegments]);
+  const activeChunk = wordCaptions ? (chunks.find((c) => currentTime >= c.start && currentTime < c.end) ?? null) : null;
+  const captionAccent = typeof overlays?.theme === "object" ? overlays.theme.accent : "#E8B65A";
 
   // El <video> sigue al segmento activo: cambia de fuente cuando el
   // playhead cruza a otro clip (sea de la misma escena completandola, o de
@@ -465,7 +472,34 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               {/* Preview de los subtitulos que van a quedar quemados en el
                   render final (ver render_video.tool.ts) -- mismo texto y
                   timing, solo que acá es una capa HTML en vez de pixeles. */}
-              {activeCaption && (
+              {activeChunk ? (
+                <div
+                  className="absolute left-0 right-0 flex justify-center px-[8%] pointer-events-none"
+                  style={{ bottom: "8.5%" }}
+                >
+                  <span
+                    className="text-center font-extrabold leading-tight"
+                    style={{
+                      fontFamily: "Arial, Helvetica, sans-serif",
+                      // Mismo tamano relativo que el .ass del render (5,8% del alto).
+                      fontSize: Math.max(12, (playerBoxRef.current?.clientHeight ?? 360) * 0.058),
+                      color: "#fff",
+                      textShadow: "0 0 3px #000, 0 0 3px #000, 0 2px 2px rgba(0,0,0,0.6)",
+                    }}
+                  >
+                    {activeChunk.words.map((w, i) => {
+                      const next = activeChunk.words[i + 1];
+                      const on = currentTime >= w.start && (!next || currentTime < next.start);
+                      return (
+                        <span key={i} style={on ? { color: captionAccent } : undefined}>
+                          {i > 0 ? " " : ""}
+                          {w.text}
+                        </span>
+                      );
+                    })}
+                  </span>
+                </div>
+              ) : !wordCaptions && activeCaption && (
                 <div
                   className="absolute left-0 right-0 flex justify-center px-6 pointer-events-none"
                   style={{ bottom: "8%" }}
