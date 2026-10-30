@@ -30,6 +30,7 @@ import {
   motionCatalog,
   motionOverlayGraph,
   numberLocale,
+  renderAnimatedVideo,
   renderMotionClips,
   supportedOverlayTypes,
   type MotionClip,
@@ -38,6 +39,7 @@ import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
 import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
+import { effectiveFormat } from "../lib/formats.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
@@ -1279,6 +1281,61 @@ async function realRender(
   }
 }
 
+// Formato todo animado: no hay clips que unir, Remotion dibuja cada cuadro del
+// video desde el plan del director de escenas, con la voz adentro.
+async function renderAnimated(videoProjectId: string, timelineId: string, jobId: string | undefined): Promise<RenderVideoOutput> {
+  const [{ data: project, error: projectError }, { data: timeline, error: timelineError }] = await Promise.all([
+    supabase.from("video_projects").select("animated_plan, render_quality").eq("id", videoProjectId).single(),
+    supabase.from("timelines").select("content").eq("id", timelineId).single(),
+  ]);
+  if (projectError || timelineError) throw new Error((projectError ?? timelineError)!.message);
+  const plan = project.animated_plan as { scenes: unknown[]; nav: unknown[]; durationSeconds: number } | null;
+  if (!plan) throw new Error("El proyecto no tiene plan de escenas: generá el video de nuevo.");
+  const audioSrc = (timeline.content as TimelineContent | null)?.audio?.storage_key;
+  if (!audioSrc) throw new Error("El timeline no tiene audio narrado");
+
+  const { size } = resolveOutputSize(project.render_quality);
+  const style = await resolveProjectStyle(videoProjectId);
+  const channelLanguage = (await getChannelSettingsForProject(videoProjectId)).channel_language;
+  const r2 = await resolveR2Target();
+  const workDir = await makeWorkDir("skaler-animated-");
+  try {
+    const outPath = path.join(workDir, "animated.mp4");
+    let lastReported = -1;
+    await renderAnimatedVideo(
+      {
+        scenes: plan.scenes,
+        nav: plan.nav,
+        durationSeconds: plan.durationSeconds,
+        ...(style ? { theme: style.theme } : {}),
+        locale: numberLocale(channelLanguage),
+        audioSrc,
+      },
+      {
+        outPath,
+        scale: size.height / 1080,
+        workDir,
+        onProgress: (percent) => {
+          if (!jobId || percent === lastReported) return;
+          lastReported = percent;
+          reportJobProgress(jobId, 10 + Math.round(percent * 0.8), `Dibujando el video (${percent}%)...`);
+        },
+      }
+    );
+    if (jobId) await reportJobProgress(jobId, 92, "Subiendo el video...", { force: true });
+    const publicUrl = r2
+      ? await uploadFileToR2(outPath, `skaler-renders/${videoProjectId}.mp4`, "video/mp4", r2.config, r2.secretAccessKey)
+      : await uploadRenderToSupabase(videoProjectId, await readFile(outPath));
+    return { storage_key: publicUrl, duration_seconds: Math.round(plan.durationSeconds) };
+  } finally {
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn(`[render_video] no se pudo limpiar ${workDir}:`, cleanupError);
+    }
+  }
+}
+
 // Composicion final (FFmpeg): une clips + audio + overlays ya renderizados
 // segun el Timeline. Es el ultimo paso del pipeline (Etapa 12).
 export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput> = {
@@ -1305,6 +1362,14 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
         return mockRender(video_project_id, timeline_id);
       }
       throw new ProviderNotConfiguredError("render_video");
+    }
+    const { data: formatRow } = await supabase
+      .from("video_projects")
+      .select("video_format")
+      .eq("id", video_project_id)
+      .maybeSingle();
+    if (effectiveFormat(formatRow?.video_format, ctx.userId) === "animated") {
+      return renderAnimated(video_project_id, timeline_id, ctx.jobId);
     }
     return realRender(video_project_id, timeline_id, ctx.jobId, isAdmin(ctx.userId));
   },

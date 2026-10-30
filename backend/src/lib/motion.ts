@@ -130,6 +130,38 @@ export async function renderMotionClips(
   });
 }
 
+// Formato todo animado: el video entero con Remotion (composicion
+// AnimatedVideo). `scale` respecto de 1080p.
+export async function renderAnimatedVideo(
+  props: Record<string, unknown>,
+  options: { outPath: string; scale: number; workDir: string; onProgress?: (percent: number) => void }
+): Promise<void> {
+  const propsPath = path.join(options.workDir, "animated-props.json");
+  await writeFile(propsPath, JSON.stringify(props));
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "scripts/render-animated.ts", propsPath, options.outPath, String(options.scale)],
+      { cwd: MOTION_DIR, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let stderrTail = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        const m = /^PROGRESS (\d+) /.exec(line);
+        if (m) options.onProgress?.(Number(m[1]));
+        else if (line.startsWith("[render-animated]")) console.log(line);
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-4000);
+    });
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`motion termino con codigo ${code}: ${stderrTail}`))
+    );
+  });
+}
+
 // Inputs + filtergraph para superponer los clips sobre `[baseLabel]`.
 // Cada clip: congela su ultimo frame hasta completar la duracion, fundido
 // de salida en el alfa, y se corre a su segundo del video.

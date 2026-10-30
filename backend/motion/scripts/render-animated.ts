@@ -1,8 +1,10 @@
 // Renderiza un video del formato todo animado (composicion AnimatedVideo)
-// desde un JSON con las props (escenas, capa fija, subtitulos). Mide cuanto
-// tarda: aca se renderiza cada cuadro, no solo la entrada de los graficos.
+// desde un JSON con las props (escenas, capa fija, audio). Lo usa render_video
+// (lib/motion.ts) y sirve a mano para medir: aca se renderiza cada cuadro, no
+// solo la entrada de los graficos.
 // Uso:
-//   npx tsx scripts/render-animated.ts <props.json> <salida.mp4> [audio]
+//   npx tsx scripts/render-animated.ts <props.json> <salida.mp4> [escala]
+// escala: 1 = 1080p, 0.6667 = 720p.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,9 +13,9 @@ import { renderMedia, selectComposition } from "@remotion/renderer";
 import type { AnimatedVideoProps } from "../src/scenes/types";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const [propsPath, outPath = "animated.mp4"] = process.argv.slice(2);
+const [propsPath, outPath = "animated.mp4", scale = "1"] = process.argv.slice(2);
 if (!propsPath) {
-  console.error("Uso: npx tsx scripts/render-animated.ts <props.json> <salida.mp4>");
+  console.error("Uso: npx tsx scripts/render-animated.ts <props.json> <salida.mp4> [escala]");
   process.exit(1);
 }
 const inputProps = JSON.parse(readFileSync(propsPath, "utf8")) as AnimatedVideoProps;
@@ -30,14 +32,15 @@ await renderMedia({
   inputProps,
   codec: "h264",
   crf: 18,
+  scale: Number(scale),
   outputLocation: path.resolve(outPath),
   browserExecutable,
   ...(process.env.REMOTION_CONCURRENCY ? { concurrency: Number(process.env.REMOTION_CONCURRENCY) } : {}),
   onProgress: ({ progress }) => {
-    const pct = Math.floor(progress * 10) * 10;
+    const pct = Math.floor(progress * 100);
     if (pct !== lastLogged) {
       lastLogged = pct;
-      console.log(`[render-animated] ${pct}%`);
+      console.log(`PROGRESS ${pct} 100`);
     }
   },
 });

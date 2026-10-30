@@ -13,12 +13,16 @@ import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
+import { navHeaderContext } from "../lib/niches.js";
+import { directScenes } from "../director/managedSceneDirector.js";
+import { buildPhrases } from "../director/phrases.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
 import type { GenerateVoiceInput, GenerateVoiceOutput } from "../tools/generateVoice.tool.js";
 import type {
   TranscribeAudioInput,
   TranscribeAudioOutput,
+  TranscribedWord,
 } from "../tools/transcribeAudio.tool.js";
 import type { SearchStockInput, SearchStockOutput } from "../tools/searchStock.tool.js";
 import type {
@@ -357,9 +361,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     }
     return valid;
   };
-  // Graficos animados: solo para admins mientras estan en prueba.
-  // En el formato animado los graficos son el video: van siempre.
-  if (allScenes.length > 0 && (project.overlays_enabled || animated) && isAdmin(ctx.userId)) {
+  // Graficos animados: solo para admins mientras estan en prueba. En el
+  // formato animado no van encima de nada: los dibuja el director de escenas.
+  if (allScenes.length > 0 && project.overlays_enabled && !animated && isAdmin(ctx.userId)) {
     await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
     try {
       const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
@@ -572,6 +576,29 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     } catch (err) {
       console.warn(`[pipeline] ${projectId}: no se pudieron armar los prompts de imagen:`, err);
     }
+  }
+
+  if (animated) {
+    await reportJobProgress(ctx.jobId, 60, "El director está armando las escenas...", { force: true });
+    const { data: timelineRow, error: timelineError } = await supabase
+      .from("timelines")
+      .select("content")
+      .eq("video_project_id", projectId)
+      .single();
+    if (timelineError) throw new Error(timelineError.message);
+    const words = (timelineRow.content as { words?: TranscribedWord[] } | null)?.words ?? [];
+    const phrases = buildPhrases(allScenes.map((s) => ((s.content as { text?: string } | null)?.text) ?? ""), words);
+    const animatedPlan = await directScenes({
+      phrases,
+      ...(videoTopic ? { videoTopic } : {}),
+      nav: { ...(await navHeaderContext(projectId)), locale: (await getChannelSettingsForProject(projectId)).channel_language },
+    });
+    if (!animatedPlan) throw new Error("El director de escenas no pudo armar el video");
+    const { error: planError } = await supabase
+      .from("video_projects")
+      .update({ animated_plan: animatedPlan, overlay_storyboard: animatedPlan.storyboard })
+      .eq("id", projectId);
+    if (planError) throw new Error(planError.message);
   }
 
   await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });

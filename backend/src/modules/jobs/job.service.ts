@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { effectiveFormat } from "../../lib/formats.js";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject, getOwnedJob } from "../../lib/ownership.js";
 import { runRenderPipeline } from "../../pipeline/orchestrator.js";
@@ -68,17 +67,6 @@ export async function approveStockReview(req: Request, res: Response) {
       return res.status(400).json({
         error: `Job is not awaiting stock review (current status: ${job.status})`,
       });
-    }
-
-    // Formato todo animado: el render de video entero con Remotion todavia
-    // no esta. Se frena antes de descontar el video.
-    const { data: formatRow } = await supabase
-      .from("video_projects")
-      .select("video_format")
-      .eq("id", job.video_project_id)
-      .maybeSingle();
-    if (effectiveFormat(formatRow?.video_format, userId) === "animated") {
-      return res.status(400).json({ error: "El render del formato todo animado todavía no está disponible." });
     }
 
     // Contador de videos: el primer Renderizar de un proyecto descuenta 1

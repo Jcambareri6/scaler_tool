@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getActiveProvider } from "../lib/providers.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
-import { captionChunks, type CaptionChunk } from "../lib/captions.js";
 import { placeNavHeaders, type PlacedOverlay } from "../lib/overlayTiming.js";
 import { appearsIn, generateOverlayTool, normalize } from "../tools/generateOverlay.tool.js";
 import { TYPE_GUIDE, plannableTypes, toOverlaySpec } from "../tools/planOverlays.tool.js";
@@ -22,7 +21,9 @@ import type { Phrase } from "./phrases.js";
 //    Lo que falla se descarta; una escena que queda vacia muestra su primera
 //    frase, asi nunca hay pantalla en blanco.
 // El resultado son las props de la composicion AnimatedVideo
-// (motion/src/scenes): escenas + capa fija + subtitulos.
+// (motion/src/scenes): escenas + capa fija. Este archivo corre el esquema
+// llamando a la API paso a paso; la version en Managed Agents esta en
+// managedSceneDirector.ts y reutiliza prompts, verificador y armado.
 
 const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_DESIGNER_MODEL = "claude-haiku-5-5";
@@ -74,17 +75,18 @@ export interface AnimatedScene {
 export interface AnimatedPlan {
   scenes: AnimatedScene[];
   nav: PlacedOverlay[];
-  captions: CaptionChunk[];
   durationSeconds: number;
   storyboard: {
     chapters: { title: string; start: number }[];
     scenes: { from: string; to: string; intent: string; idea: string; dropped: string[] }[];
     models: { director: string; designer: string };
     usage: Usage;
+    // Solo con Managed Agents: la sesion y su consumo.
+    managed?: { session_id: string; usage: unknown };
   };
 }
 
-interface PlannedScene {
+export interface PlannedScene {
   index: number;
   from: number;
   to: number;
@@ -94,7 +96,7 @@ interface PlannedScene {
 
 // ---------- 1. Director ----------
 
-function directorSystem(): string {
+export function directorSystem(): string {
   return `Sos el DIRECTOR de un video TODO ANIMADO de YouTube (sin stock, sin fotos): todo lo que se ve son graficos animados sobre un lienzo oscuro, que cambian con cada frase de la voz, como en los canales de explicacion animada. No disenas los elementos: decidis la estructura y que se ve en cada tramo.
 
 Te paso el guion partido en frases numeradas (p1, p2...) con el minuto en que se dicen.
@@ -112,7 +114,7 @@ Te paso el guion partido en frases numeradas (p1, p2...) con el minuto en que se
    Varia: no repitas la misma idea visual dos escenas seguidas.`;
 }
 
-function directorTool(): Anthropic.Tool {
+export function directorTool(): Anthropic.Tool {
   return {
     name: "return_scene_plan",
     description: "Devuelve los capitulos y las escenas del video.",
@@ -148,7 +150,7 @@ function directorTool(): Anthropic.Tool {
 
 // ---------- 2. Disenadores ----------
 
-function designerSystem(types: OverlayType[]): string {
+export function designerSystem(types: OverlayType[]): string {
   return `Sos DISENADOR de escenas de un video TODO ANIMADO (sin stock). El director ya decidio que frases cubre cada escena y su idea visual; vos armas los ELEMENTOS de cada escena y los PASOS que los animan, atados a las frases de la voz.
 
 ELEMENTOS ("id" unico dentro de la escena, "slot" = zona: top, center, left, right, bottom; los graficos van en "full"):
@@ -171,12 +173,12 @@ REGLAS:
 1. DATOS DEL GUION: toda cifra, fecha y nombre propio en pantalla sale del guion tal cual; "value" (las cifras) y los campos de los graficos del catalogo son fragmentos COPIADOS LITERALMENTE. En cambio title, text, label y los carteles (chip) pueden ser TEXTOS PROPIOS cortos (hasta 8 palabras) que resumen o rotulan lo que dice la voz ("EN MARCHA", "PASAJEROS", "Una trampa publicitaria"), siempre sin cifras ni nombres que no esten en el guion. Un verificador de codigo rechaza los datos inventados.
 2. RITMO: CADA frase de la escena dispara al menos un paso (aparece una pieza, cambia un valor o un cartel, se resalta, se tacha o se va), como en los canales de explicacion animada donde la pantalla cambia cada 2 o 3 segundos. Cada elemento aparece en la frase donde la voz lo dice, no antes.
 3. Cada escena se CONSTRUYE: entre 2 y ${MAX_ELEMENTS} elementos que aparecen de a uno en distintas frases, combinando piezas (tarjeta + cifra + cartel, titulo + cifra, etc.), con 3 o 4 a la vez en pantalla como mucho; usa hide para hacer lugar. Una escena con un solo elemento solo si es un grafico del catalogo.
-4. Textos cortos: title <= 8 palabras, text <= 8 (la parte clave de la frase, no la frase entera: los subtitulos ya la muestran), chip <= 3, label <= 4.
+4. Textos cortos: title <= 8 palabras, text <= 8 (la parte clave de la frase, no la frase entera: la voz ya la dice), chip <= 3, label <= 4.
 5. Respeta la idea visual del director; si una escena no tiene material literal para esa idea, usa una frase destacada de la escena.
 6. Devolve TODAS las escenas que te pasan, con su "scene_index".`;
 }
 
-function designerTool(types: OverlayType[]): Anthropic.Tool {
+export function designerTool(types: OverlayType[]): Anthropic.Tool {
   return {
     name: "return_scenes",
     description: "Devuelve los elementos y pasos de cada escena.",
@@ -276,11 +278,11 @@ function plain(text: string): string {
   return text.normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-function str(value: unknown): string | undefined {
+export function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-async function verifyScene(
+export async function verifyScene(
   raw: Record<string, unknown> | undefined,
   planned: PlannedScene,
   phrases: Phrase[],
@@ -392,42 +394,17 @@ async function verifyScene(
   return { elements, steps, dropped };
 }
 
-// ---------- Todo junto ----------
+// ---------- Armado (compartido con Managed Agents) ----------
 
-export async function directAnimatedScenes(input: {
-  phrases: Phrase[];
-  videoTopic?: string;
-  nav: { channel: string | null; topic: string | null; locale: string | null };
-  // Pisa el modelo de los disenadores (pruebas).
-  designerModel?: string;
-}): Promise<AnimatedPlan | null> {
-  const { phrases } = input;
-  if (phrases.length === 0) return null;
-  const provider = await getActiveProvider("anthropic");
-  if (!provider?.api_key) return null;
-  const config = provider.configuration ?? {};
-  const directorModel = (config.director_model as string | undefined) ?? (config.model as string | undefined) ?? DEFAULT_MODEL;
-  const designerModel = input.designerModel ?? (config.scene_designer_model as string | undefined) ?? DEFAULT_DESIGNER_MODEL;
-  const client = new Anthropic({ apiKey: provider.api_key, timeout: LLM_TIMEOUT_MS });
-  const usage: Usage = {};
-  const types = plannableTypes();
-  const fullText = phrases.map((p) => p.text).join(" ");
-  const fullNorm = normalize(fullText);
+export interface SceneStructure {
+  chapters: { index: number; title: string }[];
+  planned: PlannedScene[];
+}
+
+// Capitulos y escenas que devolvio el director, ya validados.
+export function readStructure(raw: Record<string, unknown>, phrases: Phrase[]): SceneStructure {
+  const fullNorm = normalize(phrases.map((p) => p.text).join(" "));
   const indexOf = (ref: unknown) => phraseIndex(phrases, ref);
-
-  // 1. Director.
-  const script = phrases.map((p) => `[${p.id} · ${clock(p.start)}] ${p.text}`).join("\n");
-  const raw = await callTool(
-    client,
-    directorModel,
-    DIRECTOR_MAX_TOKENS,
-    directorSystem(),
-    directorTool(),
-    `${input.videoTopic ? `Tema del video: ${input.videoTopic}\n` : ""}Duracion: ${clock(phrases[phrases.length - 1]!.end)}\n\nGUION EN FRASES:\n${script}`,
-    usage
-  );
-  if (!raw) return null;
-
   const chapters = asList(raw.chapters, "chapters")
     .map((c) => c as { start_phrase?: unknown; title?: unknown })
     .map((c) => ({ index: indexOf(c.start_phrase), title: str(c.title) ?? "" }))
@@ -451,14 +428,15 @@ export async function directAnimatedScenes(input: {
   const planned: PlannedScene[] = starts
     .filter((s, i) => i === 0 || s.from !== starts[i - 1]!.from)
     .map((s, i, all) => ({ index: i, from: s.from, to: (all[i + 1]?.from ?? phrases.length) - 1, intent: s.intent, idea: s.idea }));
+  return { chapters, planned };
+}
 
-  // 2. Disenadores por capitulo, en paralelo.
+// Las escenas repartidas por capitulo: un tramo por disenador.
+export function sceneGroups({ chapters, planned }: SceneStructure, phrases: Phrase[]): { group: number; title: string; scenes: PlannedScene[]; brief: string }[] {
   const chapterOf = (scene: PlannedScene) => chapters.filter((c) => c.index <= scene.from).length;
   const groups = new Map<number, PlannedScene[]>();
   for (const scene of planned) groups.set(chapterOf(scene), [...(groups.get(chapterOf(scene)) ?? []), scene]);
-  const designed = new Map<number, Record<string, unknown>>();
-  const designerSys = designerSystem(types);
-  await mapWithConcurrency([...groups.entries()], DESIGNER_CONCURRENCY, async ([group, scenes]) => {
+  return [...groups.entries()].map(([group, scenes]) => {
     const title = group === 0 ? "Antes del primer capitulo" : `Capitulo: ${chapters[group - 1]!.title}`;
     const body = scenes
       .map(
@@ -470,17 +448,25 @@ export async function directAnimatedScenes(input: {
             .join("\n")
       )
       .join("\n\n");
-    try {
-      const out = await callTool(client, designerModel, DESIGNER_MAX_TOKENS, designerSys, designerTool(types), `${title}\n\n${body}`, usage);
-      for (const s of asList(out?.scenes, "scenes").map((x) => x as Record<string, unknown>)) {
-        if (typeof s.scene_index === "number") designed.set(s.scene_index, s);
-      }
-    } catch (err) {
-      console.warn(`[scene_director] disenador "${title}" fallo:`, (err as Error).message);
-    }
+    return { group, title, scenes, brief: `${title}\n\n${body}` };
   });
+}
 
-  // 3. Verificacion y tiempos.
+// Verificacion y tiempos: de las escenas disenadas a las props del video.
+export async function assemblePlan(input: {
+  phrases: Phrase[];
+  structure: SceneStructure;
+  designed: Map<number, Record<string, unknown>>;
+  types: OverlayType[];
+  nav: { channel: string | null; topic: string | null; locale: string | null };
+  models: { director: string; designer: string };
+  usage: Usage;
+  managed?: { session_id: string; usage: unknown };
+}): Promise<AnimatedPlan> {
+  const { phrases, designed, types, usage } = input;
+  const { chapters, planned } = input.structure;
+  const fullText = phrases.map((p) => p.text).join(" ");
+  const fullNorm = normalize(fullText);
   const videoEnd = phrases[phrases.length - 1]!.end + TAIL_SECONDS;
   const sceneStart = (scene: PlannedScene) => (scene.index === 0 ? 0 : Math.max(0, phrases[scene.from]!.start - 0.15));
   const scenes: AnimatedScene[] = [];
@@ -498,29 +484,83 @@ export async function directAnimatedScenes(input: {
     storyScenes.push({ from: phrases[scene.from]!.id, to: phrases[scene.to]!.id, intent: scene.intent, idea: scene.idea, dropped });
   }
 
-  // Capa fija y subtitulos (mismo calculo que el formato stock).
+  // Capa fija (mismo calculo que el formato stock). Sin subtitulos: en el
+  // formato animado la pantalla ya muestra el texto clave y los subtitulos
+  // palabra por palabra lo recargaban (decision del 30/10/2026).
   const chapterMarks: PlacedOverlay[] = chapters.map((c) => ({
     spec: { type: "title_card", text: c.title, source: "script" },
     start: phrases[c.index]!.start,
     end: phrases[c.index]!.start + 1,
   }));
   const nav = placeNavHeaders(chapterMarks, videoEnd, input.nav);
-  const captions = captionChunks(phrases.map((p) => ({ text: p.text, start: p.start, end: p.end, words: p.words })));
 
   const droppedCount = storyScenes.reduce((n, s) => n + s.dropped.length, 0);
   console.log(
-    `[scene_director] ${chapters.length} capitulos, ${scenes.length} escenas, ${scenes.reduce((n, s) => n + s.elements.length, 0)} elementos (${droppedCount} descartados) · ${directorModel}/${designerModel}`
+    `[scene_director] ${chapters.length} capitulos, ${scenes.length} escenas, ${scenes.reduce((n, s) => n + s.elements.length, 0)} elementos (${droppedCount} descartados) · ${input.models.director}/${input.models.designer}`
   );
   return {
     scenes,
     nav,
-    captions,
     durationSeconds: videoEnd,
     storyboard: {
       chapters: chapters.map((c) => ({ title: c.title, start: phrases[c.index]!.start })),
       scenes: storyScenes,
-      models: { director: directorModel, designer: designerModel },
+      models: input.models,
       usage,
+      ...(input.managed ? { managed: input.managed } : {}),
     },
   };
+}
+
+// ---------- Todo junto ----------
+
+export async function directAnimatedScenes(input: {
+  phrases: Phrase[];
+  videoTopic?: string;
+  nav: { channel: string | null; topic: string | null; locale: string | null };
+  // Pisa el modelo de los disenadores (pruebas).
+  designerModel?: string;
+}): Promise<AnimatedPlan | null> {
+  const { phrases } = input;
+  if (phrases.length === 0) return null;
+  const provider = await getActiveProvider("anthropic");
+  if (!provider?.api_key) return null;
+  const config = provider.configuration ?? {};
+  const directorModel = (config.director_model as string | undefined) ?? (config.model as string | undefined) ?? DEFAULT_MODEL;
+  const designerModel = input.designerModel ?? (config.scene_designer_model as string | undefined) ?? DEFAULT_DESIGNER_MODEL;
+  const client = new Anthropic({ apiKey: provider.api_key, timeout: LLM_TIMEOUT_MS });
+  const usage: Usage = {};
+  const types = plannableTypes();
+
+  // 1. Director.
+  const script = phrases.map((p) => `[${p.id} · ${clock(p.start)}] ${p.text}`).join("\n");
+  const raw = await callTool(
+    client,
+    directorModel,
+    DIRECTOR_MAX_TOKENS,
+    directorSystem(),
+    directorTool(),
+    `${input.videoTopic ? `Tema del video: ${input.videoTopic}\n` : ""}Duracion: ${clock(phrases[phrases.length - 1]!.end)}\n\nGUION EN FRASES:\n${script}`,
+    usage
+  );
+  if (!raw) return null;
+
+  const structure = readStructure(raw, phrases);
+  const { chapters, planned } = structure;
+
+  // 2. Disenadores por capitulo, en paralelo.
+  const designed = new Map<number, Record<string, unknown>>();
+  const designerSys = designerSystem(types);
+  await mapWithConcurrency(sceneGroups(structure, phrases), DESIGNER_CONCURRENCY, async ({ title, brief }) => {
+    try {
+      const out = await callTool(client, designerModel, DESIGNER_MAX_TOKENS, designerSys, designerTool(types), brief, usage);
+      for (const s of asList(out?.scenes, "scenes").map((x) => x as Record<string, unknown>)) {
+        if (typeof s.scene_index === "number") designed.set(s.scene_index, s);
+      }
+    } catch (err) {
+      console.warn(`[scene_director] disenador "${title}" fallo:`, (err as Error).message);
+    }
+  });
+
+  return assemblePlan({ phrases, structure, designed, types, nav: input.nav, models: { director: directorModel, designer: designerModel }, usage });
 }
