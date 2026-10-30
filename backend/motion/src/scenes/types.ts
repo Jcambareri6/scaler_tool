@@ -76,6 +76,8 @@ export interface AnimatedVideoProps {
   nav?: TimedSpec[];
   // Subtitulos palabra por palabra ya cortados en tramos (lib/captions).
   captions?: CaptionChunk[];
+  // Narracion (URL publica); el video se renderiza con la voz.
+  audioSrc?: string;
   durationSeconds: number;
   width?: number;
   height?: number;

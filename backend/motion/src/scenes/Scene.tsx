@@ -87,7 +87,9 @@ function NumberValue({ state, t, theme, locale }: { state: ElementState; t: numb
   );
 }
 
-function ElementView({ el, state, t, s, theme, locale }: { el: SceneElement; state: ElementState; t: number; s: number; theme: Theme; locale?: string | undefined }) {
+function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: SceneElement; state: ElementState; t: number; s: number; theme: Theme; locale?: string | undefined; alone: boolean }) {
+  // Solo en pantalla: mas grande, para no dejar el lienzo vacio.
+  const s = alone ? base0 * 1.3 : base0;
   const { fps } = useVideoConfig();
   const frame = Math.round(t * fps);
   const inP = spring({ frame: frame - Math.round(state.shownAt * fps), fps, config: { damping: 200 }, durationInFrames: ELEMENT_IN });
@@ -208,17 +210,22 @@ function ElementView({ el, state, t, s, theme, locale }: { el: SceneElement; sta
   );
 }
 
-// Zonas fijas de la pantalla (a 1080p). Con left/right en uso, el centro se
-// achica a una columna del medio.
-function slotBox(slot: Exclude<Slot, "full">, split: boolean, s: number, width: number): React.CSSProperties {
+// Zonas fijas de la pantalla (a 1080p). Con algo a los costados, la franja
+// del medio se parte en columnas iguales: dos (costados) o tres (costados y
+// centro), para que un titulo del centro no quede apretado.
+function slotBox(slot: Exclude<Slot, "full">, layout: { split: boolean; center: boolean }, s: number, width: number): React.CSSProperties {
   const side = 140 * s;
+  const gap = 50 * s;
   if (slot === "top") return { left: side, right: side, top: 140 * s, height: 180 * s, justifyContent: "flex-end" };
   // Anclado abajo y sin alto fijo: crece hacia arriba, nunca sobre los subtitulos.
   if (slot === "bottom") return { left: side, right: side, bottom: 200 * s, justifyContent: "flex-end" };
   const middle = { top: 330 * s, bottom: 400 * s, justifyContent: "center" };
-  if (slot === "left") return { ...middle, left: side, width: width / 2 - side - 40 * s };
-  if (slot === "right") return { ...middle, right: side, width: width / 2 - side - 40 * s };
-  return split ? { ...middle, left: width / 2 - 200 * s, width: 400 * s } : { ...middle, left: side, right: side, top: 250 * s, bottom: 300 * s };
+  if (!layout.split) return { ...middle, left: side, right: side, top: 250 * s, bottom: 300 * s };
+  const columns = layout.center ? 3 : 2;
+  const colWidth = (width - 2 * side - (columns - 1) * gap) / columns;
+  if (slot === "left") return { ...middle, left: side, width: colWidth };
+  if (slot === "right") return { ...middle, right: side, width: colWidth };
+  return { ...middle, left: side + colWidth + gap, width: colWidth };
 }
 
 export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedScene; theme: Theme; palette: string | PaletteTheme | undefined; locale?: string | undefined }) {
@@ -235,7 +242,10 @@ export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedSc
   const states = scene.elements.map((el) => ({ el, state: stateAt(el, scene, t) })).filter(({ state }) => state.visible);
   // Columnas solo si hay algo a los costados EN PANTALLA: un titulo que va
   // antes de las tarjetas usa todo el ancho.
-  const split = states.some(({ el }) => el.slot === "left" || el.slot === "right");
+  const layout = {
+    split: states.some(({ el }) => el.slot === "left" || el.slot === "right"),
+    center: states.some(({ el }) => el.slot === "center"),
+  };
   const slots: Exclude<Slot, "full">[] = ["top", "left", "center", "right", "bottom"];
 
   return (
@@ -258,9 +268,9 @@ export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedSc
         const items = states.filter(({ el }) => el.slot === slot && el.kind !== "graphic");
         if (items.length === 0) return null;
         return (
-          <div key={slot} style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center", gap: 28 * s, ...slotBox(slot, split, s, width) }}>
+          <div key={slot} style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center", gap: 28 * s, ...slotBox(slot, layout, s, width) }}>
             {items.map(({ el, state }) => (
-              <ElementView key={el.id} el={el} state={state} t={t} s={s} theme={theme} locale={locale} />
+              <ElementView key={el.id} el={el} state={state} t={t} s={s} theme={theme} locale={locale} alone={states.filter(({ el: x }) => x.kind !== "graphic").length === 1} />
             ))}
           </div>
         );

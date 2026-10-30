@@ -80,7 +80,7 @@ export interface DirectorResult {
   storyboard: Storyboard;
 }
 
-function asList(value: unknown, key: string): unknown[] {
+export function asList(value: unknown, key: string): unknown[] {
   let v = value;
   if (typeof v === "string") {
     try {
@@ -93,7 +93,7 @@ function asList(value: unknown, key: string): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-function clock(seconds: number): string {
+export function clock(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
@@ -310,9 +310,9 @@ function designerTool(): Anthropic.Tool {
 
 // Tokens gastados por modelo en un video (se guardan en el storyboard para
 // saber el costo real del director).
-type Usage = Record<string, { input: number; output: number }>;
+export type Usage = Record<string, { input: number; output: number }>;
 
-async function callTool(
+export async function callTool(
   client: Anthropic,
   model: string,
   maxTokens: number,

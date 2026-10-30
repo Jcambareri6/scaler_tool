@@ -71,7 +71,7 @@ const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 // "1. 600" == "1.600": las escenas armadas antes del arreglo de
 // build_scenes (que cortaba en el punto de miles) quedaron con ese espacio,
 // y se conservan tal cual al regenerar con imagenes cargadas.
-function normalize(text: string): string {
+export function normalize(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").replace(/(\d[.,]) (?=\d)/g, "$1").trim();
 }
 
@@ -88,7 +88,7 @@ function isLatLon(value: unknown): value is { lat: number; lon: number } {
   );
 }
 
-function appearsIn(haystack: string, needle: string | undefined): boolean {
+export function appearsIn(haystack: string, needle: string | undefined): boolean {
   const n = needle ? normalize(needle) : "";
   return n.length > 0 && haystack.includes(n);
 }

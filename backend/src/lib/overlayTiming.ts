@@ -196,7 +196,7 @@ export function placeNavHeaders(
   const left = [ctx.channel?.trim(), ctx.topic ? clip(ctx.topic, 64) : null].filter(Boolean).join(" · ");
   const chapters = placed.filter((p) => p.spec.type === "title_card");
   // "Caso 1 de 6" si los capitulos son casos de una lista ("Caso 2: ...").
-  const isCases = chapters.length > 0 && chapters.every((c) => /^s*caso|^s*case/i.test(`${c.spec.label ?? ""} ${c.spec.text}`.trim()));
+  const isCases = chapters.length > 0 && chapters.every((c) => /^\s*(caso|case)\b/i.test(`${c.spec.label ?? ""} ${c.spec.text}`.trim()));
   const unit = isCases ? words.case : words.chapter;
 
   const header = (label: string, start: number, end: number): PlacedOverlay => ({

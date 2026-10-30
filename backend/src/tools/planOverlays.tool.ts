@@ -36,7 +36,7 @@ const MAX_OVERLAYS_PER_SCENE = 3;
 // Que hace cada tipo (para el prompt). Solo se le ofrecen al LLM los que
 // tienen componente en motion/ (ver supportedOverlayTypes): el catalogo
 // crece por fases sin tocar este archivo.
-const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
+export const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   big_number: 'una cifra con unidad que impacta ("1.500 km por hora", "el 70% de las personas", "40.000 millones"). Se anima como contador. "label" = de que es la cifra.',
   data_viz_single: 'comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.',
   versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados ({label: que es, text: su valor}). "text" = la conclusion o el titulo de la comparacion.',
@@ -69,7 +69,7 @@ const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 3 a 8 palabras. "label" = UNA palabra (dos como mucho) de esa misma frase que se resalta en color, la de mas peso ("nunca", no "no terminaría nunca"). Para los momentos fuertes, no para cualquier oracion.',
 };
 
-function plannableTypes(): OverlayType[] {
+export function plannableTypes(): OverlayType[] {
   const supported = new Set(supportedOverlayTypes());
   return (Object.keys(TYPE_GUIDE) as OverlayType[]).filter((t) => supported.has(t));
 }
@@ -285,7 +285,7 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<RawPl
   }
 }
 
-function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
+export function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown; icon?: unknown; lat?: unknown; lon?: unknown; ref?: unknown };
   if (typeof r.type !== "string" || !(types as string[]).includes(r.type)) return null;
