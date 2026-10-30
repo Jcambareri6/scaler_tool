@@ -39,7 +39,7 @@ import type { OverlaySpec } from "../types/shared/typeShared.js";
 import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
-import { buildSceneImagePrompts, buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
+import { buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
 
 export interface PipelineContext {
   userId: string;
@@ -561,21 +561,6 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
         { force: generatedScenes === aiScenes.length }
       );
     });
-  }
-
-  if (flowOnly) {
-    // Los mismos prompts que arma "Cargar prompts del proyecto" en la
-    // extension (biblia visual + diseño del canal, por tramos). Un fallo
-    // no tira el video: las escenas quedan armadas y la extension vuelve a
-    // pedir los que falten.
-    await reportJobProgress(ctx.jobId, 85, "Armando los prompts de imagen para Flow...", { force: true });
-    try {
-      const prompts = await buildSceneImagePrompts({ scriptId: script.id, videoProjectId: projectId, userId: ctx.userId });
-      const failed = prompts.filter((p) => p.error).length;
-      if (failed) console.warn(`[pipeline] ${projectId}: ${failed} escenas sin prompt de imagen`);
-    } catch (err) {
-      console.warn(`[pipeline] ${projectId}: no se pudieron armar los prompts de imagen:`, err);
-    }
   }
 
   if (animated) {
