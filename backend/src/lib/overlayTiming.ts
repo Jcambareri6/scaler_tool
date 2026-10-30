@@ -40,6 +40,13 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   pivot_question: 3.5,
   card_grid: 7,
   scoreboard: 5,
+  strike_word: 3.5,
+  phrase_swap: 4.5,
+  chapter_index: 6,
+  number_phrase: 4,
+  person_card: 5,
+  milestone: 5,
+  subscribe_cta: 4.5,
 };
 
 export interface TimedOverlay extends OverlaySpec {

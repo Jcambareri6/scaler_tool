@@ -151,6 +151,20 @@ export type OverlayType =
   | "card_grid"
   // Resultado/enfrentamiento: `items` = los 2 lados ({label: nombre, text: resultado}).
   | "scoreboard"
+  // Palabra o frase corta que se desmiente: se tacha en rojo.
+  | "strike_word"
+  // `text` se funde en `label` (dos ideas contrapuestas).
+  | "phrase_swap"
+  // Lo que viene: `text` = titulo, `items` = las partes en orden.
+  | "chapter_index"
+  // Frase con la cifra en un recuadro del acento.
+  | "number_phrase"
+  // Persona sin foto: `text` = nombre, `label` = rol.
+  | "person_card"
+  // Hito chico arriba a la izquierda: `text` = que paso, `label` = fecha.
+  | "milestone"
+  // Tarjeta tipo YouTube con cursor que toca Suscribirse y la campana.
+  | "subscribe_cta"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos

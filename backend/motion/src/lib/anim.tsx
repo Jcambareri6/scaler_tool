@@ -35,13 +35,15 @@ export function Scrim({ color, at, size, opacity }: { color: string; at: string;
 }
 
 // Textos fijos de interfaz (no salen del guion) segun el idioma del canal.
-export function uiText(locale: string | undefined, key: "myth" | "fact" | "vs" | "source"): string {
+export function uiText(locale: string | undefined, key: "myth" | "fact" | "vs" | "source" | "subscribe" | "subscribed"): string {
   const lang = (locale ?? "es").slice(0, 2);
   const table = {
     myth: { es: "Mito", en: "Myth", pt: "Mito" },
     fact: { es: "Realidad", en: "Fact", pt: "Realidade" },
     vs: { es: "vs", en: "vs", pt: "vs" },
     source: { es: "Fuente", en: "Source", pt: "Fonte" },
+    subscribe: { es: "Suscribirse", en: "Subscribe", pt: "Inscrever-se" },
+    subscribed: { es: "Suscrito", en: "Subscribed", pt: "Inscrito" },
   } as const;
   return table[key][lang as "es" | "en" | "pt"] ?? table[key].es;
 }

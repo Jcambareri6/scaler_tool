@@ -35,6 +35,13 @@ const VALID_TYPES: OverlayType[] = [
   "pivot_question",
   "card_grid",
   "scoreboard",
+  "strike_word",
+  "phrase_swap",
+  "chapter_index",
+  "number_phrase",
+  "person_card",
+  "milestone",
+  "subscribe_cta",
   "ninguno",
 ];
 
@@ -48,9 +55,10 @@ const MULTI_ITEM_TYPES: OverlayType[] = [
   "line_chart",
   "card_grid",
   "scoreboard",
+  "chapter_index",
 ];
 // En una lista cada entrada es solo su texto: el label es opcional.
-const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid"];
+const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_index"];
 // Graficos que dibujan el valor de cada item: sin cifra no hay que dibujar.
 const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 
@@ -161,6 +169,13 @@ export const generateOverlayTool: ToolDefinition<
     // comparan nada: se descarta el grafico entero.
     if (items && items.length < 2) {
       throw new Error(`overlay ${overlay.type} con menos de 2 items validos (modo estricto)`);
+    }
+    // Sin la segunda frase no hay reemplazo; sin cifra no hay cifra en frase.
+    if (overlay.type === "phrase_swap" && !label) {
+      throw new Error("phrase_swap sin label (la segunda frase) literal del guion — se descarta");
+    }
+    if (overlay.type === "number_phrase" && !/\d/.test(text)) {
+      throw new Error("number_phrase sin cifra en el texto — se descarta");
     }
     if (overlay.type === "scoreboard" && items!.length !== 2) {
       throw new Error("scoreboard necesita exactamente 2 lados");

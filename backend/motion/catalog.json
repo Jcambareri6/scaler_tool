@@ -20,7 +20,14 @@
     "line_chart": { "introSeconds": 2.0, "blur": 8 },
     "pivot_question": { "introSeconds": 1.6, "blur": 12 },
     "card_grid": { "introSeconds": 1.7, "blur": 8 },
-    "scoreboard": { "introSeconds": 1.2, "blur": 8 }
+    "scoreboard": { "introSeconds": 1.2, "blur": 8 },
+    "strike_word": { "introSeconds": 1.1, "blur": 12 },
+    "phrase_swap": { "introSeconds": 1.8, "blur": 10 },
+    "chapter_index": { "introSeconds": 1.5, "blur": 8 },
+    "number_phrase": { "introSeconds": 1.0, "blur": 10 },
+    "person_card": { "introSeconds": 1.0, "blur": 0 },
+    "milestone": { "introSeconds": 0.6, "blur": 0 },
+    "subscribe_cta": { "introSeconds": 2.4, "blur": 0 }
   },
   "icons": [
     "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",

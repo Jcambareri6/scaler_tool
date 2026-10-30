@@ -21,6 +21,13 @@ import { LineChart } from "./components/LineChart";
 import { PivotQuestion } from "./components/PivotQuestion";
 import { CardGrid } from "./components/CardGrid";
 import { Scoreboard } from "./components/Scoreboard";
+import { StrikeWord } from "./components/StrikeWord";
+import { PhraseSwap } from "./components/PhraseSwap";
+import { ChapterIndex } from "./components/ChapterIndex";
+import { NumberPhrase } from "./components/NumberPhrase";
+import { PersonCard } from "./components/PersonCard";
+import { MilestoneTag } from "./components/MilestoneTag";
+import { SubscribeCard } from "./components/SubscribeCard";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -65,6 +72,20 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <CardGrid spec={spec} theme={theme} exit={exit} />;
     case "scoreboard":
       return <Scoreboard spec={spec} theme={theme} exit={exit} />;
+    case "strike_word":
+      return <StrikeWord spec={spec} theme={theme} exit={exit} />;
+    case "phrase_swap":
+      return <PhraseSwap spec={spec} theme={theme} exit={exit} />;
+    case "chapter_index":
+      return <ChapterIndex spec={spec} theme={theme} exit={exit} />;
+    case "number_phrase":
+      return <NumberPhrase spec={spec} theme={theme} exit={exit} />;
+    case "person_card":
+      return <PersonCard spec={spec} theme={theme} exit={exit} />;
+    case "milestone":
+      return <MilestoneTag spec={spec} theme={theme} exit={exit} />;
+    case "subscribe_cta":
+      return <SubscribeCard spec={spec} theme={theme} exit={exit} locale={locale} />;
     default:
       return null;
   }
