@@ -189,7 +189,8 @@ export function placeNavHeaders(
     start,
     end,
   });
-  if (chapters.length === 0) return left ? [header("", 0, videoEnd)] : [];
+  // Sin capitulos no hay estructura que mostrar: canal · tema solo no aporta.
+  if (chapters.length === 0) return [];
 
   const result: PlacedOverlay[] = [];
   if (chapters[0]!.start >= MIN_PROLOGUE_SECONDS) result.push(header(words.prologue, 0, chapters[0]!.start));
