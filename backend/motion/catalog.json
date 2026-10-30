@@ -27,7 +27,9 @@
     "number_phrase": { "introSeconds": 1.0, "blur": 10 },
     "person_card": { "introSeconds": 1.0, "blur": 0 },
     "milestone": { "introSeconds": 0.6, "blur": 0 },
-    "subscribe_cta": { "introSeconds": 2.4, "blur": 0 }
+    "subscribe_cta": { "introSeconds": 2.4, "blur": 0 },
+    "map_globe": { "introSeconds": 2.0, "blur": 10 },
+    "map_marker": { "introSeconds": 2.1, "blur": 0 }
   },
   "icons": [
     "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",

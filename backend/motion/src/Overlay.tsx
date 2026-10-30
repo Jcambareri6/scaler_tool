@@ -28,6 +28,8 @@ import { NumberPhrase } from "./components/NumberPhrase";
 import { PersonCard } from "./components/PersonCard";
 import { MilestoneTag } from "./components/MilestoneTag";
 import { SubscribeCard } from "./components/SubscribeCard";
+import { MapGlobe } from "./components/MapGlobe";
+import { MapMarker } from "./components/MapMarker";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -86,6 +88,10 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <MilestoneTag spec={spec} theme={theme} exit={exit} />;
     case "subscribe_cta":
       return <SubscribeCard spec={spec} theme={theme} exit={exit} locale={locale} />;
+    case "map_globe":
+      return <MapGlobe spec={spec} theme={theme} exit={exit} />;
+    case "map_marker":
+      return <MapMarker spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

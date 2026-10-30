@@ -47,6 +47,8 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   person_card: 5,
   milestone: 5,
   subscribe_cta: 4.5,
+  map_globe: 5,
+  map_marker: 5.5,
 };
 
 export interface TimedOverlay extends OverlaySpec {

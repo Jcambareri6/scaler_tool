@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
       // motion/ tiene su propio node_modules (React 18, para el render) y
       // en Netlify ni siquiera esta instalado: sus imports se resuelven
       // siempre contra los de este front, con una sola copia de React.
-      dedupe: ['react', 'react-dom', 'remotion', 'lucide-react', '@fontsource/inter', '@fontsource/cormorant-garamond'],
+      dedupe: ['react', 'react-dom', 'remotion', 'lucide-react', '@fontsource/inter', '@fontsource/cormorant-garamond', 'd3-geo', 'topojson-client', 'world-atlas'],
     },
     server: {
       host: '0.0.0.0',

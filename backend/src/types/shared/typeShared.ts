@@ -165,6 +165,10 @@ export type OverlayType =
   | "milestone"
   // Tarjeta tipo YouTube con cursor que toca Suscribirse y la campana.
   | "subscribe_cta"
+  // Mapas (`geo` = coordenada del lugar): globo que gira hasta el pais, o
+  // mapa plano con reticula y opcional segundo lugar (`ref`).
+  | "map_globe"
+  | "map_marker"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos
@@ -194,6 +198,11 @@ export interface OverlaySpec {
   // Icono (scale_compare): uno de motion/catalog.json "icons". No es texto
   // del guion, asi que no pasa por el modo estricto.
   icon?: string;
+  // Mapas (map_globe, map_marker): coordenada del lugar de `text`, la da el
+  // planificador; solo ubica el mapa, no se muestra. `ref`: segundo lugar
+  // de map_marker (su `name` si es texto del guion y se valida).
+  geo?: { lat: number; lon: number };
+  ref?: { name: string; lat: number; lon: number };
 }
 export interface Provider {
   id: string;

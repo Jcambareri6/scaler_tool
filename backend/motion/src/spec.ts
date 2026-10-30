@@ -17,6 +17,15 @@ export interface OverlaySpec {
   progress?: number;
   // scale_compare: clave de lib/icons.ts (lista en catalog.json "icons").
   icon?: string;
+  // Mapas: coordenada del lugar (`text`) y, en map_marker, un segundo lugar
+  // de referencia. No se muestran como texto: solo ubican el mapa.
+  geo?: GeoPoint;
+  ref?: GeoPoint & { name: string };
+}
+
+export interface GeoPoint {
+  lat: number;
+  lon: number;
 }
 
 export interface OverlayProps {

@@ -42,6 +42,8 @@ const VALID_TYPES: OverlayType[] = [
   "person_card",
   "milestone",
   "subscribe_cta",
+  "map_globe",
+  "map_marker",
   "ninguno",
 ];
 
@@ -67,6 +69,19 @@ const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 // y se conservan tal cual al regenerar con imagenes cargadas.
 function normalize(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").replace(/(\d[.,]) (?=\d)/g, "$1").trim();
+}
+
+function isLatLon(value: unknown): value is { lat: number; lon: number } {
+  const v = value as { lat?: unknown; lon?: unknown } | null | undefined;
+  return (
+    !!v &&
+    typeof v.lat === "number" &&
+    typeof v.lon === "number" &&
+    Number.isFinite(v.lat) &&
+    Number.isFinite(v.lon) &&
+    Math.abs(v.lat) <= 90 &&
+    Math.abs(v.lon) <= 180
+  );
 }
 
 function appearsIn(haystack: string, needle: string | undefined): boolean {
@@ -109,6 +124,8 @@ export const generateOverlayTool: ToolDefinition<
           anchor: { type: "number" },
           duration: { type: "number" },
           icon: { type: "string" },
+          geo: { type: "object" },
+          ref: { type: "object" },
         },
         required: ["type", "text", "source"],
       },
@@ -163,6 +180,17 @@ export const generateOverlayTool: ToolDefinition<
     if (overlay.type === "myth_fact" && !label) {
       throw new Error("myth_fact sin label (la realidad) literal del guion — se descarta");
     }
+    // Mapas: la coordenada no es texto del guion (no se muestra), solo tiene
+    // que ser valida. El nombre del lugar de referencia si se ve: literal.
+    const isMap = overlay.type === "map_globe" || overlay.type === "map_marker";
+    const geo = isMap && isLatLon(overlay.geo) ? { lat: overlay.geo.lat, lon: overlay.geo.lon } : undefined;
+    if (isMap && !geo) {
+      throw new Error(`${overlay.type} sin coordenada valida — se descarta`);
+    }
+    const ref =
+      overlay.type === "map_marker" && isLatLon(overlay.ref) && appearsIn(normalizedFull, overlay.ref?.name)
+        ? { name: overlay.ref!.name.trim(), lat: overlay.ref!.lat, lon: overlay.ref!.lon }
+        : undefined;
     // El icono no es texto del guion: solo se valida que exista.
     const icon = overlay.icon && supportedOverlayIcons().includes(overlay.icon) ? overlay.icon : undefined;
     // Barras, versus o linea de tiempo con menos de 2 valores validos no
@@ -189,6 +217,8 @@ export const generateOverlayTool: ToolDefinition<
         ...(label ? { label } : {}),
         ...(items?.length ? { items } : {}),
         ...(icon ? { icon } : {}),
+        ...(geo ? { geo } : {}),
+        ...(ref ? { ref } : {}),
         ...(typeof overlay.anchor === "number" ? { anchor: Math.min(1, Math.max(0, overlay.anchor)) } : {}),
         ...(typeof overlay.duration === "number" && overlay.duration > 0 ? { duration: Math.min(12, overlay.duration) } : {}),
       },

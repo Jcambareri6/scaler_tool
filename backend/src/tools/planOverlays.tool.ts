@@ -56,6 +56,8 @@ const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   person_card: 'cuando se presenta a una persona real por su nombre y su rol ("el biólogo John McGeehan"). "text" = el nombre, "label" = el rol. Si hay 2 o mas datos de la persona, mejor profile_card.',
   milestone: 'un hito fechado que sitúa el tramo en el tiempo sin interrumpir ("en 2018, el descubrimiento"). Chico, en una esquina. "text" = que paso (<= 3 palabras), "label" = la fecha o el año.',
   subscribe_cta: 'igual que cta pero como tarjeta de YouTube con el cursor que toca Suscribirse y la campana. Para el pedido principal de suscripcion; usa uno solo de los dos por video.',
+  map_globe: 'cuando la narracion lleva a un PAIS o region del mundo y conviene ubicarlo en el planeta ("en Groenlandia", "llegaron a Perú"). Globo que gira hasta el lugar y lo resalta. "text" = el lugar literal, "label" opcional = su dato. "lat"/"lon" = coordenadas del lugar (no se muestran).',
+  map_marker: 'cuando importa DONDE queda algo mas chico (una ciudad, un epicentro, un sitio) o su distancia a otro lugar nombrado. Mapa plano que se acerca con una reticula. "text" = el lugar literal, "label" opcional = su dato literal (la distancia si el guion la dice), "lat"/"lon" = sus coordenadas; "ref" opcional = otro lugar NOMBRADO en el guion para ubicarlo ({name literal, lat, lon}). Usa location si el lugar no se puede ubicar en un mapa.',
   title_card: 'inicio de un capitulo/parte ("Escenario 1", "Pero hay algo peor") o la pregunta central del video al arrancar. Pocos: 2 a 5 en todo el video, solo donde de verdad cambia de parte. "text" = el titulo, "label" opcional = subtitulo. El numero de capitulo y la barra de progreso se agregan solos.',
   rank_reveal: 'posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.',
   lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis"). "text" = el termino, "label" = su definicion corta del guion.',
@@ -153,6 +155,14 @@ function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
                   type: { type: "string", enum: types },
                   text: { type: "string" },
                   label: { type: "string" },
+                  lat: { type: "number", description: "Solo mapas: latitud del lugar" },
+                  lon: { type: "number", description: "Solo mapas: longitud del lugar" },
+                  ref: {
+                    type: "object",
+                    description: "Solo map_marker: segundo lugar nombrado en el guion",
+                    properties: { name: { type: "string" }, lat: { type: "number" }, lon: { type: "number" } },
+                    required: ["name", "lat", "lon"],
+                  },
                   ...(supportedOverlayIcons().length > 0
                     ? { icon: { type: "string", enum: supportedOverlayIcons() } }
                     : {}),
@@ -271,7 +281,7 @@ async function planWithOpenAI(user: string, types: OverlayType[]): Promise<RawPl
 
 function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown; icon?: unknown };
+  const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown; icon?: unknown; lat?: unknown; lon?: unknown; ref?: unknown };
   if (typeof r.type !== "string" || !(types as string[]).includes(r.type)) return null;
   if (typeof r.text !== "string" || !r.text.trim()) return null;
   const items = Array.isArray(r.items)
@@ -290,6 +300,9 @@ function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
     ...(typeof r.label === "string" && r.label.trim() ? { label: r.label.trim() } : {}),
     ...(items?.length ? { items } : {}),
     ...(typeof r.icon === "string" && r.icon ? { icon: r.icon } : {}),
+    // Mapas: generate_overlay valida rangos y descarta si falta.
+    ...(typeof r.lat === "number" && typeof r.lon === "number" ? { geo: { lat: r.lat, lon: r.lon } } : {}),
+    ...(r.ref && typeof r.ref === "object" ? { ref: r.ref as NonNullable<OverlaySpec["ref"]> } : {}),
   };
 }
 
