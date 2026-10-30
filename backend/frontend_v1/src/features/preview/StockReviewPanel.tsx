@@ -468,6 +468,16 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                   <OverlayLayer data={overlays} currentTime={currentTime} isPlaying={isPlaying} playbackRate={playbackRate} />
                 </Suspense>
               )}
+              {overlays?.enabled && (overlays.nav?.length ?? 0) > 0 && (
+                <Suspense fallback={null}>
+                  <OverlayLayer
+                    data={{ ...overlays, overlays: overlays.nav! }}
+                    currentTime={currentTime}
+                    isPlaying={isPlaying}
+                    playbackRate={playbackRate}
+                  />
+                </Suspense>
+              )}
 
               {/* Preview de los subtitulos que van a quedar quemados en el
                   render final (ver render_video.tool.ts) -- mismo texto y

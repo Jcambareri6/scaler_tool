@@ -151,3 +151,53 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
   }
   return result;
 }
+
+// Capa fija de navegacion (Ciencia y Vida, Como Funciona El Mundo): una
+// linea arriba todo el video con canal · tema a la izquierda y el capitulo
+// a la derecha. Un tramo por capitulo (los title_card ya ubicados): al
+// cambiar de capitulo se va y vuelve a entrar con el nuevo. Va aparte de
+// placeOverlays porque convive con los demas graficos.
+const NAV_TEXT = {
+  es: { chapter: "Capítulo", case: "Caso", of: "de", prologue: "Prólogo" },
+  en: { chapter: "Chapter", case: "Case", of: "of", prologue: "Prologue" },
+  pt: { chapter: "Capítulo", case: "Caso", of: "de", prologue: "Prólogo" },
+} as const;
+// Antes del primer capitulo: si es mas corto que esto no se muestra
+// "Prologo" (el capitulo arranca casi con el video).
+const MIN_PROLOGUE_SECONDS = 8;
+
+function clip(text: string, max: number): string {
+  const clean = text.trim().replace(/[.!:;,]+$/, "");
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
+}
+
+export function placeNavHeaders(
+  placed: PlacedOverlay[],
+  videoEnd: number,
+  ctx: { channel?: string | null; topic?: string | null; locale?: string | null }
+): PlacedOverlay[] {
+  if (videoEnd <= 0) return [];
+  const words = NAV_TEXT[((ctx.locale ?? "es").slice(0, 2) as keyof typeof NAV_TEXT)] ?? NAV_TEXT.es;
+  const left = [ctx.channel?.trim(), ctx.topic ? clip(ctx.topic, 64) : null].filter(Boolean).join(" · ");
+  const chapters = placed.filter((p) => p.spec.type === "title_card");
+  // "Caso 1 de 6" si los capitulos son casos de una lista ("Caso 2: ...").
+  const isCases = chapters.length > 0 && chapters.every((c) => /^s*caso|^s*case/i.test(`${c.spec.label ?? ""} ${c.spec.text}`.trim()));
+  const unit = isCases ? words.case : words.chapter;
+
+  const header = (label: string, start: number, end: number): PlacedOverlay => ({
+    spec: { type: "nav_header", text: left, source: "script", ...(label ? { label } : {}) },
+    start,
+    end,
+  });
+  if (chapters.length === 0) return left ? [header("", 0, videoEnd)] : [];
+
+  const result: PlacedOverlay[] = [];
+  if (chapters[0]!.start >= MIN_PROLOGUE_SECONDS) result.push(header(words.prologue, 0, chapters[0]!.start));
+  chapters.forEach((c, i) => {
+    const title = isCases ? "" : clip(c.spec.text, 34);
+    const label = `${unit} ${i + 1} ${words.of} ${chapters.length}${title ? ` · ${title}` : ""}`;
+    const start = i === 0 && result.length === 0 ? 0 : c.start;
+    result.push(header(label, start, chapters[i + 1]?.start ?? videoEnd));
+  });
+  return result;
+}

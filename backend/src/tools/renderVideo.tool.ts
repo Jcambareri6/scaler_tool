@@ -25,7 +25,7 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
-import { placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
+import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
 import {
   motionCatalog,
   motionOverlayGraph,
@@ -35,7 +35,7 @@ import {
   type MotionClip,
 } from "../lib/motion.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
-import { resolveProjectStyle } from "../lib/niches.js";
+import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
 import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
@@ -919,8 +919,19 @@ async function realRender(
   if (overlaysOn && !motionCatalog()) {
     console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
   }
-  const placedOverlays =
+  const contentOverlays =
     overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
+  // La capa fija de arriba va despues, para que quede encima de los demas.
+  const placedOverlays =
+    overlaysOn && motionCatalog()
+      ? [
+          ...contentOverlays,
+          ...placeNavHeaders(contentOverlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
+            ...(await navHeaderContext(videoProjectId)),
+            locale: (await getChannelSettingsForProject(videoProjectId)).channel_language,
+          }),
+        ]
+      : [];
   // Planificado: si despues falla el render de los graficos, el video sale
   // igual sin ellos (ver motionClips).
   const burnEnabled = subtitlesEnabled || placedOverlays.length > 0;

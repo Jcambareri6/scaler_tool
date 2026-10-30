@@ -16,6 +16,7 @@ import { Location } from "./components/Location";
 import { MythFact } from "./components/MythFact";
 import { CornerBadge } from "./components/CornerBadge";
 import { CallToAction } from "./components/CallToAction";
+import { NavHeader } from "./components/NavHeader";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -50,6 +51,8 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <CornerBadge spec={spec} theme={theme} exit={exit} />;
     case "cta":
       return <CallToAction spec={spec} theme={theme} exit={exit} />;
+    case "nav_header":
+      return <NavHeader spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

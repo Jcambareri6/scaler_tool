@@ -155,6 +155,26 @@ export async function channelWorkspaceId(workspaceId: string | null, userId: str
   return (data?.id as string | undefined) ?? null;
 }
 
+// Textos de la capa fija de navegacion (placeNavHeaders): nombre del canal
+// (el workspace; el personal no tiene un nombre de canal, "Mi workspace") y
+// el titulo del video como tema.
+export async function navHeaderContext(projectId: string): Promise<{ channel: string | null; topic: string | null }> {
+  const { data: project } = await supabase
+    .from("video_projects")
+    .select("title, workspace_id, user_id")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return { channel: null, topic: null };
+  const id = await channelWorkspaceId(project.workspace_id as string | null, project.user_id as string);
+  const { data: workspace } = id
+    ? await supabase.from("workspaces").select("name, is_personal").eq("id", id).maybeSingle()
+    : { data: null };
+  return {
+    channel: workspace && !workspace.is_personal ? ((workspace.name as string | null) ?? null) : null,
+    topic: (project.title as string | null) ?? null,
+  };
+}
+
 async function channelPaletteFor(workspaceId: string | null, userId: string): Promise<string | null> {
   const id = await channelWorkspaceId(workspaceId, userId);
   if (!id) return null;

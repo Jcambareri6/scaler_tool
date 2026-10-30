@@ -15,7 +15,8 @@
     "location": { "introSeconds": 1.3, "blur": 0 },
     "myth_fact": { "introSeconds": 1.9, "blur": 10 },
     "badge": { "introSeconds": 1.0, "blur": 0 },
-    "cta": { "introSeconds": 1.4, "blur": 0 }
+    "cta": { "introSeconds": 1.4, "blur": 0 },
+    "nav_header": { "introSeconds": 1.0, "blur": 0 }
   },
   "icons": [
     "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",

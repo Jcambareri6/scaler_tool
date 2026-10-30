@@ -2,10 +2,10 @@ import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject, getWorkspaceRole, roleAtLeast } from "../../lib/ownership.js";
 import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
-import { placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
+import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
 import { numberLocale } from "../../lib/motion.js";
 import { isAdmin } from "../../lib/accounts.js";
-import { channelWorkspaceId, findPalette, getNiche, resolveProjectStyle } from "../../lib/niches.js";
+import { channelWorkspaceId, findPalette, getNiche, navHeaderContext, resolveProjectStyle } from "../../lib/niches.js";
 
 // GET /projects/:project_id/overlays
 // Graficos animados ya ubicados en el tiempo, para dibujarlos en vivo en la
@@ -41,7 +41,16 @@ export async function getProjectOverlays(req: Request, res: Response) {
     // Graficos animados: solo para admins mientras estan en prueba.
     const enabled = Boolean(project?.overlays_enabled) && isAdmin(userId);
     const overlays = enabled ? placeOverlays(scenes) : [];
-    const locale = numberLocale((await getChannelSettingsForProject(access.id)).channel_language);
+    const channelLanguage = (await getChannelSettingsForProject(access.id)).channel_language;
+    const locale = numberLocale(channelLanguage);
+    // Capa fija de arriba (canal · tema | capitulo), aparte: convive con los
+    // demas graficos.
+    const nav = enabled
+      ? placeNavHeaders(overlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
+          ...(await navHeaderContext(access.id)),
+          locale: channelLanguage,
+        })
+      : [];
 
     const style = await resolveProjectStyle(access.id);
     const channelId = await channelWorkspaceId(project.workspace_id as string | null, project.user_id as string);
@@ -54,6 +63,7 @@ export async function getProjectOverlays(req: Request, res: Response) {
       theme: style?.theme ?? project?.overlay_theme ?? "documental",
       locale,
       overlays,
+      nav,
       style: style
         ? {
             niche: style.niche,

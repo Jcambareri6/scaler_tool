@@ -49,6 +49,8 @@ export interface ProjectOverlays {
   theme: OverlayTheme | PaletteTheme;
   locale: string;
   overlays: PlacedOverlay[];
+  // Capa fija de arriba (canal · tema | capitulo), convive con los demas.
+  nav?: PlacedOverlay[];
   style: OverlayStyle | null;
 }
 

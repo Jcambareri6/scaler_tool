@@ -140,6 +140,9 @@ export type OverlayType =
   | "myth_fact"
   // Escala/analogia ("pesa como 3 autos"): `icon` repetido N veces.
   | "scale_compare"
+  // Capa fija de arriba (canal · tema | capitulo): no la planifica el LLM,
+  // la arma placeNavHeaders (lib/overlayTiming.ts).
+  | "nav_header"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos
