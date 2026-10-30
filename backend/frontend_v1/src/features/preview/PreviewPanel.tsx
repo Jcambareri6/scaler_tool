@@ -527,7 +527,9 @@ export default function PreviewPanel({ projectId }: Props) {
 
       {/* Metricas animadas (contadores, barras, versus, linea de tiempo,
           ubicacion, capitulos) -- las elige plan_overlays al generar y las
-          dibuja render_video (video_projects.overlays_enabled). */}
+          dibuja render_video (video_projects.overlays_enabled). Solo admins
+          mientras estan en prueba; el backend lo vuelve a chequear. */}
+      {aiAllowed && (
       <div
         className="flex flex-col gap-2 w-full max-w-xs px-3 py-2.5 rounded-lg"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
@@ -552,6 +554,7 @@ export default function PreviewPanel({ projectId }: Props) {
           </p>
         )}
       </div>
+      )}
 
       {/* Resolucion del render final -- ver render_video.tool.ts
           (video_projects.render_quality). 1080p tarda ~2x. */}

@@ -4,6 +4,7 @@ import { getOwnedProject, getWorkspaceRole, roleAtLeast } from "../../lib/owners
 import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 import { placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
 import { numberLocale } from "../../lib/motion.js";
+import { isAdmin } from "../../lib/accounts.js";
 import { channelWorkspaceId, findPalette, getNiche, resolveProjectStyle } from "../../lib/niches.js";
 
 // GET /projects/:project_id/overlays
@@ -37,7 +38,9 @@ export async function getProjectOverlays(req: Request, res: Response) {
     if (timelineError) throw timelineError;
 
     const scenes = ((timeline?.content as { scenes?: OverlaySceneTiming[] } | null)?.scenes) ?? [];
-    const overlays = project?.overlays_enabled ? placeOverlays(scenes) : [];
+    // Graficos animados: solo para admins mientras estan en prueba.
+    const enabled = Boolean(project?.overlays_enabled) && isAdmin(userId);
+    const overlays = enabled ? placeOverlays(scenes) : [];
     const locale = numberLocale((await getChannelSettingsForProject(access.id)).channel_language);
 
     const style = await resolveProjectStyle(access.id);
@@ -46,7 +49,7 @@ export async function getProjectOverlays(req: Request, res: Response) {
     const niche = style ? getNiche(style.niche) : null;
 
     return res.status(200).json({
-      enabled: Boolean(project?.overlays_enabled),
+      enabled,
       // La paleta resuelta; sin niches.json, el tema viejo del proyecto.
       theme: style?.theme ?? project?.overlay_theme ?? "documental",
       locale,

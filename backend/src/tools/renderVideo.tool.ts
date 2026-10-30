@@ -36,6 +36,7 @@ import {
 } from "../lib/motion.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { resolveProjectStyle } from "../lib/niches.js";
+import { isAdmin } from "../lib/accounts.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 
 const require = createRequire(import.meta.url);
@@ -849,7 +850,9 @@ const PROGRESS_UPLOAD = 96;
 async function realRender(
   videoProjectId: string,
   timelineId: string,
-  jobId: string | undefined
+  jobId: string | undefined,
+  // Graficos animados: solo para admins mientras estan en prueba.
+  overlaysAllowed: boolean
 ): Promise<RenderVideoOutput> {
   const progress = (value: number, message: string, force = false) =>
     reportJobProgress(jobId, value, message, { force });
@@ -909,11 +912,12 @@ async function realRender(
   if (overlayOptionsError) {
     console.warn(`[render_video] no se pudo leer overlays_enabled (¿se corrio la migracion 20261028000000_video_overlays.sql?): ${overlayOptionsError.message}`);
   }
-  if (overlayOptions?.overlays_enabled && !motionCatalog()) {
+  const overlaysOn = overlaysAllowed && Boolean(overlayOptions?.overlays_enabled);
+  if (overlaysOn && !motionCatalog()) {
     console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
   }
   const placedOverlays =
-    overlayOptions?.overlays_enabled && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
+    overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
   // Planificado: si despues falla el render de los graficos, el video sale
   // igual sin ellos (ver motionClips).
   const burnEnabled = subtitlesEnabled || placedOverlays.length > 0;
@@ -1277,6 +1281,6 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
       }
       throw new ProviderNotConfiguredError("render_video");
     }
-    return realRender(video_project_id, timeline_id, ctx.jobId);
+    return realRender(video_project_id, timeline_id, ctx.jobId, isAdmin(ctx.userId));
   },
 };

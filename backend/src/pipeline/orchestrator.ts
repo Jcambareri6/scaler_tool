@@ -353,7 +353,8 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     }
     return valid;
   };
-  if (allScenes.length > 0 && project.overlays_enabled) {
+  // Graficos animados: solo para admins mientras estan en prueba.
+  if (allScenes.length > 0 && project.overlays_enabled && isAdmin(ctx.userId)) {
     await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
     try {
       const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
