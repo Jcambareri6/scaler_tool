@@ -5,6 +5,7 @@ import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
 import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
 import { numberLocale } from "../../lib/motion.js";
 import { isAdmin } from "../../lib/accounts.js";
+import { effectiveFormat } from "../../lib/formats.js";
 import { channelWorkspaceId, findPalette, getNiche, navHeaderContext, resolveProjectStyle } from "../../lib/niches.js";
 
 // GET /projects/:project_id/overlays
@@ -25,7 +26,7 @@ export async function getProjectOverlays(req: Request, res: Response) {
 
     const { data: project, error: projectError } = await supabase
       .from("video_projects")
-      .select("overlays_enabled, overlay_theme, workspace_id, user_id")
+      .select("overlays_enabled, overlay_theme, workspace_id, user_id, video_format")
       .eq("id", access.id)
       .single();
     if (projectError) throw projectError;
@@ -39,7 +40,8 @@ export async function getProjectOverlays(req: Request, res: Response) {
 
     const scenes = ((timeline?.content as { scenes?: OverlaySceneTiming[] } | null)?.scenes) ?? [];
     // Graficos animados: solo para admins mientras estan en prueba.
-    const enabled = Boolean(project?.overlays_enabled) && isAdmin(userId);
+    const format = effectiveFormat(project?.video_format, userId);
+    const enabled = (Boolean(project?.overlays_enabled) || format === "animated") && isAdmin(userId);
     const overlays = enabled ? placeOverlays(scenes) : [];
     const channelLanguage = (await getChannelSettingsForProject(access.id)).channel_language;
     const locale = numberLocale(channelLanguage);
@@ -59,6 +61,7 @@ export async function getProjectOverlays(req: Request, res: Response) {
 
     return res.status(200).json({
       enabled,
+      format,
       // La paleta resuelta; sin niches.json, el tema viejo del proyecto.
       theme: style?.theme ?? project?.overlay_theme ?? "documental",
       locale,

@@ -10,6 +10,7 @@ interface ProjectRow {
   script_style_id: string | null;
   voice_id: string | null;
   visual_source?: string | null;
+  video_format?: string | null;
   transitions_enabled?: boolean | null;
   subtitles_enabled?: boolean | null;
   overlays_enabled?: boolean | null;
@@ -50,6 +51,7 @@ export function mapProject(row: ProjectRow): VideoProject {
     scriptStyleId: row.script_style_id ?? undefined,
     voiceId: row.voice_id ?? undefined,
     visualSource: toVisualSource(row.visual_source),
+    videoFormat: row.video_format === "animated" ? "animated" : "stock",
     transitionsEnabled: Boolean(row.transitions_enabled),
     subtitlesEnabled: Boolean(row.subtitles_enabled),
     overlaysEnabled: Boolean(row.overlays_enabled),

@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { isVideoFormat } from "../../lib/formats.js";
 import { supabase } from "../../lib/supabase.js";
 import type { Scene } from "../../types/shared/typeShared.js";
 import type { ProjectDetail } from "./projects.types.js"
@@ -8,7 +9,7 @@ import { getChannelSettingsForProject, getChannelSettingsForWorkspace } from "..
 
 export async function createProject(req: Request, res: Response) {
   try {
-    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, overlays_enabled, overlay_theme, render_quality } = req.body;
+    const { title, description, target_duration, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, overlays_enabled, overlay_theme, render_quality, video_format } = req.body;
 
     const userId = req.user!.id;
 
@@ -43,6 +44,8 @@ export async function createProject(req: Request, res: Response) {
         ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
         ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
         ...(overlays_enabled !== undefined ? { overlays_enabled } : {}),
+        // Formato (lib/formats.ts); uno desconocido se ignora.
+        ...(isVideoFormat(video_format) ? { video_format } : {}),
         ...(overlay_theme ? { overlay_theme } : {}),
         ...(render_quality ? { render_quality } : {}),
       })
@@ -290,7 +293,7 @@ export async function updateProject(req: Request, res: Response) {
     const { project_id } = req.params;
     const userId = req.user!.id;
 
-    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, overlays_enabled, overlay_theme, render_quality, workspace_id } = req.body;
+    const { title, description, target_duration, status, content_policy, script_style_id, voice_id, visual_source, transitions_enabled, subtitles_enabled, overlays_enabled, overlay_theme, render_quality, workspace_id, video_format } = req.body;
 
     const access = await getOwnedProject(project_id, userId, "editor");
     if (!access) {
@@ -322,6 +325,8 @@ export async function updateProject(req: Request, res: Response) {
         ...(transitions_enabled !== undefined ? { transitions_enabled } : {}),
         ...(subtitles_enabled !== undefined ? { subtitles_enabled } : {}),
         ...(overlays_enabled !== undefined ? { overlays_enabled } : {}),
+        // Formato (lib/formats.ts); uno desconocido se ignora.
+        ...(isVideoFormat(video_format) ? { video_format } : {}),
         ...(overlay_theme ? { overlay_theme } : {}),
         // '720p' | '1080p' -- un valor invalido lo rechaza el check de la
         // columna y vuelve como 400.

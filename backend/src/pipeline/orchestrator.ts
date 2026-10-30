@@ -12,6 +12,7 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { isAdmin } from "../lib/accounts.js";
+import { effectiveFormat } from "../lib/formats.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
 import type { GenerateVoiceInput, GenerateVoiceOutput } from "../tools/generateVoice.tool.js";
@@ -275,6 +276,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // stock, que es lo que mas tarda) y al final se arman los prompts de
   // imagen, asi la extension los encuentra hechos.
   const flowOnly = project.visual_source === "flow";
+  // Formato todo animado (lib/formats.ts, solo admins): sin stock ni video
+  // con IA -- las escenas quedan sin visual y Remotion dibuja todo.
+  const animated = effectiveFormat(project.video_format, ctx.userId) === "animated";
   // Escenas a las que hay que buscarles visual: todas, salvo que se esten
   // conservando las que ya tienen (paso 4) -- esas no se tocan.
   const sceneRows = ((scenes ?? []) as SceneRow[]).filter((s) => !preservedVisuals?.has(s.id));
@@ -290,7 +294,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // coherentes entre si -- misma epoca, misma ubicacion, mismo tono.
   const sceneKeywords = new Map<string, string[]>();
   let videoGenre: string | undefined;
-  if (sceneRows.length > 0 && !flowOnly && !aiOnly) {
+  if (sceneRows.length > 0 && !flowOnly && !aiOnly && !animated) {
     const contextResult = await runTool<GenerateVisualContextInput, GenerateVisualContextOutput>(
       "generate_visual_context",
       { full_text: scriptText, ...(videoTopic ? { video_topic: videoTopic } : {}) },
@@ -354,7 +358,8 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     return valid;
   };
   // Graficos animados: solo para admins mientras estan en prueba.
-  if (allScenes.length > 0 && project.overlays_enabled && isAdmin(ctx.userId)) {
+  // En el formato animado los graficos son el video: van siempre.
+  if (allScenes.length > 0 && (project.overlays_enabled || animated) && isAdmin(ctx.userId)) {
     await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
     try {
       const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
@@ -448,7 +453,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
     if (aiOnly) {
       aiScenes.push(scene);
-    } else if (!flowOnly) {
+    } else if (!flowOnly && !animated) {
       // exclude_keys: sin esto, la cascada de search_stock se corta en la
       // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
       // saber si esos resultados ya estan gastados en otra escena de este
@@ -516,7 +521,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       await reportJobProgress(
         ctx.jobId,
         progress,
-        flowOnly || aiOnly
+        flowOnly || aiOnly || animated
           ? `Armando las escenas (${completedScenes}/${sceneRows.length})...`
           : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
         { force: completedScenes === sceneRows.length }
@@ -582,7 +587,11 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // 8. Gate humano
   await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
     progress: 100,
-    progress_message: flowOnly ? "Escenas listas para cargar desde Flow" : "Listo para revisar el stock",
+    progress_message: flowOnly
+      ? "Escenas listas para cargar desde Flow"
+      : animated
+        ? "Escenas animadas listas para revisar"
+        : "Listo para revisar el stock",
   });
 }
 

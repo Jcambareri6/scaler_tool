@@ -57,6 +57,7 @@ export const projectsService = {
     if (updates.scriptStyleId !== undefined) body.script_style_id = updates.scriptStyleId || null;
     if (updates.voiceId !== undefined) body.voice_id = updates.voiceId || null;
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
+    if (updates.videoFormat !== undefined) body.video_format = updates.videoFormat;
     if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
     if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
     if (updates.overlaysEnabled !== undefined) body.overlays_enabled = updates.overlaysEnabled;

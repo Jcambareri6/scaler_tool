@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
 import { useAccount } from "@/lib/accountContext";
-import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme } from "@/types";
+import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme, VideoFormat } from "@/types";
 
 interface Props {
   projectId: string;
@@ -292,10 +292,13 @@ export default function PreviewPanel({ projectId }: Props) {
   const [overlayTheme, setOverlayTheme] = useState<OverlayTheme>("documental");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
+  const [videoFormat, setVideoFormat] = useState<VideoFormat>("stock");
   // "Solo IA"/"Mixto" (video con SnapGen) solo para admins; el backend lo
   // vuelve a chequear (orchestrator.ts) y para el resto busca stock.
   const { account } = useAccount();
   const aiAllowed = !!account?.isAdmin;
+  // Formatos nuevos: solo admins (el backend lo vuelve a chequear).
+  const animatedFormat = aiAllowed && videoFormat === "animated";
   const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
@@ -314,6 +317,7 @@ export default function PreviewPanel({ projectId }: Props) {
         setOverlayTheme(p.overlayTheme);
         setRenderQuality(p.renderQuality);
         setVisualSource(p.visualSource);
+        setVideoFormat(p.videoFormat);
       }
     });
   }, [projectId]);
@@ -415,6 +419,7 @@ export default function PreviewPanel({ projectId }: Props) {
         (visualSource === "ai" || visualSource === "mixed") && !aiAllowed ? "stock" : visualSource;
       await projectsService.updateProject(projectId, {
         visualSource: source,
+        videoFormat: aiAllowed ? videoFormat : "stock",
         transitionsEnabled,
         subtitlesEnabled,
         overlaysEnabled,
@@ -457,6 +462,45 @@ export default function PreviewPanel({ projectId }: Props) {
           para cargarlas con la extension de Flow. "Solo IA"/"Mixto" (solo
           admins) generan el video de cada escena con SnapGen: todas, o solo
           las que no tienen stock que alcance. */}
+      {/* Formato del video (video_projects.video_format, ver backend
+          lib/formats.ts): solo admins mientras se prueba. "Todo animado"
+          no usa stock: Remotion dibuja el video entero, asi que las
+          opciones de visuales, transiciones y graficos no aplican. */}
+      {aiAllowed && (
+        <div className="flex flex-col gap-1.5 w-full max-w-xs">
+          <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
+            Formato
+          </span>
+          <div className="flex gap-2">
+            {(
+              [
+                { value: "stock", label: "Stock con gráficos" },
+                { value: "animated", label: "Todo animado" },
+              ] as { value: VideoFormat; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setVideoFormat(opt.value)}
+                className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
+                style={
+                  videoFormat === opt.value
+                    ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
+                    : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
+                }
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {animatedFormat && (
+            <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+              Sin stock: todo el video son gráficos animados. El render de este formato todavía está en construcción.
+            </p>
+          )}
+        </div>
+      )}
+
+      {!animatedFormat && (
       <div className="flex flex-col gap-1.5 w-full max-w-xs">
         <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
           Visuales
@@ -489,9 +533,11 @@ export default function PreviewPanel({ projectId }: Props) {
           ))}
         </div>
       </div>
+      )}
 
       {/* Fundido entre escenas en el render final -- ver
           render_video.tool.ts (video_projects.transitions_enabled). */}
+      {!animatedFormat && (
       <label
         className="flex items-center justify-between gap-3 w-full max-w-xs px-3 py-2.5 rounded-lg cursor-pointer"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
@@ -506,6 +552,7 @@ export default function PreviewPanel({ projectId }: Props) {
           className="w-4 h-4 accent-[#E30B10]"
         />
       </label>
+      )}
 
       {/* Subtitulos quemados en el render final -- ver
           render_video.tool.ts (video_projects.subtitles_enabled). Tambien
@@ -528,8 +575,9 @@ export default function PreviewPanel({ projectId }: Props) {
       {/* Metricas animadas (contadores, barras, versus, linea de tiempo,
           ubicacion, capitulos) -- las elige plan_overlays al generar y las
           dibuja render_video (video_projects.overlays_enabled). Solo admins
-          mientras estan en prueba; el backend lo vuelve a chequear. */}
-      {aiAllowed && (
+          mientras estan en prueba; el backend lo vuelve a chequear. En el
+          formato animado van siempre. */}
+      {aiAllowed && !animatedFormat && (
       <div
         className="flex flex-col gap-2 w-full max-w-xs px-3 py-2.5 rounded-lg"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}

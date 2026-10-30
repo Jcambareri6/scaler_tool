@@ -1,6 +1,9 @@
 export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "ERROR";
 
 export type VisualSource = "stock" | "ai" | "mixed" | "flow";
+// Formato del video (backend lib/formats.ts): "animated" = todo animado,
+// sin stock. Solo admins mientras se prueba.
+export type VideoFormat = "stock" | "animated";
 
 // Paleta de las metricas animadas segun el genero del video (ver
 // backend motion/src/theme.ts).
@@ -46,6 +49,7 @@ export interface OverlayStyle {
 
 export interface ProjectOverlays {
   enabled: boolean;
+  format?: VideoFormat;
   theme: OverlayTheme | PaletteTheme;
   locale: string;
   overlays: PlacedOverlay[];
@@ -71,6 +75,7 @@ export interface VideoProject {
   scriptStyleId?: string;
   voiceId?: string;
   visualSource: VisualSource;
+  videoFormat: VideoFormat;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
   // Metricas animadas (contadores, barras, versus...) quemadas en el render.
