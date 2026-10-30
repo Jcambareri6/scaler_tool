@@ -31,13 +31,28 @@ const VALID_TYPES: OverlayType[] = [
   "profile_card",
   "myth_fact",
   "scale_compare",
+  "line_chart",
+  "pivot_question",
+  "card_grid",
+  "scoreboard",
   "ninguno",
 ];
 
 // Tipos que se arman con varios valores (items) en vez de un solo texto.
-const MULTI_ITEM_TYPES: OverlayType[] = ["data_viz_single", "versus", "timeline", "list", "profile_card"];
+const MULTI_ITEM_TYPES: OverlayType[] = [
+  "data_viz_single",
+  "versus",
+  "timeline",
+  "list",
+  "profile_card",
+  "line_chart",
+  "card_grid",
+  "scoreboard",
+];
 // En una lista cada entrada es solo su texto: el label es opcional.
-const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list"];
+const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid"];
+// Graficos que dibujan el valor de cada item: sin cifra no hay que dibujar.
+const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 
 // "1. 600" == "1.600": las escenas armadas antes del arreglo de
 // build_scenes (que cortaba en el punto de miles) quedaron con ese espacio,
@@ -130,6 +145,7 @@ export const generateOverlayTool: ToolDefinition<
           .filter(
             (item) =>
               appearsIn(normalizedScript, item.text) &&
+              (!NUMERIC_ITEM_TYPES.includes(overlay.type) || /d/.test(item.text)) &&
               (appearsIn(normalizedFull, item.label) ||
                 (OPTIONAL_ITEM_LABEL_TYPES.includes(overlay.type) && !item.label?.trim()))
           )
@@ -145,6 +161,9 @@ export const generateOverlayTool: ToolDefinition<
     // comparan nada: se descarta el grafico entero.
     if (items && items.length < 2) {
       throw new Error(`overlay ${overlay.type} con menos de 2 items validos (modo estricto)`);
+    }
+    if (overlay.type === "scoreboard" && items!.length !== 2) {
+      throw new Error("scoreboard necesita exactamente 2 lados");
     }
 
     return {

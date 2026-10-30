@@ -36,6 +36,10 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   profile_card: 6,
   myth_fact: 5.5,
   scale_compare: 5,
+  line_chart: 7,
+  pivot_question: 3.5,
+  card_grid: 7,
+  scoreboard: 5,
 };
 
 export interface TimedOverlay extends OverlaySpec {

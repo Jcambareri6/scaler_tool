@@ -17,6 +17,10 @@ import { MythFact } from "./components/MythFact";
 import { CornerBadge } from "./components/CornerBadge";
 import { CallToAction } from "./components/CallToAction";
 import { NavHeader } from "./components/NavHeader";
+import { LineChart } from "./components/LineChart";
+import { PivotQuestion } from "./components/PivotQuestion";
+import { CardGrid } from "./components/CardGrid";
+import { Scoreboard } from "./components/Scoreboard";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -53,6 +57,14 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <CallToAction spec={spec} theme={theme} exit={exit} />;
     case "nav_header":
       return <NavHeader spec={spec} theme={theme} exit={exit} />;
+    case "line_chart":
+      return <LineChart spec={spec} theme={theme} exit={exit} locale={locale} />;
+    case "pivot_question":
+      return <PivotQuestion spec={spec} theme={theme} exit={exit} />;
+    case "card_grid":
+      return <CardGrid spec={spec} theme={theme} exit={exit} />;
+    case "scoreboard":
+      return <Scoreboard spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

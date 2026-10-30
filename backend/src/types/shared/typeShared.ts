@@ -143,6 +143,14 @@ export type OverlayType =
   // Capa fija de arriba (canal · tema | capitulo): no la planifica el LLM,
   // la arma placeNavHeaders (lib/overlayTiming.ts).
   | "nav_header"
+  // Tendencia: `text` = titulo, `label` = fuente, `items` = puntos en orden.
+  | "line_chart"
+  // Pregunta sola en pantalla; `label` = palabra clave que se subraya.
+  | "pivot_question"
+  // Muchos casos a la vez: `text` = titulo, `items` = tarjetas.
+  | "card_grid"
+  // Resultado/enfrentamiento: `items` = los 2 lados ({label: nombre, text: resultado}).
+  | "scoreboard"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos

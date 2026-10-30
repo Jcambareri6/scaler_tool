@@ -16,7 +16,11 @@
     "myth_fact": { "introSeconds": 1.9, "blur": 10 },
     "badge": { "introSeconds": 1.0, "blur": 0 },
     "cta": { "introSeconds": 1.4, "blur": 0 },
-    "nav_header": { "introSeconds": 1.0, "blur": 0 }
+    "nav_header": { "introSeconds": 1.0, "blur": 0 },
+    "line_chart": { "introSeconds": 2.0, "blur": 8 },
+    "pivot_question": { "introSeconds": 1.6, "blur": 12 },
+    "card_grid": { "introSeconds": 1.7, "blur": 8 },
+    "scoreboard": { "introSeconds": 1.2, "blur": 8 }
   },
   "icons": [
     "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",
