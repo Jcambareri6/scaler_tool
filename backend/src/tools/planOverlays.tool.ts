@@ -7,6 +7,7 @@ import { providerApiError } from "../lib/errors.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
 import { supportedOverlayIcons, supportedOverlayTypes } from "../lib/motion.js";
 import { getNiche, guessNiche, nicheIds } from "../lib/niches.js";
+import { directOverlays, type Storyboard } from "../director/director.js";
 
 // Decide QUE metrica animada va en cada escena (contador, barras, versus,
 // linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
@@ -91,10 +92,13 @@ export interface PlanOverlaysInput {
 export interface PlanOverlaysOutput {
   // order de la escena -> overlays (todavia sin validar contra el guion).
   overlays: Record<number, OverlaySpec[]>;
-  source: "anthropic" | "openai" | "heuristic";
+  source: "director" | "anthropic" | "openai" | "heuristic";
   // Nicho del video (motion/niches.json): lo clasifica el LLM en la misma
   // llamada; sin LLM, por palabras clave (guessNiche).
   niche: string;
+  // Solo con el director: estructura y momentos (elegidos y descartados con
+  // el motivo), para revisar por que eligio cada grafico.
+  storyboard?: Storyboard;
 }
 
 function buildSystemPrompt(types: OverlayType[]): string {
@@ -362,6 +366,18 @@ export const planOverlaysTool: ToolDefinition<PlanOverlaysInput, PlanOverlaysOut
     const fallbackNiche = guessNiche(`${input.video_topic ?? ""}\n${scenes.map((s) => s.text).join("\n")}`);
     // Sin componentes instalados (motion/ ausente) no tiene sentido pedir nada.
     if (scenes.length === 0 || types.length === 0) return { overlays: {}, source: "heuristic", niche: fallbackNiche };
+
+    // Primero el director (src/director): estructura, disenadores por
+    // capitulo y verificacion. Si falla o no devuelve nada, el planificador
+    // de una sola llamada de siempre.
+    try {
+      const directed = await directOverlays(scenes, input.video_topic, { types, typeGuide: TYPE_GUIDE, toSpec: toOverlaySpec });
+      if (directed) {
+        return { overlays: directed.overlays, source: "director", niche: directed.niche ?? fallbackNiche, storyboard: directed.storyboard };
+      }
+    } catch (err) {
+      console.warn("[plan_overlays] el director fallo, sigo con el planificador:", err);
+    }
 
     const user = buildUserPrompt({ ...input, scenes });
     let plan: RawPlan | null = null;

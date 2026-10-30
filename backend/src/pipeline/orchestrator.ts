@@ -376,7 +376,11 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       plannedOverlays = plan.overlays;
       // Nicho del video: decide la paleta por defecto mientras el canal no
       // haya elegido la suya (ver lib/niches.ts). No frena el video si falla.
-      const { error: nicheError } = await supabase.from("video_projects").update({ niche: plan.niche }).eq("id", projectId);
+      // overlay_storyboard: el plan del director (null con el planificador viejo).
+      const { error: nicheError } = await supabase
+        .from("video_projects")
+        .update({ niche: plan.niche, overlay_storyboard: plan.storyboard ?? null })
+        .eq("id", projectId);
       if (nicheError) console.warn(`[pipeline] ${projectId}: no se pudo guardar el nicho:`, nicheError.message);
     } catch (err) {
       console.warn(`[pipeline] ${projectId}: no se pudieron planificar los overlays:`, err);
