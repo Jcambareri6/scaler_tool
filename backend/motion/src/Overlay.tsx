@@ -30,6 +30,8 @@ import { MilestoneTag } from "./components/MilestoneTag";
 import { SubscribeCard } from "./components/SubscribeCard";
 import { MapGlobe } from "./components/MapGlobe";
 import { MapMarker } from "./components/MapMarker";
+import { LayersDiagram } from "./components/LayersDiagram";
+import { CycleDiagram } from "./components/CycleDiagram";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -92,6 +94,10 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <MapGlobe spec={spec} theme={theme} exit={exit} />;
     case "map_marker":
       return <MapMarker spec={spec} theme={theme} exit={exit} />;
+    case "layers_diagram":
+      return <LayersDiagram spec={spec} theme={theme} exit={exit} />;
+    case "cycle_diagram":
+      return <CycleDiagram spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

@@ -169,6 +169,11 @@ export type OverlayType =
   // mapa plano con reticula y opcional segundo lugar (`ref`).
   | "map_globe"
   | "map_marker"
+  // Diagramas: corte por capas (`items` de arriba a abajo: text = nombre,
+  // label = medida opcional) y ciclo (`items` = pasos, text del grafico =
+  // nombre del ciclo).
+  | "layers_diagram"
+  | "cycle_diagram"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos

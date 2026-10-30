@@ -44,6 +44,8 @@ const VALID_TYPES: OverlayType[] = [
   "subscribe_cta",
   "map_globe",
   "map_marker",
+  "layers_diagram",
+  "cycle_diagram",
   "ninguno",
 ];
 
@@ -58,9 +60,11 @@ const MULTI_ITEM_TYPES: OverlayType[] = [
   "card_grid",
   "scoreboard",
   "chapter_index",
+  "layers_diagram",
+  "cycle_diagram",
 ];
 // En una lista cada entrada es solo su texto: el label es opcional.
-const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_index"];
+const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram"];
 // Graficos que dibujan el valor de cada item: sin cifra no hay que dibujar.
 const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 
@@ -204,6 +208,9 @@ export const generateOverlayTool: ToolDefinition<
     }
     if (overlay.type === "number_phrase" && !/\d/.test(text)) {
       throw new Error("number_phrase sin cifra en el texto — se descarta");
+    }
+    if (overlay.type === "cycle_diagram" && items!.length < 3) {
+      throw new Error("cycle_diagram necesita al menos 3 pasos");
     }
     if (overlay.type === "scoreboard" && items!.length !== 2) {
       throw new Error("scoreboard necesita exactamente 2 lados");
