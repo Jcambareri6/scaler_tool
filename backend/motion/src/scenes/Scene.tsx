@@ -7,10 +7,11 @@ import { DrawingView } from "./Drawing";
 import { DOC, docTheme, toneColor } from "./palette";
 import type { AnimatedScene, DrawingComponent, SceneElement, Slot, Tone } from "./types";
 
-// Fundido de entrada/salida de cada escena y de cada elemento (frames).
-const SCENE_FADE = 12;
+// Fundido de entrada/salida de cada escena (frames a 30 fps = 0,6 s, como la
+// referencia: casi nunca hay corte seco).
+const SCENE_FADE = 18;
 // Las escenas se cruzan: la que sale sigue hasta que la nueva ya entro.
-export const SCENE_OVERLAP = 12;
+export const SCENE_OVERLAP = 18;
 const ELEMENT_IN = 14;
 const ELEMENT_OUT = 8;
 // Lo que tarda una cifra en contar hasta su valor nuevo.
