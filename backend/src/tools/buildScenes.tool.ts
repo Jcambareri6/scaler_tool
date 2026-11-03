@@ -214,23 +214,28 @@ export const buildScenesTool: ToolDefinition<BuildScenesInput, BuildScenesOutput
       throw new Error("El proyecto no tiene guion todavia");
     }
 
-    const fullText = ((script.content as { text?: string } | null)?.text) ?? "";
-    if (!fullText.trim()) {
-      throw new Error("El guion del proyecto esta vacio");
-    }
+    const scriptText = ((script.content as { text?: string } | null)?.text) ?? "";
 
     const { data: timeline } = await supabase
       .from("timelines")
       .select("content")
       .eq("video_project_id", video_project_id)
       .maybeSingle();
-    const timelineContent = timeline?.content as { words?: TranscribedWord[]; duration_seconds?: number } | null;
+    const timelineContent = timeline?.content as { words?: TranscribedWord[]; segments?: { text: string }[]; duration_seconds?: number } | null;
     const words = timelineContent?.words ?? [];
     const audioDurationSeconds = timelineContent?.duration_seconds;
     if (words.length === 0) {
       throw new Error(
         "Todavia no hay transcripcion (Whisper) para este proyecto -- corre generate_voice + transcribe_audio primero"
       );
+    }
+
+    // Audio subido a mano sin guion (o con un "." de relleno): la transcripcion
+    // hace de guion, y trae la puntuacion que hace falta para cortar escenas.
+    const transcript = (timelineContent?.segments ?? []).map((s) => s.text.trim()).join(" ");
+    const fullText = /\p{L}/u.test(scriptText) ? scriptText : transcript;
+    if (!/\p{L}/u.test(fullText)) {
+      throw new Error("El guion del proyecto esta vacio");
     }
 
     const clauses = splitIntoClauses(fullText);

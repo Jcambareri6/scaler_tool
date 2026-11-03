@@ -55,6 +55,8 @@ export interface ProjectOverlays {
   overlays: PlacedOverlay[];
   // Capa fija de arriba (canal · tema | capitulo), convive con los demas.
   nav?: PlacedOverlay[];
+  // Formato todo animado: el plan del director y la voz (ver AnimatedPreview).
+  animated?: { scenes: unknown[]; components?: unknown; nav: unknown[]; durationSeconds: number; audioSrc: string | null } | null;
   style: OverlayStyle | null;
 }
 

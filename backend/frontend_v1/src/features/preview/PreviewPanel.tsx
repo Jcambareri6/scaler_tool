@@ -3,6 +3,7 @@ import { projectsService } from "@/services/projects.service";
 import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
+import AnimatedPreview from "./AnimatedPreview";
 import { useAccount } from "@/lib/accountContext";
 import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme, VideoFormat } from "@/types";
 
@@ -643,29 +644,9 @@ export default function PreviewPanel({ projectId }: Props) {
     );
   }
 
-  // Formato todo animado: no hay stock que revisar, solo lanzar el render.
+  // Formato todo animado: no hay stock que revisar, se ve el video en vivo.
   if (job?.status === "AWAITING_STOCK_REVIEW" && animatedFormat) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-8 gap-4 text-center">
-        <p className="text-sm" style={{ color: "#fff" }}>Las escenas animadas están listas.</p>
-        <button
-          type="button"
-          disabled={generating}
-          className="px-5 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50"
-          style={{ background: "#E30B10", color: "#fff" }}
-          onClick={async () => {
-            try {
-              setJob(await projectsService.approveStockReview(job.id));
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "No se pudo iniciar el render");
-            }
-          }}
-        >
-          Renderizar video
-        </button>
-        {error && <p className="text-xs" style={{ color: "#FF8A8D" }}>{error}</p>}
-      </div>
-    );
+    return <AnimatedPreview projectId={projectId} jobId={job.id} onApproved={setJob} />;
   }
 
   if (job?.status === "AWAITING_STOCK_REVIEW") {

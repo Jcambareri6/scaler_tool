@@ -1289,7 +1289,7 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
     supabase.from("timelines").select("content").eq("id", timelineId).single(),
   ]);
   if (projectError || timelineError) throw new Error((projectError ?? timelineError)!.message);
-  const plan = project.animated_plan as { scenes: unknown[]; nav: unknown[]; durationSeconds: number } | null;
+  const plan = project.animated_plan as { scenes: unknown[]; nav: unknown[]; components?: unknown; durationSeconds: number } | null;
   if (!plan) throw new Error("El proyecto no tiene plan de escenas: generá el video de nuevo.");
   const audioSrc = (timeline.content as TimelineContent | null)?.audio?.storage_key;
   if (!audioSrc) throw new Error("El timeline no tiene audio narrado");
@@ -1305,6 +1305,7 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
     await renderAnimatedVideo(
       {
         scenes: plan.scenes,
+        components: plan.components,
         nav: plan.nav,
         durationSeconds: plan.durationSeconds,
         ...(style ? { theme: style.theme } : {}),

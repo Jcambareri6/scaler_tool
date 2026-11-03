@@ -26,7 +26,7 @@ export async function getProjectOverlays(req: Request, res: Response) {
 
     const { data: project, error: projectError } = await supabase
       .from("video_projects")
-      .select("overlays_enabled, overlay_theme, workspace_id, user_id, video_format")
+      .select("overlays_enabled, overlay_theme, workspace_id, user_id, video_format, animated_plan")
       .eq("id", access.id)
       .single();
     if (projectError) throw projectError;
@@ -39,6 +39,8 @@ export async function getProjectOverlays(req: Request, res: Response) {
     if (timelineError) throw timelineError;
 
     const scenes = ((timeline?.content as { scenes?: OverlaySceneTiming[] } | null)?.scenes) ?? [];
+    const audioSrc = (timeline?.content as { audio?: { storage_key?: string } | null } | null)?.audio?.storage_key ?? null;
+    const animatedPlan = project?.animated_plan as { scenes: unknown[]; nav: unknown[]; durationSeconds: number } | null;
     // Graficos animados: solo para admins mientras estan en prueba.
     const format = effectiveFormat(project?.video_format, userId);
     const enabled = (Boolean(project?.overlays_enabled) || format === "animated") && isAdmin(userId);
@@ -67,6 +69,9 @@ export async function getProjectOverlays(req: Request, res: Response) {
       locale,
       overlays,
       nav,
+      // Formato todo animado: el plan y la voz, para ver el video en vivo
+      // antes de renderizar (mismos componentes que dibuja el render).
+      animated: format === "animated" && animatedPlan ? { ...animatedPlan, audioSrc } : null,
       style: style
         ? {
             niche: style.niche,

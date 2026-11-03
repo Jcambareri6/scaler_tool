@@ -3,10 +3,13 @@ import { Overlay } from "../Overlay";
 import type { Theme, PaletteTheme } from "../theme";
 import { TEXT_SHADOW } from "../lib/anim";
 import { formatNumber, parseLiteralNumber } from "../lib/literal";
-import type { AnimatedScene, SceneElement, Slot, Tone } from "./types";
+import { DrawingView } from "./Drawing";
+import type { AnimatedScene, DrawingComponent, SceneElement, Slot, Tone } from "./types";
 
 // Fundido de entrada/salida de cada escena y de cada elemento (frames).
-const SCENE_FADE = 10;
+const SCENE_FADE = 12;
+// Las escenas se cruzan: la que sale sigue hasta que la nueva ya entro.
+export const SCENE_OVERLAP = 12;
 const ELEMENT_IN = 14;
 const ELEMENT_OUT = 8;
 // Lo que tarda una cifra en contar hasta su valor nuevo.
@@ -14,6 +17,10 @@ const COUNT_SECONDS = 0.8;
 
 // Rojo fijo del tachado (igual que strike_word).
 const STRIKE = "#FF4D4D";
+// Texto sobre el lienzo claro.
+const LIGHT_TEXT = "#141B26";
+// Zoom lento de camara durante toda la escena.
+const CAMERA_ZOOM = 0.045;
 const TONE_COLORS: Record<Tone, string> = { neutral: "rgba(255,255,255,0.75)", accent: "", ok: "#3DDC84", alert: "#FF4D4D" };
 
 interface ElementState {
@@ -98,7 +105,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
   if (opacity <= 0.001) return null;
   const glow = state.highlightedAt !== null ? interpolate(t - state.highlightedAt, [0, 0.3], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 0;
   const strike = state.struckAt !== null ? interpolate(t - state.struckAt, [0, 0.4], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 0;
-  const toneColor = state.tone ? TONE_COLORS[state.tone] || theme.accent : theme.accent;
+  const toneColor = state.tone === "neutral" ? theme.textMuted : state.tone ? TONE_COLORS[state.tone] || theme.accent : theme.accent;
   const base = { opacity, transform: `translateY(${(1 - inP) * 24 * s}px)`, position: "relative" as const };
 
   const strikeLine =
@@ -130,7 +137,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
             lineHeight: 1.1,
             textAlign: "center",
             color: glow > 0 ? theme.accent : theme.text,
-            textShadow: glow > 0 ? `0 0 ${24 * s * glow}px ${theme.accent}90` : TEXT_SHADOW,
+            textShadow: glow > 0 ? `0 0 ${24 * s * glow}px ${theme.accent}90` : theme.text === LIGHT_TEXT ? "none" : TEXT_SHADOW,
             opacity: 1 - 0.45 * strike,
           }}
         >
@@ -228,7 +235,21 @@ function slotBox(slot: Exclude<Slot, "full">, layout: { split: boolean; center: 
   return { ...middle, left: side + colWidth + gap, width: colWidth };
 }
 
-export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedScene; theme: Theme; palette: string | PaletteTheme | undefined; locale?: string | undefined }) {
+export function SceneView({
+  scene,
+  components,
+  theme: baseTheme,
+  palette,
+  locale,
+}: {
+  scene: AnimatedScene;
+  components?: Record<string, DrawingComponent> | undefined;
+  theme: Theme;
+  palette: string | PaletteTheme | undefined;
+  locale?: string | undefined;
+}) {
+  const light = scene.background === "light";
+  const theme = light ? { ...baseTheme, text: LIGHT_TEXT, textMuted: "rgba(20,27,38,0.62)" } : baseTheme;
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const s = height / 1080;
@@ -237,7 +258,7 @@ export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedSc
   const total = Math.round((scene.end - scene.start) * fps);
   const fade = Math.min(
     interpolate(frame, [0, SCENE_FADE], [0, 1], { extrapolateRight: "clamp" }),
-    interpolate(frame, [total - SCENE_FADE, total], [1, 0], { extrapolateLeft: "clamp" })
+    interpolate(frame, [total, total + SCENE_OVERLAP], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
   );
   const states = scene.elements.map((el) => ({ el, state: stateAt(el, scene, t) })).filter(({ state }) => state.visible);
   // Columnas solo si hay algo a los costados EN PANTALLA: un titulo que va
@@ -247,9 +268,52 @@ export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedSc
     center: states.some(({ el }) => el.slot === "center"),
   };
   const slots: Exclude<Slot, "full">[] = ["top", "left", "center", "right", "bottom"];
+  // Una escena se acerca y la siguiente se aleja.
+  const pushIn = Number(scene.id.replace(/\D/g, "")) % 2 === 0;
+  // Acercamientos dirigidos: la camara va hacia el elemento y vuelve.
+  const focus = { zoom: 1, x: 50, y: 50 };
+  for (const st of scene.steps) {
+    if (st.action !== "camera" || st.at > t) continue;
+    const el = scene.elements.find((e) => e.id === st.target);
+    const p = interpolate(t - st.at, [0, st.duration ?? 1.2], [0, 1], { easing: Easing.inOut(Easing.cubic), extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+    focus.zoom += ((st.zoom ?? 1) - focus.zoom) * p;
+    focus.x += ((el?.x ?? 50) - focus.x) * p;
+    focus.y += ((el?.y ?? 50) - focus.y) * p;
+  }
+  const camera = interpolate(frame, [0, Math.max(1, total)], pushIn ? [1, 1 + CAMERA_ZOOM] : [1 + CAMERA_ZOOM, 1], { extrapolateRight: "clamp" });
 
   return (
-    <AbsoluteFill style={{ opacity: fade }}>
+    <AbsoluteFill style={{ opacity: fade, transform: `scale(${camera * focus.zoom})`, transformOrigin: `${focus.x}% ${focus.y}%` }}>
+      {light && <AbsoluteFill style={{ background: "radial-gradient(ellipse 95% 95% at 50% 38%, #FBFCFD 0%, #EEF1F4 58%, #D8DEE5 100%)" }} />}
+      {/* Biblioteca del video: los componentes con sus etiquetas encima. */}
+      <AbsoluteFill>
+        {scene.elements
+          .filter((el) => el.kind === "drawing" && el.component && components?.[el.component])
+          .map((el) => (
+            <DrawingView key={el.id} el={el} comp={components![el.component!]!} scene={scene} t={t} theme={theme} />
+          ))}
+        {states
+          .filter(({ el }) => el.kind === "label")
+          .map(({ el, state }) => (
+            <div
+              key={el.id}
+              style={{
+                position: "absolute",
+                left: `${el.x ?? 50}%`,
+                top: `${el.y ?? 50}%`,
+                transform: "translate(-50%, -50%)",
+                opacity: interpolate(t - state.shownAt, [0, 0.3], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+                fontFamily: theme.fontSans,
+                fontWeight: 600,
+                fontSize: 30 * s,
+                whiteSpace: "nowrap",
+                color: state.tone ? (state.tone === "neutral" ? theme.textMuted : TONE_COLORS[state.tone] || theme.accent) : theme.text,
+              }}
+            >
+              {state.text}
+            </div>
+          ))}
+      </AbsoluteFill>
       {/* Graficos del catalogo: a pantalla completa, desde que se muestran. */}
       {scene.elements
         .filter((el) => el.kind === "graphic" && el.spec)
@@ -265,12 +329,12 @@ export function SceneView({ scene, theme, palette, locale }: { scene: AnimatedSc
           );
         })}
       {slots.map((slot) => {
-        const items = states.filter(({ el }) => el.slot === slot && el.kind !== "graphic");
+        const items = states.filter(({ el }) => el.slot === slot && el.kind !== "graphic" && el.kind !== "drawing" && el.kind !== "label");
         if (items.length === 0) return null;
         return (
           <div key={slot} style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center", gap: 28 * s, ...slotBox(slot, layout, s, width) }}>
             {items.map(({ el, state }) => (
-              <ElementView key={el.id} el={el} state={state} t={t} s={s} theme={theme} locale={locale} alone={states.filter(({ el: x }) => x.kind !== "graphic").length === 1} />
+              <ElementView key={el.id} el={el} state={state} t={t} s={s} theme={theme} locale={locale} alone={states.filter(({ el: x }) => x.kind !== "graphic" && x.kind !== "label").length === 1} />
             ))}
           </div>
         );

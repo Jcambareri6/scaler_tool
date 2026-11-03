@@ -4,13 +4,13 @@ import { Overlay } from "../Overlay";
 import { resolveTheme } from "../theme";
 import { Canvas } from "./Canvas";
 import { Captions } from "./Captions";
-import { SceneView } from "./Scene";
+import { SCENE_OVERLAP, SceneView } from "./Scene";
 import type { AnimatedVideoProps } from "./types";
 
 // El video entero del formato todo animado: lienzo, escenas (cada una en su
 // Sequence), capa fija de navegacion y subtitulos. A diferencia de los
 // graficos sueltos del formato stock, aca se renderiza cada cuadro del video.
-export function AnimatedVideo({ scenes, theme: palette, locale, nav, captions, audioSrc }: AnimatedVideoProps) {
+export function AnimatedVideo({ scenes, components, theme: palette, locale, nav, captions, audioSrc }: AnimatedVideoProps) {
   const { fps } = useVideoConfig();
   const theme = resolveTheme(palette);
   const frames = (seconds: number) => Math.max(1, Math.round(seconds * fps));
@@ -20,8 +20,8 @@ export function AnimatedVideo({ scenes, theme: palette, locale, nav, captions, a
       <Canvas theme={theme} />
       {audioSrc && <Audio src={audioSrc} />}
       {scenes.map((scene) => (
-        <Sequence key={scene.id} from={Math.round(scene.start * fps)} durationInFrames={frames(scene.end - scene.start)}>
-          <SceneView scene={scene} theme={theme} palette={palette} locale={locale} />
+        <Sequence key={scene.id} from={Math.round(scene.start * fps)} durationInFrames={frames(scene.end - scene.start) + SCENE_OVERLAP}>
+          <SceneView scene={scene} components={components} theme={theme} palette={palette} locale={locale} />
         </Sequence>
       ))}
       {(nav ?? []).map((n, i) => (

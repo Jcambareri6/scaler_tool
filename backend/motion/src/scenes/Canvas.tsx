@@ -12,7 +12,7 @@ export function Canvas({ theme }: { theme: Theme }) {
   const drift = (frame * 0.15 * s) % cell;
 
   return (
-    <AbsoluteFill style={{ background: "#0a0f18" }}>
+    <AbsoluteFill style={{ background: "linear-gradient(170deg, #111A28 0%, #0B111C 55%, #070B13 100%)" }}>
       <AbsoluteFill
         style={{
           background: `radial-gradient(ellipse 70% 60% at 25% 20%, ${theme.accent}22, transparent 70%), radial-gradient(ellipse 60% 60% at 85% 90%, ${theme.accent}14, transparent 70%)`,
@@ -21,7 +21,7 @@ export function Canvas({ theme }: { theme: Theme }) {
       <AbsoluteFill
         style={{
           backgroundImage:
-            "linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px)",
+            "linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px)",
           backgroundSize: `${cell}px ${cell}px`,
           backgroundPosition: `${drift}px ${drift}px`,
         }}

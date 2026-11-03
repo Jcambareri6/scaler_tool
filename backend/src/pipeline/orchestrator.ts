@@ -13,7 +13,7 @@ import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
-import { navHeaderContext } from "../lib/niches.js";
+import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
 import { directScenes } from "../director/managedSceneDirector.js";
 import { buildPhrases } from "../director/phrases.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
@@ -573,8 +573,10 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     if (timelineError) throw new Error(timelineError.message);
     const words = (timelineRow.content as { words?: TranscribedWord[] } | null)?.words ?? [];
     const phrases = buildPhrases(allScenes.map((s) => ((s.content as { text?: string } | null)?.text) ?? ""), words);
+    const animatedStyle = await resolveProjectStyle(projectId);
     const animatedPlan = await directScenes({
       phrases,
+      ...(animatedStyle ? { theme: animatedStyle.theme } : {}),
       ...(videoTopic ? { videoTopic } : {}),
       nav: { ...(await navHeaderContext(projectId)), locale: (await getChannelSettingsForProject(projectId)).channel_language },
     });

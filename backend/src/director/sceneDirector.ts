@@ -6,6 +6,7 @@ import { appearsIn, generateOverlayTool, normalize } from "../tools/generateOver
 import { TYPE_GUIDE, plannableTypes, toOverlaySpec } from "../tools/planOverlays.tool.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
 import { asList, callTool, clock, type Usage } from "./director.js";
+import type { DrawingComponent } from "./drawings.js";
 import { INTENTS } from "./manual.js";
 import type { Phrase } from "./phrases.js";
 
@@ -31,16 +32,18 @@ const LLM_TIMEOUT_MS = 180 * 1000;
 const DIRECTOR_MAX_TOKENS = 12000;
 const DESIGNER_MAX_TOKENS = 12000;
 const DESIGNER_CONCURRENCY = 4;
-const MAX_ELEMENTS = 6;
+const MAX_ELEMENTS = 12;
 const MAX_FALLBACK_WORDS = 14;
 // Largo maximo de un texto propio (no literal) en pantalla.
 const MAX_OWN_WORDS = 8;
 // Aire despues de la ultima palabra.
 const TAIL_SECONDS = 0.8;
 
-const KINDS = ["title", "text", "number", "chip", "card", "graphic"] as const;
+const KINDS = ["title", "text", "number", "chip", "card", "graphic", "drawing", "label"] as const;
 const SLOTS = ["top", "center", "left", "right", "bottom", "full"] as const;
-const ACTIONS = ["show", "set", "highlight", "strike", "hide"] as const;
+const ACTIONS = ["show", "set", "highlight", "strike", "hide", "move", "rotate", "scale", "paint", "loop", "act", "camera"] as const;
+const ACTS = ["walk", "run", "press", "push", "point", "look", "recoil", "fall"] as const;
+const LOOPS = ["spin", "float", "shake", "pulse"] as const;
 const TONES = ["neutral", "accent", "ok", "alert"] as const;
 
 // Mismo contrato que motion/src/scenes/types.ts.
@@ -53,6 +56,11 @@ export interface SceneElement {
   label?: string;
   tone?: (typeof TONES)[number];
   spec?: OverlaySpec;
+  component?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  repeat?: { count: number; columns: number };
 }
 
 export interface SceneStep {
@@ -62,18 +70,36 @@ export interface SceneStep {
   text?: string;
   value?: string;
   tone?: (typeof TONES)[number];
+  part?: string;
+  from_index?: number;
+  to_index?: number;
+  stagger?: number;
+  duration?: number;
+  dx?: number;
+  dy?: number;
+  deg?: number;
+  factor?: number;
+  loop?: (typeof LOOPS)[number];
+  act?: (typeof ACTS)[number];
+  // camera: acercamiento hacia el elemento (1 = plano general).
+  zoom?: number;
+  // Palabra de la frase en la que pasa (se resuelve a su segundo al armar).
+  word?: string;
 }
 
 export interface AnimatedScene {
   id: string;
   start: number;
   end: number;
+  background?: "light" | "dark";
   elements: SceneElement[];
   steps: SceneStep[];
 }
 
 export interface AnimatedPlan {
   scenes: AnimatedScene[];
+  // Biblioteca visual de este video: se dibuja una vez y se reutiliza.
+  components: Record<string, DrawingComponent>;
   nav: PlacedOverlay[];
   durationSeconds: number;
   storyboard: {
@@ -191,6 +217,7 @@ export function designerTool(types: OverlayType[]): Anthropic.Tool {
             type: "object",
             properties: {
               scene_index: { type: "number" },
+              background: { type: "string", enum: ["light", "dark"] },
               elements: {
                 type: "array",
                 items: {
@@ -203,6 +230,13 @@ export function designerTool(types: OverlayType[]): Anthropic.Tool {
                     value: { type: "string" },
                     label: { type: "string" },
                     tone: { type: "string", enum: [...TONES] },
+                    component: { type: "string", description: "Solo kind drawing: id del componente." },
+                    x: { type: "number", description: "drawing y label: centro horizontal, 0 a 100." },
+                    y: { type: "number", description: "drawing y label: centro vertical, 0 a 100." },
+                    w: { type: "number", description: "drawing: ancho, 2 a 100." },
+                    repeat_count: { type: "number", description: "drawing: cuantos ejemplares en grilla." },
+                    repeat_columns: { type: "number", description: "drawing: columnas de la grilla." },
+                    over: { type: "boolean", description: "drawing: va encima de otro dibujo a proposito." },
                     graphic: {
                       type: "object",
                       description: "Solo kind graphic: el grafico del catalogo.",
@@ -235,11 +269,24 @@ export function designerTool(types: OverlayType[]): Anthropic.Tool {
                   type: "object",
                   properties: {
                     phrase: { type: "string" },
+                    word: { type: "string", description: "Palabra exacta de la frase donde ocurre." },
                     action: { type: "string", enum: [...ACTIONS] },
                     target: { type: "string" },
                     text: { type: "string" },
                     value: { type: "string" },
                     tone: { type: "string", enum: [...TONES] },
+                    part: { type: "string", description: "Dibujos: parte del componente." },
+                    from_index: { type: "number", description: "Dibujos: primer ejemplar." },
+                    to_index: { type: "number", description: "Dibujos: ultimo ejemplar." },
+                    stagger: { type: "number", description: "Dibujos: segundos entre ejemplares." },
+                    duration: { type: "number", description: "Segundos que tarda (0.2 a 4)." },
+                    dx: { type: "number", description: "move: % del ancho del componente." },
+                    dy: { type: "number", description: "move: % del alto del componente." },
+                    deg: { type: "number", description: "rotate: grados." },
+                    factor: { type: "number", description: "scale: factor." },
+                    zoom: { type: "number", description: "camera: 1 es plano general, hasta 1.4." },
+                    loop: { type: "string", enum: [...LOOPS] },
+                    act: { type: "string", enum: [...ACTS], description: "Accion de un personaje." },
                   },
                   required: ["phrase", "action", "target"],
                 },
@@ -278,6 +325,22 @@ function plain(text: string): string {
   return text.normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
+// Segundo en que se dice una palabra de la frase; sin palabra, el inicio.
+export function wordTime(phrase: Phrase, word: string | undefined): number {
+  if (!word) return phrase.start;
+  const clean = (v: string) => plain(normalize(v)).replace(/[^\p{L}\p{N}]/gu, "");
+  const wanted = clean(word.split(/\s+/)[0] ?? "");
+  return phrase.words.find((w) => clean(w.text) === wanted)?.start ?? phrase.start;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function clampTo(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -288,7 +351,8 @@ export async function verifyScene(
   phrases: Phrase[],
   fullNorm: string,
   fullText: string,
-  types: OverlayType[]
+  types: OverlayType[],
+  components?: Map<string, DrawingComponent>
 ): Promise<{ elements: SceneElement[]; steps: { phrase: number; step: Omit<SceneStep, "at"> }[]; dropped: string[] }> {
   const dropped: string[] = [];
   const sceneText = phrases.slice(planned.from, planned.to + 1).map((p) => p.text).join(" ");
@@ -334,6 +398,25 @@ export async function verifyScene(
       }
       continue;
     }
+    if (kind === "drawing") {
+      const component = components?.get(str(e.component) ?? "");
+      if (!component) {
+        dropped.push(`${id}: el componente "${String(e.component)}" no existe`);
+        continue;
+      }
+      const count = Math.max(1, Math.min(120, Math.round(num(e.repeat_count) ?? 1)));
+      elements.push({
+        id,
+        kind,
+        slot: "full",
+        component: component.id,
+        x: clampTo(num(e.x) ?? 50, 0, 100),
+        y: clampTo(num(e.y) ?? 50, 0, 100),
+        w: clampTo(num(e.w) ?? 40, 2, 100),
+        ...(count > 1 ? { repeat: { count, columns: Math.max(1, Math.min(count, Math.round(num(e.repeat_columns) ?? count))) } } : {}),
+      });
+      continue;
+    }
     const text = str(e.text);
     const value = str(e.value);
     const label = str(e.label);
@@ -348,7 +431,8 @@ export async function verifyScene(
     }
     const slot = SLOTS.find((x) => x === e.slot && x !== "full") ?? "center";
     const tone = TONES.find((x) => x === e.tone);
-    elements.push({ id, kind, slot, ...(text ? { text } : {}), ...(value ? { value } : {}), ...(label ? { label } : {}), ...(tone ? { tone } : {}) });
+    const place = kind === "label" ? { x: clampTo(num(e.x) ?? 50, 0, 100), y: clampTo(num(e.y) ?? 50, 0, 100) } : {};
+    elements.push({ id, kind, slot, ...place, ...(text ? { text } : {}), ...(value ? { value } : {}), ...(label ? { label } : {}), ...(tone ? { tone } : {}) });
   }
 
   // Un grafico del catalogo ocupa toda la pantalla: va solo, sin otras
@@ -380,7 +464,30 @@ export async function verifyScene(
       continue;
     }
     const tone = TONES.find((x) => x === st.tone);
-    steps.push({ phrase, step: { action, target, ...(text ? { text } : {}), ...(value ? { value } : {}), ...(tone ? { tone } : {}) } });
+    const motion: Partial<SceneStep> = {};
+    const part = str(st.part);
+    if (part) {
+      const owner = elements.find((e) => e.id === target)!;
+      const component = components?.get(owner.component ?? "");
+      if (!component || !(part in component.parts)) {
+        dropped.push(`paso de ${target}: la parte "${part}" no existe`);
+        continue;
+      }
+      motion.part = part;
+    }
+    for (const key of ["from_index", "to_index", "stagger", "duration", "dx", "dy", "deg", "factor", "zoom"] as const) {
+      const n = num(st[key]);
+      if (n !== undefined) motion[key] = n;
+    }
+    const loop = LOOPS.find((l) => l === st.loop);
+    if (loop) motion.loop = loop;
+    const act = ACTS.find((a) => a === st.act);
+    if (act) motion.act = act;
+    const word = str(st.word);
+    if (word) motion.word = word;
+    if (motion.zoom !== undefined) motion.zoom = clampTo(motion.zoom, 1, 1.4);
+    if (motion.duration !== undefined) motion.duration = clampTo(motion.duration, 0.2, 4);
+    steps.push({ phrase, step: { action, target, ...motion, ...(text ? { text } : {}), ...(value ? { value } : {}), ...(tone ? { tone } : {}) } });
   }
 
   // Nada de pantalla vacia al arrancar la escena: si todo aparece en frases
@@ -397,7 +504,8 @@ export async function verifyScene(
 // ---------- Armado (compartido con Managed Agents) ----------
 
 export interface SceneStructure {
-  chapters: { index: number; title: string }[];
+  // label: nombre corto para el encabezado fijo.
+  chapters: { index: number; title: string; label?: string }[];
   planned: PlannedScene[];
 }
 
@@ -406,8 +514,11 @@ export function readStructure(raw: Record<string, unknown>, phrases: Phrase[]): 
   const fullNorm = normalize(phrases.map((p) => p.text).join(" "));
   const indexOf = (ref: unknown) => phraseIndex(phrases, ref);
   const chapters = asList(raw.chapters, "chapters")
-    .map((c) => c as { start_phrase?: unknown; title?: unknown })
-    .map((c) => ({ index: indexOf(c.start_phrase), title: str(c.title) ?? "" }))
+    .map((c) => c as { start_phrase?: unknown; title?: unknown; short?: unknown })
+    .map((c) => {
+      const label = str(c.short);
+      return { index: indexOf(c.start_phrase), title: str(c.title) ?? "", ...(label ? { label } : {}) };
+    })
     .filter((c) => c.index >= 0 && c.title && (appearsIn(fullNorm, c.title) || appearsIn(plain(fullNorm), plain(c.title))))
     .sort((a, b) => a.index - b.index);
 
@@ -432,11 +543,16 @@ export function readStructure(raw: Record<string, unknown>, phrases: Phrase[]): 
 }
 
 // Las escenas repartidas por capitulo: un tramo por disenador.
-export function sceneGroups({ chapters, planned }: SceneStructure, phrases: Phrase[]): { group: number; title: string; scenes: PlannedScene[]; brief: string }[] {
+export function sceneGroups({ chapters, planned }: SceneStructure, phrases: Phrase[], maxScenes = Infinity): { group: number; title: string; scenes: PlannedScene[]; brief: string }[] {
   const chapterOf = (scene: PlannedScene) => chapters.filter((c) => c.index <= scene.from).length;
   const groups = new Map<number, PlannedScene[]>();
   for (const scene of planned) groups.set(chapterOf(scene), [...(groups.get(chapterOf(scene)) ?? []), scene]);
-  return [...groups.entries()].map(([group, scenes]) => {
+  const tramos = [...groups.entries()].flatMap(([group, scenes]) => {
+    const parts: [number, PlannedScene[]][] = [];
+    for (let i = 0; i < scenes.length; i += maxScenes) parts.push([group, scenes.slice(i, i + maxScenes)]);
+    return parts;
+  });
+  return tramos.map(([group, scenes]) => {
     const title = group === 0 ? "Antes del primer capitulo" : `Capitulo: ${chapters[group - 1]!.title}`;
     const body = scenes
       .map(
@@ -462,6 +578,7 @@ export async function assemblePlan(input: {
   models: { director: string; designer: string };
   usage: Usage;
   managed?: { session_id: string; usage: unknown };
+  components?: Map<string, DrawingComponent>;
 }): Promise<AnimatedPlan> {
   const { phrases, designed, types, usage } = input;
   const { chapters, planned } = input.structure;
@@ -472,23 +589,28 @@ export async function assemblePlan(input: {
   const scenes: AnimatedScene[] = [];
   const storyScenes: AnimatedPlan["storyboard"]["scenes"] = [];
   for (const scene of planned) {
-    const { elements, steps, dropped } = await verifyScene(designed.get(scene.index), scene, phrases, fullNorm, fullText, types);
+    const raw = designed.get(scene.index);
+    const { elements, steps, dropped } = await verifyScene(raw, scene, phrases, fullNorm, fullText, types, input.components);
     const next = planned[scene.index + 1];
     scenes.push({
       id: `s${scene.index + 1}`,
       start: sceneStart(scene),
       end: next ? sceneStart(next) : videoEnd,
+      // Los graficos del catalogo estan pensados sobre oscuro.
+      ...(raw?.background === "light" && !elements.some((e) => e.kind === "graphic") ? { background: "light" as const } : {}),
       elements,
-      steps: steps.map(({ phrase, step }) => ({ ...step, at: phrases[phrase]!.start })).sort((a, b) => a.at - b.at),
+      steps: steps.map(({ phrase, step }) => {
+        const { word, ...rest } = step;
+        return { ...rest, at: wordTime(phrases[phrase]!, word) };
+      }).sort((a, b) => a.at - b.at),
     });
     storyScenes.push({ from: phrases[scene.from]!.id, to: phrases[scene.to]!.id, intent: scene.intent, idea: scene.idea, dropped });
   }
 
-  // Capa fija (mismo calculo que el formato stock). Sin subtitulos: en el
-  // formato animado la pantalla ya muestra el texto clave y los subtitulos
-  // palabra por palabra lo recargaban (decision del 30/10/2026).
+  // Capa fija (mismo calculo que el formato stock). Sin subtitulos: la voz
+  // explica y la imagen muestra, el texto encima sobra.
   const chapterMarks: PlacedOverlay[] = chapters.map((c) => ({
-    spec: { type: "title_card", text: c.title, source: "script" },
+    spec: { type: "title_card", text: c.label ?? c.title, source: "script" },
     start: phrases[c.index]!.start,
     end: phrases[c.index]!.start + 1,
   }));
@@ -498,8 +620,10 @@ export async function assemblePlan(input: {
   console.log(
     `[scene_director] ${chapters.length} capitulos, ${scenes.length} escenas, ${scenes.reduce((n, s) => n + s.elements.length, 0)} elementos (${droppedCount} descartados) · ${input.models.director}/${input.models.designer}`
   );
+  const used = new Set(scenes.flatMap((s) => s.elements.flatMap((e) => (e.component ? [e.component] : []))));
   return {
     scenes,
+    components: Object.fromEntries([...(input.components ?? new Map<string, DrawingComponent>())].filter(([id]) => used.has(id))),
     nav,
     durationSeconds: videoEnd,
     storyboard: {

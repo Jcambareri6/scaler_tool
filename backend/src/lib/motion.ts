@@ -162,6 +162,27 @@ export async function renderAnimatedVideo(
   });
 }
 
+// Capturas reales de un video animado para el Revisor (sin audio).
+export async function renderAnimatedStills(props: Record<string, unknown>, requests: { id: string; seconds: number }[], outDir: string): Promise<void> {
+  const propsPath = path.join(outDir, "stills-props.json");
+  const requestsPath = path.join(outDir, "stills-requests.json");
+  await mkdir(outDir, { recursive: true });
+  await writeFile(propsPath, JSON.stringify(props));
+  await writeFile(requestsPath, JSON.stringify(requests));
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "scripts/render-stills.ts", propsPath, requestsPath, outDir], {
+      cwd: MOTION_DIR,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderrTail = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-4000);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`capturas: codigo ${code}: ${stderrTail}`))));
+  });
+}
+
 // Inputs + filtergraph para superponer los clips sobre `[baseLabel]`.
 // Cada clip: congela su ultimo frame hasta completar la duracion, fundido
 // de salida en el alfa, y se corre a su segundo del video.

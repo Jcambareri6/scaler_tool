@@ -19,8 +19,10 @@ export interface SceneElement {
   id: string;
   // title: titulo grande · text: frase · number: cifra que cuenta al cambiar
   // · chip: cartel de estado ("PARADO") · card: dato con etiqueta ·
-  // graphic: cualquier grafico del catalogo (spec), a pantalla completa.
-  kind: "title" | "text" | "number" | "chip" | "card" | "graphic";
+  // graphic: cualquier grafico del catalogo (spec), a pantalla completa ·
+  // drawing: un componente dibujado (ver Drawing.tsx) · label: etiqueta chica
+  // pegada a un dibujo.
+  kind: "title" | "text" | "number" | "chip" | "card" | "graphic" | "drawing" | "label";
   slot: Slot;
   text?: string;
   // number: la cifra ("4.300 metros"); card: el valor.
@@ -29,13 +31,48 @@ export interface SceneElement {
   label?: string;
   tone?: Tone;
   spec?: OverlaySpec;
+  // drawing: id del componente. drawing y label: centro y ancho en % del cuadro.
+  component?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  // drawing: ejemplares en grilla (pictograma).
+  repeat?: { count: number; columns: number };
+}
+
+// Un dibujo de la biblioteca del video: SVG con partes nombradas (data-part).
+export interface DrawingComponent {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  svg: string;
+  parts: Record<string, string | null>;
 }
 
 export interface SceneStep {
   // Segundo del video (no de la escena) en que pasa.
   at: number;
-  action: "show" | "set" | "highlight" | "strike" | "hide";
+  action: "show" | "set" | "highlight" | "strike" | "hide" | "move" | "rotate" | "scale" | "paint" | "loop" | "act" | "camera";
   target: string;
+  // camera: acercamiento hacia el elemento (1 = plano general).
+  zoom?: number;
+  // act: accion de un personaje con esqueleto (ver Drawing.tsx).
+  act?: "walk" | "run" | "press" | "push" | "point" | "look" | "recoil" | "fall";
+  // Dibujos: parte del componente y ejemplares a los que aplica; stagger =
+  // segundos entre un ejemplar y el siguiente; duration = cuanto tarda.
+  part?: string;
+  from_index?: number;
+  to_index?: number;
+  stagger?: number;
+  duration?: number;
+  // move: en % del tamano del componente. rotate: grados. scale: factor.
+  dx?: number;
+  dy?: number;
+  deg?: number;
+  factor?: number;
+  // loop: movimiento continuo desde ese momento.
+  loop?: "spin" | "float" | "shake" | "pulse";
   // "set": lo que cambia.
   text?: string;
   value?: string;
@@ -46,6 +83,8 @@ export interface AnimatedScene {
   id: string;
   start: number;
   end: number;
+  // Lienzo: claro para escenas fisicas, oscuro para datos (por defecto oscuro).
+  background?: "light" | "dark";
   elements: SceneElement[];
   steps: SceneStep[];
 }
@@ -70,6 +109,8 @@ export interface TimedSpec {
 
 export interface AnimatedVideoProps {
   scenes: AnimatedScene[];
+  // Biblioteca visual de este video.
+  components?: Record<string, DrawingComponent>;
   theme?: string | PaletteTheme;
   locale?: string;
   // Capa fija de navegacion (nav_header, placeNavHeaders del backend).
