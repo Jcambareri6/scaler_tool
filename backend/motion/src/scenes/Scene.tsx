@@ -284,7 +284,7 @@ export function SceneView({
   if (scene.recurso) {
     return (
       <AbsoluteFill style={{ opacity: fade }}>
-        <RecursoView t={t} rec={scene.recurso} inicio={scene.start} fin={scene.end} />
+        <RecursoView t={t} rec={scene.recurso} inicio={scene.start} fin={scene.end} componentes={components} />
       </AbsoluteFill>
     );
   }

@@ -5,6 +5,7 @@ import { motionCatalog, renderAnimatedStills } from "../lib/motion.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import type { PaletteTheme } from "../lib/niches.js";
 import { auditVideo, reviewScenes, stillRequests } from "./sceneReview.js";
+import { directDocumental } from "./documentalDirector.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { normalize } from "../tools/generateOverlay.tool.js";
 import { plannableTypes } from "../tools/planOverlays.tool.js";
@@ -716,6 +717,13 @@ export async function directScenes(input: {
   theme?: PaletteTheme;
   nav: { channel: string | null; topic: string | null; locale: string | null };
 }): Promise<AnimatedPlan | null> {
+  // Formato documental (recursos): primero; si esta apagado o falla, el anterior.
+  try {
+    const plan = await directDocumental(input);
+    if (plan) return plan;
+  } catch (err) {
+    console.warn("[documental] fallo, sigo con el formato anterior:", (err as Error).message);
+  }
   if (MANAGED_AGENTS.directorAgentId && MANAGED_AGENTS.environmentId) {
     try {
       const plan = await directAnimatedScenesManaged(input);

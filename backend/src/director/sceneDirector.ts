@@ -92,6 +92,8 @@ export interface AnimatedScene {
   start: number;
   end: number;
   background?: "light" | "dark";
+  // Formato documental: escena armada con un recurso (backend/motion/src/recursos).
+  recurso?: Record<string, unknown>;
   elements: SceneElement[];
   steps: SceneStep[];
 }
@@ -101,6 +103,8 @@ export interface AnimatedPlan {
   // Biblioteca visual de este video: se dibuja una vez y se reutiliza.
   components: Record<string, DrawingComponent>;
   nav: PlacedOverlay[];
+  // Subtitulos palabra por palabra (formato documental).
+  captions?: { start: number; end: number; words: { text: string; start: number; end: number }[] }[];
   durationSeconds: number;
   storyboard: {
     chapters: { title: string; start: number }[];

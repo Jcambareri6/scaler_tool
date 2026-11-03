@@ -1,4 +1,4 @@
-import { BIBLIOTECA, type EstadoParte, type ObjetoBase } from "../biblioteca";
+import { BIBLIOTECA, objetoDesdeSvg, type ComponenteSvg, type EstadoParte, type ObjetoBase } from "../biblioteca";
 import { DOC } from "../scenes/palette";
 import { colorDe, entra, golpe, lerp, mecanismo, mezcla, momento, momentos, remateAt, SUELO, T } from "./comun";
 import type { ContenidoEsquema, Lugar, Momento, Recurso } from "./tipos";
@@ -33,8 +33,9 @@ interface Ubicado {
   esc: number;
 }
 
-function ubicar(id: string | undefined, lugar: keyof typeof LUGARES): Ubicado | null {
-  const obj = id ? BIBLIOTECA[id] : undefined;
+function ubicar(id: string | undefined, lugar: keyof typeof LUGARES, propios?: Record<string, ComponenteSvg>): Ubicado | null {
+  // Primero la biblioteca base; si no, el dibujo de este video (Dibujante).
+  const obj = id ? (BIBLIOTECA[id] ?? (propios?.[id] ? objetoDesdeSvg(propios[id]!) : undefined)) : undefined;
   if (!obj) return null;
   const l = LUGARES[lugar];
   const esc = Math.min(l.maxW / obj.ancho, l.maxH / obj.alto, 1);
@@ -297,12 +298,12 @@ function EscudoEtiqueta({ t, m, u, remate }: { t: number; m: Momento | undefined
 }
 
 // ---------- Escena completa ----------
-export function EsquemaCapas({ t, rec, inicio, fin }: { t: number; rec: Recurso; inicio: number; fin: number }) {
+export function EsquemaCapas({ t, rec, inicio, fin, componentes }: { t: number; rec: Recurso; inicio: number; fin: number; componentes?: Record<string, ComponenteSvg> | undefined }) {
   const c = rec.contenido as ContenidoEsquema;
   const lugares: Record<string, Ubicado | null> = {
-    secundario: ubicar(c.secundario, "secundario"),
-    principal: ubicar(c.principal, "principal"),
-    destino: ubicar(c.destino, "destino"),
+    secundario: ubicar(c.secundario, "secundario", componentes),
+    principal: ubicar(c.principal, "principal", componentes),
+    destino: ubicar(c.destino, "destino", componentes),
   };
   const remate = remateAt(rec);
   const evento = momento(rec, "evento");

@@ -82,13 +82,15 @@ const Reactor: ObjetoBase = {
     const kN = entra(t, n?.at, 0.8);
     const kE = golpe(t, evento);
     const kTapa = entra(t, evento, 0.7);
-    const colorN = n?.significado === "peligro" ? DOC.peligro : DOC.seguro;
-    const nucleo = kE > 0 ? mezcla(colorN === DOC.peligro ? DOC.peligro : DOC.seguro, DOC.peligro, kE) : colorN;
+    // El nucleo se tiñe segun el significado; "neutro" (o sin significado) no se tiñe.
+    const sig = n?.significado;
+    const colorN = sig === "peligro" ? DOC.peligro : sig === "seguro" ? DOC.seguro : sig === "foco" ? DOC.foco : null;
+    const nucleo = kE > 0 ? mezcla(colorN ?? T.relleno, DOC.peligro, kE) : (colorN ?? T.relleno);
     return (
       <g>
         <rect x={20} y={170} width={360} height={380} fill={T.rellenoSuave} stroke={T.linea} strokeWidth={3} />
         <rect x={100} y={330} width={200} height={200} fill={T.relleno} stroke={T.linea} strokeWidth={2} />
-        <rect x={100} y={330} width={200} height={200} fill={nucleo} opacity={kE > 0 ? 0.6 : 0.28 * kN} />
+        <rect x={100} y={330} width={200} height={200} fill={nucleo} opacity={kE > 0 ? 0.6 : colorN ? 0.28 * kN : 0} />
         {[0, 1, 2, 3, 4, 5].map((i) => (
           <line key={i} x1={120 + i * 32} y1={350} x2={120 + i * 32} y2={515} stroke={T.gris} strokeWidth={8} strokeLinecap="round" />
         ))}
@@ -143,3 +145,49 @@ export const BIBLIOTECA: Record<string, ObjetoBase> = {
   reactor_corte: Reactor,
   ciudad: Ciudad,
 };
+
+// ---------- Dibujos del video (Dibujante) como objeto del esquema ----------
+// Un componente SVG con partes con nombre (data-part) que no esta en la base.
+// "parte" con significado pinta esa parte (seguro, peligro, foco); sin
+// significado la parte se resalta en foco. El evento la tiñe de rojo con grietas.
+export interface ComponenteSvg {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  svg: string;
+  parts: Record<string, string | null>;
+}
+
+const COLOR_SIG: Record<string, string> = { seguro: DOC.seguro, peligro: DOC.peligro, foco: DOC.foco };
+
+export function objetoDesdeSvg(comp: ComponenteSvg): ObjetoBase {
+  const anclas: Record<string, [number, number]> = {};
+  for (const parte of Object.keys(comp.parts)) anclas[parte] = [comp.width / 2, comp.height / 2];
+  return {
+    nombre: comp.name,
+    ancho: comp.width,
+    alto: comp.height,
+    anclas,
+    Dibujo: ({ t, partes, evento }) => {
+      const sel = `[data-obj="${comp.id}"]`;
+      const reglas = Object.entries(partes)
+        .filter(([, e]) => e && t >= e.at)
+        .map(([parte, e]) => `${sel} [data-part="${parte}"],${sel} [data-part="${parte}"] *:not([fill="none"]){fill:${COLOR_SIG[e!.significado ?? "foco"] ?? DOC.foco};transition:none}`)
+        .join("");
+      const kE = golpe(t, evento);
+      return (
+        <g data-obj={comp.id}>
+          <style dangerouslySetInnerHTML={{ __html: reglas }} />
+          <svg x={0} y={0} width={comp.width} height={comp.height} viewBox={`0 0 ${comp.width} ${comp.height}`} overflow="visible" style={{ color: T.linea, ["--accent" as string]: DOC.foco }} dangerouslySetInnerHTML={{ __html: comp.svg }} />
+          {kE > 0 && (
+            <>
+              <rect x={0} y={0} width={comp.width} height={comp.height} fill={DOC.peligro} opacity={0.25 * kE} />
+              <polyline points={`${comp.width * 0.3},0 ${comp.width * 0.4},${comp.height * 0.2} ${comp.width * 0.33},${comp.height * 0.35} ${comp.width * 0.45},${comp.height * 0.55}`} fill="none" stroke={DOC.peligro} strokeWidth={5} opacity={kE} />
+            </>
+          )}
+        </g>
+      );
+    },
+  };
+}
