@@ -1,6 +1,6 @@
 import { Easing, interpolate, spring, useVideoConfig } from "remotion";
 import type { Theme } from "../theme";
-import { toneColor } from "./palette";
+import { DOC, toneColor } from "./palette";
 import type { AnimatedScene, DrawingComponent, SceneElement, SceneStep } from "./types";
 
 // Dibujos por componentes del formato todo animado: el Dibujante arma cada
@@ -152,8 +152,8 @@ function DrawingInstance({
           display: "block",
           overflow: "visible",
           color: theme.text,
-          // Paleta del formato: el acento de un dibujo es tinta neutra, nunca azul.
-          ["--accent" as string]: theme.text,
+          // Paleta del formato: el acento de un dibujo es el foco (naranja), nunca azul.
+          ["--accent" as string]: DOC.foco,
           // Sombra suave para despegar el dibujo del lienzo.
           filter: `drop-shadow(0 ${width * 0.012}px ${width * 0.028}px rgba(0,0,0,0.3))`,
         }}
