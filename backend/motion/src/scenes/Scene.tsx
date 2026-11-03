@@ -4,6 +4,7 @@ import type { Theme, PaletteTheme } from "../theme";
 import { TEXT_SHADOW } from "../lib/anim";
 import { formatNumber, parseLiteralNumber } from "../lib/literal";
 import { DrawingView } from "./Drawing";
+import { DOC, docTheme, toneColor } from "./palette";
 import type { AnimatedScene, DrawingComponent, SceneElement, Slot, Tone } from "./types";
 
 // Fundido de entrada/salida de cada escena y de cada elemento (frames).
@@ -15,13 +16,10 @@ const ELEMENT_OUT = 8;
 // Lo que tarda una cifra en contar hasta su valor nuevo.
 const COUNT_SECONDS = 0.8;
 
-// Rojo fijo del tachado (igual que strike_word).
-const STRIKE = "#FF4D4D";
-// Texto sobre el lienzo claro.
-const LIGHT_TEXT = "#141B26";
+// Rojo del tachado: peligro.
+const STRIKE = DOC.peligro;
 // Zoom lento de camara durante toda la escena.
 const CAMERA_ZOOM = 0.045;
-const TONE_COLORS: Record<Tone, string> = { neutral: "rgba(255,255,255,0.75)", accent: "", ok: "#3DDC84", alert: "#FF4D4D" };
 
 interface ElementState {
   visible: boolean;
@@ -89,7 +87,7 @@ function NumberValue({ state, t, theme, locale }: { state: ElementState; t: numb
     <span style={{ fontVariantNumeric: "tabular-nums" }}>
       {target.prefix && <span style={{ fontSize: "0.6em" }}>{target.prefix}</span>}
       {formatNumber(from + (target.value - from) * p, target, locale)}
-      {target.unit && <span style={{ fontSize: "0.5em", fontWeight: 700, marginLeft: "0.15em", color: theme.accent }}>{target.unit}</span>}
+      {target.unit && <span style={{ fontSize: "0.5em", fontWeight: 700, marginLeft: "0.15em", color: theme.textMuted }}>{target.unit}</span>}
     </span>
   );
 }
@@ -105,7 +103,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
   if (opacity <= 0.001) return null;
   const glow = state.highlightedAt !== null ? interpolate(t - state.highlightedAt, [0, 0.3], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 0;
   const strike = state.struckAt !== null ? interpolate(t - state.struckAt, [0, 0.4], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 0;
-  const toneColor = state.tone === "neutral" ? theme.textMuted : state.tone ? TONE_COLORS[state.tone] || theme.accent : theme.accent;
+  const tone = toneColor(state.tone, theme);
   const base = { opacity, transform: `translateY(${(1 - inP) * 24 * s}px)`, position: "relative" as const };
 
   const strikeLine =
@@ -137,7 +135,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
             lineHeight: 1.1,
             textAlign: "center",
             color: glow > 0 ? theme.accent : theme.text,
-            textShadow: glow > 0 ? `0 0 ${24 * s * glow}px ${theme.accent}90` : theme.text === LIGHT_TEXT ? "none" : TEXT_SHADOW,
+            textShadow: glow > 0 ? `0 0 ${24 * s * glow}px ${theme.accent}90` : theme.text === DOC.tintaClaro ? "none" : TEXT_SHADOW,
             opacity: 1 - 0.45 * strike,
           }}
         >
@@ -172,8 +170,8 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
             gap: 12 * s,
             padding: `${14 * s}px ${30 * s}px`,
             borderRadius: 999,
-            border: `${2 * s}px solid ${toneColor}`,
-            background: `${toneColor.startsWith("#") ? toneColor : "#ffffff"}1f`,
+            border: `${2 * s}px solid ${tone}`,
+            background: `${tone.startsWith("#") ? tone : "#ffffff"}1f`,
             fontFamily: theme.fontSans,
             fontWeight: 800,
             fontSize: 36 * s,
@@ -182,7 +180,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
             color: theme.text,
           }}
         >
-          <span style={{ width: 12 * s, height: 12 * s, borderRadius: "50%", background: toneColor, boxShadow: `0 0 ${10 * s}px ${toneColor}` }} />
+          <span style={{ width: 12 * s, height: 12 * s, borderRadius: "50%", background: tone, boxShadow: `0 0 ${10 * s}px ${tone}` }} />
           {state.text}
         </div>
       </div>
@@ -199,7 +197,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
           borderRadius: 14 * s,
           background: "rgba(255,255,255,0.05)",
           border: "1px solid rgba(255,255,255,0.12)",
-          borderLeft: `${5 * s}px solid ${toneColor}`,
+          borderLeft: `${5 * s}px solid ${tone}`,
           boxShadow: glow > 0 ? `0 0 ${30 * s * glow}px ${theme.accent}55` : "none",
         }}
       >
@@ -208,7 +206,7 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
         )}
         <div style={{ marginTop: 8 * s, fontFamily: theme.fontSans, fontWeight: 800, fontSize: 68 * s, lineHeight: 1.05, color: theme.text }}>{state.text}</div>
         {state.value && (
-          <div style={{ marginTop: 10 * s, fontFamily: theme.fontSans, fontWeight: 800, fontSize: 72 * s, lineHeight: 1, color: theme.accent }}>
+          <div style={{ marginTop: 10 * s, fontFamily: theme.fontSans, fontWeight: 800, fontSize: 72 * s, lineHeight: 1, color: theme.text }}>
             <NumberValue state={state} t={t} theme={theme} locale={locale} />
           </div>
         )}
@@ -249,7 +247,7 @@ export function SceneView({
   locale?: string | undefined;
 }) {
   const light = scene.background === "light";
-  const theme = light ? { ...baseTheme, text: LIGHT_TEXT, textMuted: "rgba(20,27,38,0.62)" } : baseTheme;
+  const theme = docTheme(baseTheme, light);
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const s = height / 1080;
@@ -284,7 +282,7 @@ export function SceneView({
 
   return (
     <AbsoluteFill style={{ opacity: fade, transform: `scale(${camera * focus.zoom})`, transformOrigin: `${focus.x}% ${focus.y}%` }}>
-      {light && <AbsoluteFill style={{ background: "radial-gradient(ellipse 95% 95% at 50% 38%, #FBFCFD 0%, #EEF1F4 58%, #D8DEE5 100%)" }} />}
+      {light && <AbsoluteFill style={{ background: "radial-gradient(ellipse 90% 90% at 50% 45%, #F3F5F7 0%, #E8ECF0 60%, #D3D9DF 100%)" }} />}
       {/* Biblioteca del video: los componentes con sus etiquetas encima. */}
       <AbsoluteFill>
         {scene.elements
@@ -307,7 +305,7 @@ export function SceneView({
                 fontWeight: 600,
                 fontSize: 30 * s,
                 whiteSpace: "nowrap",
-                color: state.tone ? (state.tone === "neutral" ? theme.textMuted : TONE_COLORS[state.tone] || theme.accent) : theme.text,
+                color: toneColor(state.tone, theme),
               }}
             >
               {state.text}

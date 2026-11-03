@@ -1,6 +1,7 @@
 import { Easing, interpolate, spring, useVideoConfig } from "remotion";
 import type { Theme } from "../theme";
-import type { AnimatedScene, DrawingComponent, SceneElement, SceneStep, Tone } from "./types";
+import { toneColor } from "./palette";
+import type { AnimatedScene, DrawingComponent, SceneElement, SceneStep } from "./types";
 
 // Dibujos por componentes del formato todo animado: el Dibujante arma cada
 // componente (tren, valija, pasajero) en SVG con partes nombradas, y los pasos
@@ -9,12 +10,6 @@ import type { AnimatedScene, DrawingComponent, SceneElement, SceneStep, Tone } f
 
 const MOVE_SECONDS = 0.7;
 const ENTER_FRAMES = 16;
-const TONES: Record<Tone, (theme: Theme) => string> = {
-  neutral: (theme) => theme.textMuted,
-  accent: (theme) => theme.accent,
-  ok: () => "#3DDC84",
-  alert: () => "#FF4D4D",
-};
 
 const progress = (t: number, at: number, seconds: number) =>
   interpolate(t - at, [0, seconds], [0, 1], { easing: Easing.inOut(Easing.cubic), extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -44,7 +39,7 @@ function poseAt(steps: SceneStep[], t: number, index: number, width: number, hei
     } else if (st.action === "scale") {
       pose.scale *= 1 + ((st.factor ?? 1) - 1) * p;
     } else if (st.action === "paint" && st.tone && p > 0.4) {
-      pose.color = TONES[st.tone](theme);
+      pose.color = toneColor(st.tone, theme);
     } else if (st.action === "loop") {
       const since = t - at;
       if (st.loop === "spin") pose.deg += since * 240;
@@ -157,7 +152,8 @@ function DrawingInstance({
           display: "block",
           overflow: "visible",
           color: theme.text,
-          ["--accent" as string]: theme.accent,
+          // Paleta del formato: el acento de un dibujo es tinta neutra, nunca azul.
+          ["--accent" as string]: theme.text,
           // Sombra suave para despegar el dibujo del lienzo.
           filter: `drop-shadow(0 ${width * 0.012}px ${width * 0.028}px rgba(0,0,0,0.3))`,
         }}

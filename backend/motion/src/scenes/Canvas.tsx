@@ -1,10 +1,12 @@
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Theme } from "../theme";
+import { DOC } from "./palette";
 
-// Lienzo del formato todo animado (reemplaza al stock): fondo oscuro con un
-// brillo del acento del canal, grilla tenue que se desplaza muy despacio
+// Lienzo del formato todo animado (reemplaza al stock): azul noche fijo, una
+// grilla tenue que se desplaza muy despacio
 // (para que el fondo nunca este quieto del todo) y viñeta.
-export function Canvas({ theme }: { theme: Theme }) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function Canvas(_props: { theme: Theme }) {
   const frame = useCurrentFrame();
   const { height } = useVideoConfig();
   const s = height / 1080;
@@ -12,12 +14,8 @@ export function Canvas({ theme }: { theme: Theme }) {
   const drift = (frame * 0.15 * s) % cell;
 
   return (
-    <AbsoluteFill style={{ background: "linear-gradient(170deg, #111A28 0%, #0B111C 55%, #070B13 100%)" }}>
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(ellipse 70% 60% at 25% 20%, ${theme.accent}22, transparent 70%), radial-gradient(ellipse 60% 60% at 85% 90%, ${theme.accent}14, transparent 70%)`,
-        }}
-      />
+    // Azul noche con viñeta, sin brillo de color: el acento es solo para texto.
+    <AbsoluteFill style={{ background: `radial-gradient(ellipse 80% 75% at 50% 45%, #0B1424 0%, ${DOC.fondoOscuro} 80%)` }}>
       <AbsoluteFill
         style={{
           backgroundImage:

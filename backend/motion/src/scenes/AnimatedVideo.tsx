@@ -4,14 +4,18 @@ import { Overlay } from "../Overlay";
 import { resolveTheme } from "../theme";
 import { Canvas } from "./Canvas";
 import { Captions } from "./Captions";
+import { DOC_PALETTE } from "./palette";
 import { SCENE_OVERLAP, SceneView } from "./Scene";
 import type { AnimatedVideoProps } from "./types";
 
 // El video entero del formato todo animado: lienzo, escenas (cada una en su
 // Sequence), capa fija de navegacion y subtitulos. A diferencia de los
 // graficos sueltos del formato stock, aca se renderiza cada cuadro del video.
-export function AnimatedVideo({ scenes, components, theme: palette, locale, nav, captions, audioSrc }: AnimatedVideoProps) {
+export function AnimatedVideo({ scenes, components, locale, nav, captions, audioSrc }: AnimatedVideoProps) {
   const { fps } = useVideoConfig();
+  // Paleta fija del formato documental: se ignora la del nicho (props.theme),
+  // porque aca los colores tienen significado (ver scenes/palette.ts).
+  const palette = DOC_PALETTE;
   const theme = resolveTheme(palette);
   const frames = (seconds: number) => Math.max(1, Math.round(seconds * fps));
 
