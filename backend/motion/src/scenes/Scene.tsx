@@ -20,8 +20,11 @@ const COUNT_SECONDS = 0.8;
 
 // Rojo del tachado: peligro.
 const STRIKE = DOC.peligro;
-// Zoom lento de camara durante toda la escena.
-const CAMERA_ZOOM = 0.045;
+// Movimiento de base: toda escena se acerca (o se aleja) y se desliza de
+// costado sin parar, aunque el plan no tenga pasos. Nunca hay un cuadro
+// congelado (referencia: 0-2 segundos quietos cada 30).
+const CAMERA_ZOOM = 0.08;
+const CAMERA_DRIFT = 0.018; // fraccion del ancho, de punta a punta
 
 interface ElementState {
   visible: boolean;
@@ -290,10 +293,12 @@ export function SceneView({
   const dibujos = scene.elements
     .filter((el) => el.kind === "drawing" && el.component && components?.[el.component])
     .map((el) => <DrawingView key={el.id} el={el} comp={components![el.component!]!} scene={scene} t={t} theme={theme} />);
-  const camera = interpolate(frame, [0, Math.max(1, total)], pushIn ? [1, 1 + CAMERA_ZOOM] : [1 + CAMERA_ZOOM, 1], { extrapolateRight: "clamp" });
+  const avance = interpolate(frame, [0, Math.max(1, total + SCENE_OVERLAP)], [0, 1], { easing: Easing.inOut(Easing.sin), extrapolateRight: "clamp" });
+  const camera = pushIn ? 1 + CAMERA_ZOOM * avance : 1 + CAMERA_ZOOM * (1 - avance);
+  const deriva = (pushIn ? avance - 0.5 : 0.5 - avance) * CAMERA_DRIFT * width;
 
   return (
-    <AbsoluteFill style={{ opacity: fade, transform: `scale(${camera})` }}>
+    <AbsoluteFill style={{ opacity: fade, transform: `translateX(${deriva}px) scale(${camera})` }}>
       {light && <AbsoluteFill style={{ background: "radial-gradient(ellipse 90% 90% at 50% 45%, #F3F5F7 0%, #E8ECF0 60%, #D3D9DF 100%)" }} />}
       {/* Biblioteca del video: los componentes con sus etiquetas encima. */}
       <AbsoluteFill>
