@@ -34,7 +34,7 @@ export function AnimatedVideo({ scenes, components, locale, nav, captions, audio
           <Overlay spec={fechasEnSpec(n.spec)} theme={palette} locale={locale} durationSeconds={n.end - n.start} exit />
         </Sequence>
       ))}
-      {captions && captions.length > 0 && <Captions chunks={captions} theme={theme} />}
+      {captions && captions.length > 0 && <Captions chunks={captions} theme={theme} scenes={scenes} />}
     </AbsoluteFill>
   );
 }
