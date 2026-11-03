@@ -1,0 +1,689 @@
+{
+ "scenes": [
+  {
+   "id": "s1",
+   "start": 0,
+   "end": 9.92,
+   "elements": [],
+   "steps": [],
+   "recurso": {
+    "tipo": "ubicacion",
+    "contenido": {
+     "lugar": "Chernobyl",
+     "subtitulo": "central nuclear",
+     "region": "Ucrania Soviética",
+     "geo": {
+      "lat": 51.389,
+      "lon": 30.099
+     },
+     "fecha": {
+      "dia": 26,
+      "mes": 4,
+      "anio": 1986
+     },
+     "hora": "01:23",
+     "hora_nota": "de la madrugada"
+    },
+    "momentos": [
+     {
+      "at": 0,
+      "hace": "fecha",
+      "parte": "dia"
+     },
+     {
+      "at": 1.22,
+      "hace": "fecha",
+      "parte": "mes"
+     },
+     {
+      "at": 1.78,
+      "hace": "fecha",
+      "parte": "anio"
+     },
+     {
+      "at": 4.1,
+      "hace": "hora"
+     },
+     {
+      "at": 5.34,
+      "hace": "hora_nota"
+     },
+     {
+      "at": 6.58,
+      "hace": "pais"
+     },
+     {
+      "at": 7.5,
+      "hace": "lugar"
+     },
+     {
+      "at": 8.64,
+      "hace": "region"
+     }
+    ]
+   }
+  },
+  {
+   "id": "s2",
+   "start": 9.92,
+   "end": 30.679999160766602,
+   "elements": [],
+   "steps": [],
+   "recurso": {
+    "tipo": "esquema_capas",
+    "fondo": "claro",
+    "titulo": [
+     {
+      "texto": "Sala de control",
+      "at": 10.3
+     },
+     {
+      "texto": " · Chernobyl",
+      "at": 11.06
+     }
+    ],
+    "contenido": {
+     "secundario": "consola",
+     "principal": "reactor_corte",
+     "destino": "ciudad",
+     "personaje": {
+      "tarjeta": "25 años",
+      "rol": "el ingeniero"
+     },
+     "lupa": {
+      "objeto": "secundario",
+      "parte": "boton",
+      "texto": "APAGAR",
+      "nota": "en caso de emergencia"
+     }
+    },
+    "momentos": [
+     {
+      "at": 10.3,
+      "hace": "aparece",
+      "objeto": "secundario"
+     },
+     {
+      "at": 11.06,
+      "hace": "aparece",
+      "objeto": "principal"
+     },
+     {
+      "at": 11.4,
+      "hace": "etiqueta",
+      "objeto": "principal",
+      "texto": "Reactor 4",
+      "posicion": "arriba"
+     },
+     {
+      "at": 12.94,
+      "hace": "aparece",
+      "objeto": "personaje"
+     },
+     {
+      "at": 13.48,
+      "hace": "tarjeta"
+     },
+     {
+      "at": 14.42,
+      "hace": "aprieta",
+      "objeto": "secundario",
+      "parte": "boton"
+     },
+     {
+      "at": 16.0,
+      "hace": "lupa"
+     },
+     {
+      "at": 16.3,
+      "hace": "lupa_accion"
+     },
+     {
+      "at": 18.58,
+      "hace": "lupa_texto",
+      "significado": "seguro"
+     },
+     {
+      "at": 18.58,
+      "hace": "parte",
+      "objeto": "principal",
+      "parte": "barras"
+     },
+     {
+      "at": 19.08,
+      "hace": "parte",
+      "objeto": "principal",
+      "parte": "nucleo",
+      "significado": "seguro"
+     },
+     {
+      "at": 20.28,
+      "hace": "lupa_nota"
+     },
+     {
+      "at": 21.62,
+      "hace": "escudo",
+      "objeto": "principal",
+      "texto": "último recurso",
+      "significado": "seguro"
+     },
+     {
+      "at": 22.96,
+      "hace": "etiqueta",
+      "objeto": "principal",
+      "parte": "barras",
+      "texto": "freno de mano",
+      "significado": "seguro"
+     },
+     {
+      "at": 24.74,
+      "hace": "aparece",
+      "objeto": "destino"
+     },
+     {
+      "at": 24.74,
+      "hace": "conectar",
+      "objeto": "destino"
+     },
+     {
+      "at": 25.38,
+      "hace": "flujo"
+     },
+     {
+      "at": 26.32,
+      "hace": "parte",
+      "objeto": "destino",
+      "parte": "ventanas"
+     },
+     {
+      "at": 29.1,
+      "hace": "evento",
+      "objeto": "principal",
+      "texto": "explota",
+      "remate": true
+     }
+    ]
+   }
+  }
+ ],
+ "nav": [
+  {
+   "spec": {
+    "type": "nav_header",
+    "text": "Chernobyl: la prueba fatal",
+    "source": "script",
+    "label": "Capítulo 1 de 1 · El botón final"
+   },
+   "start": 0,
+   "end": 30.679999160766602
+  }
+ ],
+ "captions": [
+  {
+   "start": 0,
+   "end": 4.21999979019165,
+   "words": [
+    {
+     "text": "26",
+     "start": 0,
+     "end": 0.6600000262260437
+    },
+    {
+     "text": "de",
+     "start": 0.6600000262260437,
+     "end": 1.2200000286102295
+    },
+    {
+     "text": "abril",
+     "start": 1.2200000286102295,
+     "end": 1.2200000286102295
+    },
+    {
+     "text": "de",
+     "start": 1.2200000286102295,
+     "end": 1.7799999713897705
+    },
+    {
+     "text": "1986,",
+     "start": 1.7799999713897705,
+     "end": 3.200000047683716
+    },
+    {
+     "text": "1",
+     "start": 4.099999904632568,
+     "end": 4.099999904632568
+    },
+    {
+     "text": "y",
+     "start": 4.099999904632568,
+     "end": 4.21999979019165
+    }
+   ]
+  },
+  {
+   "start": 4.21999979019165,
+   "end": 6.579999923706055,
+   "words": [
+    {
+     "text": "23",
+     "start": 4.21999979019165,
+     "end": 4.800000190734863
+    },
+    {
+     "text": "de",
+     "start": 4.800000190734863,
+     "end": 5.159999847412109
+    },
+    {
+     "text": "la",
+     "start": 5.159999847412109,
+     "end": 5.340000152587891
+    },
+    {
+     "text": "madrugada,",
+     "start": 5.340000152587891,
+     "end": 5.940000057220459
+    }
+   ]
+  },
+  {
+   "start": 6.579999923706055,
+   "end": 8.84000015258789,
+   "words": [
+    {
+     "text": "Central",
+     "start": 6.579999923706055,
+     "end": 6.820000171661377
+    },
+    {
+     "text": "Nuclear",
+     "start": 6.820000171661377,
+     "end": 7.260000228881836
+    },
+    {
+     "text": "de",
+     "start": 7.260000228881836,
+     "end": 7.5
+    },
+    {
+     "text": "Chernobyl,",
+     "start": 7.5,
+     "end": 7.940000057220459
+    },
+    {
+     "text": "en",
+     "start": 8.359999656677246,
+     "end": 8.4399995803833
+    },
+    {
+     "text": "la",
+     "start": 8.4399995803833,
+     "end": 8.640000343322754
+    },
+    {
+     "text": "Ucrania",
+     "start": 8.640000343322754,
+     "end": 8.84000015258789
+    }
+   ]
+  },
+  {
+   "start": 8.84000015258789,
+   "end": 9.920000076293945,
+   "words": [
+    {
+     "text": "Soviética.",
+     "start": 8.84000015258789,
+     "end": 9.34000015258789
+    }
+   ]
+  },
+  {
+   "start": 9.920000076293945,
+   "end": 11.399999618530273,
+   "words": [
+    {
+     "text": "En",
+     "start": 9.920000076293945,
+     "end": 9.960000038146973
+    },
+    {
+     "text": "la",
+     "start": 9.960000038146973,
+     "end": 10.300000190734863
+    },
+    {
+     "text": "sala",
+     "start": 10.300000190734863,
+     "end": 10.300000190734863
+    },
+    {
+     "text": "de",
+     "start": 10.300000190734863,
+     "end": 10.84000015258789
+    },
+    {
+     "text": "control",
+     "start": 10.84000015258789,
+     "end": 10.84000015258789
+    },
+    {
+     "text": "del",
+     "start": 10.84000015258789,
+     "end": 11.0600004196167
+    },
+    {
+     "text": "reactor",
+     "start": 11.0600004196167,
+     "end": 11.399999618530273
+    }
+   ]
+  },
+  {
+   "start": 11.399999618530273,
+   "end": 12.819999694824219,
+   "words": [
+    {
+     "text": "número",
+     "start": 11.399999618530273,
+     "end": 11.800000190734863
+    },
+    {
+     "text": "4,",
+     "start": 11.800000190734863,
+     "end": 12.140000343322754
+    }
+   ]
+  },
+  {
+   "start": 12.819999694824219,
+   "end": 15.100000381469727,
+   "words": [
+    {
+     "text": "un",
+     "start": 12.819999694824219,
+     "end": 12.9399995803833
+    },
+    {
+     "text": "ingeniero",
+     "start": 12.9399995803833,
+     "end": 13.300000190734863
+    },
+    {
+     "text": "de",
+     "start": 13.300000190734863,
+     "end": 13.479999542236328
+    },
+    {
+     "text": "25",
+     "start": 13.479999542236328,
+     "end": 14.020000457763672
+    },
+    {
+     "text": "años",
+     "start": 14.020000457763672,
+     "end": 14.420000076293945
+    },
+    {
+     "text": "pulsa",
+     "start": 14.420000076293945,
+     "end": 14.65999984741211
+    },
+    {
+     "text": "un",
+     "start": 14.65999984741211,
+     "end": 15.100000381469727
+    }
+   ]
+  },
+  {
+   "start": 15.100000381469727,
+   "end": 15.880000114440918,
+   "words": [
+    {
+     "text": "botón.",
+     "start": 15.100000381469727,
+     "end": 15.100000381469727
+    }
+   ]
+  },
+  {
+   "start": 15.880000114440918,
+   "end": 18.579999923706055,
+   "words": [
+    {
+     "text": "Ese",
+     "start": 15.880000114440918,
+     "end": 16
+    },
+    {
+     "text": "botón",
+     "start": 16,
+     "end": 16.299999237060547
+    },
+    {
+     "text": "existe",
+     "start": 16.299999237060547,
+     "end": 16.68000030517578
+    },
+    {
+     "text": "para",
+     "start": 16.68000030517578,
+     "end": 16.959999084472656
+    },
+    {
+     "text": "una",
+     "start": 16.959999084472656,
+     "end": 17.200000762939453
+    },
+    {
+     "text": "sola",
+     "start": 17.200000762939453,
+     "end": 17.479999542236328
+    },
+    {
+     "text": "cosa,",
+     "start": 17.479999542236328,
+     "end": 17.719999313354492
+    }
+   ]
+  },
+  {
+   "start": 18.579999923706055,
+   "end": 20.940000534057617,
+   "words": [
+    {
+     "text": "apagar",
+     "start": 18.579999923706055,
+     "end": 18.799999237060547
+    },
+    {
+     "text": "el",
+     "start": 18.799999237060547,
+     "end": 19.079999923706055
+    },
+    {
+     "text": "reactor",
+     "start": 19.079999923706055,
+     "end": 19.31999969482422
+    },
+    {
+     "text": "en",
+     "start": 19.31999969482422,
+     "end": 19.6200008392334
+    },
+    {
+     "text": "caso",
+     "start": 19.6200008392334,
+     "end": 19.700000762939453
+    },
+    {
+     "text": "de",
+     "start": 19.700000762939453,
+     "end": 20.280000686645508
+    },
+    {
+     "text": "emergencia.",
+     "start": 20.280000686645508,
+     "end": 20.420000076293945
+    }
+   ]
+  },
+  {
+   "start": 20.940000534057617,
+   "end": 23.440000534057617,
+   "words": [
+    {
+     "text": "Es",
+     "start": 20.940000534057617,
+     "end": 21.15999984741211
+    },
+    {
+     "text": "el",
+     "start": 21.15999984741211,
+     "end": 21.6200008392334
+    },
+    {
+     "text": "último",
+     "start": 21.6200008392334,
+     "end": 21.6200008392334
+    },
+    {
+     "text": "recurso,",
+     "start": 21.6200008392334,
+     "end": 22.1200008392334
+    },
+    {
+     "text": "el",
+     "start": 22.65999984741211,
+     "end": 22.959999084472656
+    },
+    {
+     "text": "freno",
+     "start": 22.959999084472656,
+     "end": 23.100000381469727
+    },
+    {
+     "text": "de",
+     "start": 23.100000381469727,
+     "end": 23.440000534057617
+    }
+   ]
+  },
+  {
+   "start": 23.440000534057617,
+   "end": 25.079999923706055,
+   "words": [
+    {
+     "text": "mano",
+     "start": 23.440000534057617,
+     "end": 23.440000534057617
+    },
+    {
+     "text": "de",
+     "start": 23.440000534057617,
+     "end": 23.6200008392334
+    },
+    {
+     "text": "una",
+     "start": 23.6200008392334,
+     "end": 23.81999969482422
+    },
+    {
+     "text": "máquina",
+     "start": 23.81999969482422,
+     "end": 24.139999389648438
+    },
+    {
+     "text": "capaz",
+     "start": 24.139999389648438,
+     "end": 24.479999542236328
+    },
+    {
+     "text": "de",
+     "start": 24.479999542236328,
+     "end": 24.739999771118164
+    },
+    {
+     "text": "abastecer",
+     "start": 24.739999771118164,
+     "end": 25.079999923706055
+    }
+   ]
+  },
+  {
+   "start": 25.079999923706055,
+   "end": 26.920000076293945,
+   "words": [
+    {
+     "text": "de",
+     "start": 25.079999923706055,
+     "end": 25.3799991607666
+    },
+    {
+     "text": "electricidad",
+     "start": 25.3799991607666,
+     "end": 25.81999969482422
+    },
+    {
+     "text": "a",
+     "start": 25.81999969482422,
+     "end": 26.18000030517578
+    },
+    {
+     "text": "una",
+     "start": 26.18000030517578,
+     "end": 26.31999969482422
+    },
+    {
+     "text": "ciudad",
+     "start": 26.31999969482422,
+     "end": 26.5
+    },
+    {
+     "text": "entera.",
+     "start": 26.5,
+     "end": 26.920000076293945
+    }
+   ]
+  },
+  {
+   "start": 26.920000076293945,
+   "end": 30.679999160766602,
+   "words": [
+    {
+     "text": "Unos",
+     "start": 26.920000076293945,
+     "end": 27.6200008392334
+    },
+    {
+     "text": "segundos",
+     "start": 27.6200008392334,
+     "end": 27.979999542236328
+    },
+    {
+     "text": "después,",
+     "start": 27.979999542236328,
+     "end": 28.520000457763672
+    },
+    {
+     "text": "el",
+     "start": 28.899999618530273,
+     "end": 28.899999618530273
+    },
+    {
+     "text": "reactor",
+     "start": 28.899999618530273,
+     "end": 29.100000381469727
+    },
+    {
+     "text": "explota.",
+     "start": 29.100000381469727,
+     "end": 29.8799991607666
+    }
+   ]
+  }
+ ],
+ "durationSeconds": 30.679999160766602,
+ "locale": "es-AR"
+}

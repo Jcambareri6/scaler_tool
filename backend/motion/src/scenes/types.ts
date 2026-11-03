@@ -1,5 +1,6 @@
 import type { OverlaySpec } from "../spec";
 import type { PaletteTheme } from "../theme";
+import type { Recurso } from "../recursos/tipos";
 
 // Formato todo animado (DISENO-director-graficos.md, "Diseño del modo todo
 // animado"): no hay stock, Remotion dibuja el video entero. El video es una
@@ -85,6 +86,9 @@ export interface AnimatedScene {
   end: number;
   // Lienzo: claro para escenas fisicas, oscuro para datos (por defecto oscuro).
   background?: "light" | "dark";
+  // Formato documental: escena armada con un recurso (src/recursos). Si esta,
+  // el recurso dibuja la escena y elements/steps se ignoran.
+  recurso?: Recurso;
   elements: SceneElement[];
   steps: SceneStep[];
 }

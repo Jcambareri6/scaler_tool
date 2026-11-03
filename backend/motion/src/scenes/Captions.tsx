@@ -15,7 +15,7 @@ export function Captions({ chunks, theme, scenes }: { chunks: CaptionChunk[]; th
   if (!chunk) return null;
   const s = height / 1080;
   const scene = scenes?.find((sc) => t >= sc.start && t < sc.end);
-  const light = scene?.background === "light";
+  const light = scene?.recurso ? (scene.recurso.fondo ?? (scene.recurso.tipo === "esquema_capas" ? "claro" : "oscuro")) === "claro" : scene?.background === "light";
   const visibles = chunk.words.filter((w) => w.start <= t);
   if (visibles.length === 0) return null;
 

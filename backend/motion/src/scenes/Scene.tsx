@@ -6,6 +6,7 @@ import { formatNumber, parseLiteralNumber } from "../lib/literal";
 import { conFechas, fechasEnSpec } from "../lib/fechas";
 import { DrawingView } from "./Drawing";
 import { Lupa, lupaAt, type Caja } from "./Lupa";
+import { RecursoView } from "../recursos/RecursoView";
 import { DOC, docTheme, toneColor } from "./palette";
 import type { AnimatedScene, DrawingComponent, SceneElement, Slot, Tone } from "./types";
 
@@ -279,6 +280,14 @@ export function SceneView({
     interpolate(frame, [0, SCENE_FADE], [0, 1], { extrapolateRight: "clamp" }),
     interpolate(frame, [total, total + SCENE_OVERLAP], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
   );
+  // Escena armada con un recurso: el recurso resuelve lugares, tiempos y colores.
+  if (scene.recurso) {
+    return (
+      <AbsoluteFill style={{ opacity: fade }}>
+        <RecursoView t={t} rec={scene.recurso} inicio={scene.start} fin={scene.end} />
+      </AbsoluteFill>
+    );
+  }
   const states = scene.elements.map((el) => ({ el, state: stateAt(el, scene, t) })).filter(({ state }) => state.visible);
   // Columnas solo si hay algo a los costados EN PANTALLA: un titulo que va
   // antes de las tarjetas usa todo el ancho.

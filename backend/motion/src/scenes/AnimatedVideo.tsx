@@ -1,9 +1,9 @@
 import "../fonts";
 import { AbsoluteFill, Audio, Sequence, useVideoConfig } from "remotion";
-import { Overlay } from "../Overlay";
 import { resolveTheme } from "../theme";
 import { Canvas } from "./Canvas";
 import { Captions } from "./Captions";
+import { DocNav } from "./DocNav";
 import { DOC_PALETTE } from "./palette";
 import { fechasEnSpec } from "../lib/fechas";
 import { SCENE_OVERLAP, SceneView } from "./Scene";
@@ -29,11 +29,8 @@ export function AnimatedVideo({ scenes, components, locale, nav, captions, audio
           <SceneView scene={scene} components={components} theme={theme} palette={palette} locale={locale} />
         </Sequence>
       ))}
-      {(nav ?? []).map((n, i) => (
-        <Sequence key={`nav-${i}`} from={Math.round(n.start * fps)} durationInFrames={frames(n.end - n.start)} layout="none">
-          <Overlay spec={fechasEnSpec(n.spec)} theme={palette} locale={locale} durationSeconds={n.end - n.start} exit />
-        </Sequence>
-      ))}
+      {/* Linea de capitulo propia del formato: sin sombra, color segun el fondo. */}
+      {nav && nav.length > 0 && <DocNav nav={nav.map((n) => ({ ...n, spec: fechasEnSpec(n.spec) }))} scenes={scenes} />}
       {captions && captions.length > 0 && <Captions chunks={captions} theme={theme} scenes={scenes} />}
     </AbsoluteFill>
   );
