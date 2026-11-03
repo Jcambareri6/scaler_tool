@@ -3,6 +3,7 @@ import { Overlay } from "../Overlay";
 import type { Theme, PaletteTheme } from "../theme";
 import { TEXT_SHADOW } from "../lib/anim";
 import { formatNumber, parseLiteralNumber } from "../lib/literal";
+import { conFechas, fechasEnSpec } from "../lib/fechas";
 import { DrawingView } from "./Drawing";
 import { Lupa, lupaAt, type Caja } from "./Lupa";
 import { DOC, docTheme, toneColor } from "./palette";
@@ -50,7 +51,7 @@ function stateAt(el: SceneElement, scene: AnimatedScene, t: number): ElementStat
     visible: !hasShow,
     shownAt: scene.start,
     hiddenAt: null,
-    text: el.text,
+    text: conFechas(el.text),
     value: el.value,
     tone: el.tone,
     changedAt: null,
@@ -71,7 +72,7 @@ function stateAt(el: SceneElement, scene: AnimatedScene, t: number): ElementStat
         state.value = st.value;
         state.changedAt = st.at;
       }
-      if (st.text !== undefined) state.text = st.text;
+      if (st.text !== undefined) state.text = conFechas(st.text);
       if (st.tone !== undefined) state.tone = st.tone;
     } else if (st.action === "highlight") {
       state.highlightedAt = st.at;
@@ -340,7 +341,7 @@ export function SceneView({
           const duration = Math.max(1, Math.round((until - state.shownAt) * fps));
           return (
             <Sequence key={el.id} from={from} durationInFrames={duration} layout="none">
-              <Overlay spec={el.spec!} theme={palette} locale={locale} durationSeconds={duration / fps} exit />
+              <Overlay spec={fechasEnSpec(el.spec!)} theme={palette} locale={locale} durationSeconds={duration / fps} exit />
             </Sequence>
           );
         })}

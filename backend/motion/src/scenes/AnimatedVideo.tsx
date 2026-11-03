@@ -5,6 +5,7 @@ import { resolveTheme } from "../theme";
 import { Canvas } from "./Canvas";
 import { Captions } from "./Captions";
 import { DOC_PALETTE } from "./palette";
+import { fechasEnSpec } from "../lib/fechas";
 import { SCENE_OVERLAP, SceneView } from "./Scene";
 import type { AnimatedVideoProps } from "./types";
 
@@ -30,7 +31,7 @@ export function AnimatedVideo({ scenes, components, locale, nav, captions, audio
       ))}
       {(nav ?? []).map((n, i) => (
         <Sequence key={`nav-${i}`} from={Math.round(n.start * fps)} durationInFrames={frames(n.end - n.start)} layout="none">
-          <Overlay spec={n.spec} theme={palette} locale={locale} durationSeconds={n.end - n.start} exit />
+          <Overlay spec={fechasEnSpec(n.spec)} theme={palette} locale={locale} durationSeconds={n.end - n.start} exit />
         </Sequence>
       ))}
       {captions && captions.length > 0 && <Captions chunks={captions} theme={theme} />}
