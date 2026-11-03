@@ -1,0 +1,24 @@
+{
+  "name": "clip-modelo-chernobyl",
+  "private": true,
+  "description": "Prototipo hecho a mano (sin IA) del formato documental animado: 30 s de Chernobyl con el estilo A de la referencia. Ver docs/formato-documental/INFORME.md",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Clip out/clip-modelo.mp4 --scale=0.6666666666666666"
+  },
+  "dependencies": {
+    "@fontsource/inter": "5.1.0",
+    "@fontsource/jetbrains-mono": "5.1.0",
+    "@remotion/cli": "4.0.539",
+    "d3-geo": "3.1.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.539",
+    "topojson-client": "3.1.0",
+    "world-atlas": "2.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "typescript": "5.6.3"
+  }
+}
