@@ -4,6 +4,7 @@ import type { Theme, PaletteTheme } from "../theme";
 import { TEXT_SHADOW } from "../lib/anim";
 import { formatNumber, parseLiteralNumber } from "../lib/literal";
 import { DrawingView } from "./Drawing";
+import { Lupa, lupaAt, type Caja } from "./Lupa";
 import { DOC, docTheme, toneColor } from "./palette";
 import type { AnimatedScene, DrawingComponent, SceneElement, Slot, Tone } from "./types";
 
@@ -216,6 +217,21 @@ function ElementView({ el, state, t, s: base0, theme, locale, alone }: { el: Sce
   );
 }
 
+// Cajas de los dibujos de la escena en pixeles (para que la lupa no los tape).
+function cajasDeDibujos(scene: AnimatedScene, components: Record<string, DrawingComponent> | undefined, width: number, height: number): Caja[] {
+  return scene.elements.flatMap((el) => {
+    const comp = el.kind === "drawing" && el.component ? components?.[el.component] : undefined;
+    if (!comp) return [];
+    const w = ((el.w ?? 40) / 100) * width;
+    const rows = el.repeat ? Math.ceil(el.repeat.count / Math.min(el.repeat.count, el.repeat.columns)) : 1;
+    const cols = el.repeat ? Math.min(el.repeat.count, el.repeat.columns) : 1;
+    const h = ((w / cols) * comp.height) / comp.width * rows;
+    const cx = ((el.x ?? 50) / 100) * width;
+    const cy = ((el.y ?? 50) / 100) * height;
+    return [{ x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 }];
+  });
+}
+
 // Zonas fijas de la pantalla (a 1080p). Con algo a los costados, la franja
 // del medio se parte en columnas iguales: dos (costados) o tres (costados y
 // centro), para que un titulo del centro no quede apretado.
@@ -269,28 +285,19 @@ export function SceneView({
   const slots: Exclude<Slot, "full">[] = ["top", "left", "center", "right", "bottom"];
   // Una escena se acerca y la siguiente se aleja.
   const pushIn = Number(scene.id.replace(/\D/g, "")) % 2 === 0;
-  // Acercamientos dirigidos: la camara va hacia el elemento y vuelve.
-  const focus = { zoom: 1, x: 50, y: 50 };
-  for (const st of scene.steps) {
-    if (st.action !== "camera" || st.at > t) continue;
-    const el = scene.elements.find((e) => e.id === st.target);
-    const p = interpolate(t - st.at, [0, st.duration ?? 1.2], [0, 1], { easing: Easing.inOut(Easing.cubic), extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-    focus.zoom += ((st.zoom ?? 1) - focus.zoom) * p;
-    focus.x += ((el?.x ?? 50) - focus.x) * p;
-    focus.y += ((el?.y ?? 50) - focus.y) * p;
-  }
+  // Los pasos "camera" ya no mueven el encuadre: abren una lupa (Lupa.tsx).
+  const lupa = lupaAt(scene, t);
+  const dibujos = scene.elements
+    .filter((el) => el.kind === "drawing" && el.component && components?.[el.component])
+    .map((el) => <DrawingView key={el.id} el={el} comp={components![el.component!]!} scene={scene} t={t} theme={theme} />);
   const camera = interpolate(frame, [0, Math.max(1, total)], pushIn ? [1, 1 + CAMERA_ZOOM] : [1 + CAMERA_ZOOM, 1], { extrapolateRight: "clamp" });
 
   return (
-    <AbsoluteFill style={{ opacity: fade, transform: `scale(${camera * focus.zoom})`, transformOrigin: `${focus.x}% ${focus.y}%` }}>
+    <AbsoluteFill style={{ opacity: fade, transform: `scale(${camera})` }}>
       {light && <AbsoluteFill style={{ background: "radial-gradient(ellipse 90% 90% at 50% 45%, #F3F5F7 0%, #E8ECF0 60%, #D3D9DF 100%)" }} />}
       {/* Biblioteca del video: los componentes con sus etiquetas encima. */}
       <AbsoluteFill>
-        {scene.elements
-          .filter((el) => el.kind === "drawing" && el.component && components?.[el.component])
-          .map((el) => (
-            <DrawingView key={el.id} el={el} comp={components![el.component!]!} scene={scene} t={t} theme={theme} />
-          ))}
+        {dibujos}
         {states
           .filter(({ el }) => el.kind === "label")
           .map(({ el, state }) => (
@@ -312,6 +319,11 @@ export function SceneView({
               {state.text}
             </div>
           ))}
+        {lupa && (
+          <Lupa lupa={lupa} t={t} light={light} cajas={cajasDeDibujos(scene, components, width, height)}>
+            {dibujos}
+          </Lupa>
+        )}
       </AbsoluteFill>
       {/* Graficos del catalogo: a pantalla completa, desde que se muestran. */}
       {scene.elements
