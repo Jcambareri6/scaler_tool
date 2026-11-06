@@ -472,19 +472,31 @@ export default function PreviewPanel({ projectId }: Props) {
           <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
             Formato
           </span>
+          {/* "Stock con graficos" prende las metricas animadas
+              (overlays_enabled): antes era solo el formato stock y habia que
+              tildar aparte "Graficos animados", y se generaban videos sin
+              ningun grafico creyendo que estaban activados. */}
           <div className="flex gap-2">
             {(
               [
-                { value: "stock", label: "Stock con gráficos" },
+                { value: "stock", label: "Solo stock" },
+                { value: "graficos", label: "Stock con gráficos" },
                 { value: "animated", label: "Todo animado" },
-              ] as { value: VideoFormat; label: string }[]
-            ).map((opt) => (
+              ] as { value: "stock" | "graficos" | "animated"; label: string }[]
+            )
+              // "Todo animado" todavia no esta listo: solo se ve donde
+              // VITE_TODO_ANIMADO=on (local, para seguir probandolo).
+              .filter((opt) => opt.value !== "animated" || import.meta.env.VITE_TODO_ANIMADO === "on")
+              .map((opt) => (
               <button
                 key={opt.value}
-                onClick={() => setVideoFormat(opt.value)}
+                onClick={() => {
+                  setVideoFormat(opt.value === "animated" ? "animated" : "stock");
+                  if (opt.value !== "animated") setOverlaysEnabled(opt.value === "graficos");
+                }}
                 className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
                 style={
-                  videoFormat === opt.value
+                  (animatedFormat ? "animated" : overlaysEnabled ? "graficos" : "stock") === opt.value
                     ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                     : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
                 }
@@ -578,30 +590,18 @@ export default function PreviewPanel({ projectId }: Props) {
           dibuja render_video (video_projects.overlays_enabled). Solo admins
           mientras estan en prueba; el backend lo vuelve a chequear. En el
           formato animado van siempre. */}
-      {aiAllowed && !animatedFormat && (
+      {/* Se prenden con el modo "Stock con graficos" (arriba). */}
+      {aiAllowed && !animatedFormat && overlaysEnabled && (
       <div
         className="flex flex-col gap-2 w-full max-w-xs px-3 py-2.5 rounded-lg"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
       >
-        <label className="flex items-center justify-between gap-3 cursor-pointer">
-          <span className="text-xs font-medium" style={{ color: "var(--foreground)" }}>
-            Gráficos animados
-          </span>
-          <input
-            type="checkbox"
-            checked={overlaysEnabled}
-            onChange={(e) => setOverlaysEnabled(e.target.checked)}
-            className="w-4 h-4 accent-[#E30B10]"
-          />
-        </label>
         {/* El estilo ya no se elige aca: es del canal y se elige en la
             revision de stock del primer video, viendo las paletas del nicho
             sobre el propio video (StylePicker). */}
-        {overlaysEnabled && (
-          <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
-            Los colores se eligen en la revisión, sobre tu propio video.
-          </p>
-        )}
+        <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+          Gráficos animados activados. Los colores se eligen en la revisión, sobre tu propio video.
+        </p>
       </div>
       )}
 
