@@ -7,7 +7,7 @@ import { providerApiError } from "../lib/errors.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
 import { supportedOverlayIcons, supportedOverlayTypes } from "../lib/motion.js";
 import { getNiche, guessNiche, nicheIds } from "../lib/niches.js";
-import { directOverlays, type Storyboard } from "../director/director.js";
+import { callTool, directOverlays, type Storyboard, type Usage } from "../director/director.js";
 
 // Decide QUE metrica animada va en cada escena (contador, barras, versus,
 // linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
@@ -23,11 +23,11 @@ import { directOverlays, type Storyboard } from "../director/director.js";
 // capitulos ("Escenario 1") como title card, lugares como pin, y los
 // pedidos de like/suscripcion/comentario como CTA. Una metrica cada 20-40s.
 
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const LLM_TIMEOUT_MS = 180 * 1000;
-const MAX_OUTPUT_TOKENS = 12000;
+const MAX_OUTPUT_TOKENS = 32000;
 const MAX_SCRIPT_CHARS = 60000;
 // Segundos promedio entre overlays que se le pide al LLM.
 const TARGET_SECONDS_PER_OVERLAY = 25;
@@ -39,15 +39,15 @@ const MAX_OVERLAYS_PER_SCENE = 3;
 export const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   big_number: 'una cifra con unidad que impacta ("1.500 km por hora", "el 70% de las personas", "40.000 millones"). Se anima como contador. "label" = de que es la cifra.',
   data_viz_single: 'comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.',
-  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados ({label: que es, text: su valor}). "text" = la conclusion o el titulo de la comparacion.',
+  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados ({label: que es, text: su valor}); los dos con cifra o los dos sin cifra, nunca una cifra contra una frase. "text" = la conclusion o el titulo de la comparacion.',
   timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6 ({label: la fecha/etapa, text: que pasa}). "text" = titulo corto.',
   location: 'cuando la narracion nos lleva a un lugar concreto ("Quito", "el Serengueti"). "text" = el lugar, "label" opcional = el dato del lugar.',
-  list: 'enumeracion de 2 a 5 cosas ("tres razones", "los sintomas son..."). "text" = el titulo de la lista, "items" = las entradas en orden ({label: "", text: la entrada, <= 6 palabras}).',
+  list: 'enumeracion de 2 a 5 cosas ("tres razones", "los sintomas son..."). "text" = el titulo de la lista, que nombra lo que se enumera (nunca un conector como "Peor todavía"), "items" = las entradas en orden ({label: "", text: la entrada, <= 6 palabras, que se entienda sola}).',
   profile_card: 'cuando se presenta un protagonista (una especie, una persona, un objeto) con 2 a 4 datos clave. "text" = el nombre, "items" = los datos ({label: que dato, text: el valor}).',
   myth_fact: 'cuando el guion desmiente una creencia ("muchos creen que... pero en realidad..."). "text" = el mito tal cual, "label" = la realidad tal cual. Los dos literales.',
   scale_compare: 'analogia de tamaño o cantidad con un numero chico ("pesa como 3 autos", "10 veces más grande"). "text" = la frase con el numero. "icon" = el objeto que se repite, de la lista de iconos.',
   line_chart: 'una tendencia en el tiempo con 3 o mas valores (temperatura por año, poblacion por decada, precio a lo largo de los años). Linea que se dibuja con los puntos marcados. "text" = titulo, "label" opcional = la fuente si el guion la nombra ("la NASA"), "items" = puntos en orden ({label: año o etapa, text: el valor con su cifra}).',
-  pivot_question: 'una pregunta que abre intriga antes de explicar algo ("¿por qué no frenó?", "¿y entonces qué pasó?"). Pocas: 1 a 3 en todo el video. "text" = la pregunta literal (<= 8 palabras), "label" = la palabra clave de esa misma pregunta que se subraya.',
+  pivot_question: 'una pregunta que abre intriga antes de explicar algo ("¿por qué no frenó?", "¿y entonces qué pasó?"). Pocas: 1 a 3 en todo el video. "text" = la pregunta literal con sus signos ¿ ? (<= 8 palabras; si el guion no la escribe como pregunta, no uses pivot_question), "label" = la palabra clave de esa misma pregunta que se subraya.',
   card_grid: 'muchos casos o ejemplos comparables a la vez (3 a 6: años, paises, especies) con un dato cada uno. Tarjetas que aparecen de a una. "text" = titulo, "items" = las tarjetas ({label: el caso, text: su dato}).',
   scoreboard: 'un resultado o enfrentamiento entre dos con marcador ("ganó cuatro partidas a una", "3 a 1"). "text" = el contexto corto, "items" = exactamente 2 lados ({label: el nombre, text: su resultado}).',
   strike_word: 'el narrador desmiente UNA palabra o idea corta ("parecía imposible... pero"). Se tacha en rojo. "text" = la palabra o frase desmentida (1 a 3 palabras). Si hay mito y realidad completos, mejor myth_fact.',
@@ -66,7 +66,7 @@ export const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
   lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis"). "text" = el termino, "label" = su definicion corta del guion.',
   badge: 'dato de estado que sigue valiendo un buen rato y conviene dejar fijo en una esquina ("un día dura / 1 año"). "text" = el valor corto, "label" = de que es.',
   cta: 'cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").',
-  kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 3 a 8 palabras. "label" = UNA palabra (dos como mucho) de esa misma frase que se resalta en color, la de mas peso ("nunca", no "no terminaría nunca"). Para los momentos fuertes, no para cualquier oracion.',
+  kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 4 a 8 palabras y como mucho 45 caracteres, que se entienda sola sin la voz (nunca cortada ni terminada en "que", "y", "de"). "label" = UNA palabra (dos como mucho) de esa misma frase que se resalta en color, la de mas peso ("nunca", no "no terminaría nunca"). Para los momentos fuertes, no para cualquier oracion.',
 };
 
 export function plannableTypes(): OverlayType[] {
@@ -99,6 +99,8 @@ export interface PlanOverlaysOutput {
   // Solo con el director: estructura y momentos (elegidos y descartados con
   // el motivo), para revisar por que eligio cada grafico.
   storyboard?: Storyboard;
+  // Tokens del planificador de respaldo (el director los guarda en storyboard.usage).
+  usage?: Usage;
 }
 
 function buildSystemPrompt(types: OverlayType[]): string {
@@ -198,6 +200,8 @@ function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
 interface RawPlan {
   scenes: unknown[];
   niche: string | null;
+  // Tokens por modelo (solo Claude): para saber cuanto cuesta cada video.
+  usage?: Usage;
 }
 
 function pickNiche(value: unknown): string | null {
@@ -209,22 +213,11 @@ async function planWithAnthropic(user: string, types: OverlayType[]): Promise<Ra
   if (!provider?.api_key) return null;
   const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_ANTHROPIC_MODEL;
   const client = new Anthropic({ apiKey: provider.api_key, timeout: LLM_TIMEOUT_MS });
-
-  const response = await withRetry(() =>
-    client.messages
-      .stream({
-        model,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: buildSystemPrompt(types),
-        tools: [returnOverlaysTool(types)],
-        tool_choice: { type: "tool", name: "return_overlays" },
-        messages: [{ role: "user", content: user }],
-      })
-      .finalMessage()
-  );
-  const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  const input = toolUse?.input as { scenes?: unknown; niche?: unknown } | undefined;
-  return { scenes: sceneList(input?.scenes), niche: pickNiche(input?.niche) };
+  // callTool: pide la herramienta forzada y, si el modelo la rechaza (Sonnet
+  // 5.5 / Opus 5.5 dan 400), la pide por prompt; y cuenta los tokens.
+  const usage: Usage = {};
+  const input = (await callTool(client, model, MAX_OUTPUT_TOKENS, buildSystemPrompt(types), returnOverlaysTool(types), user, usage)) as { scenes?: unknown; niche?: unknown } | undefined;
+  return { scenes: sceneList(input?.scenes), niche: pickNiche(input?.niche), usage };
 }
 
 // Claude a veces devuelve el array anidado como texto JSON (visto con
@@ -407,6 +400,6 @@ export const planOverlaysTool: ToolDefinition<PlanOverlaysInput, PlanOverlaysOut
       const specs = e.overlays.map((o) => toOverlaySpec(o, types)).filter((o): o is OverlaySpec => o !== null);
       if (specs.length) overlays[e.order] = specs.slice(0, MAX_OVERLAYS_PER_SCENE);
     }
-    return { overlays, source, niche: plan.niche ?? fallbackNiche };
+    return { overlays, source, niche: plan.niche ?? fallbackNiche, ...(plan.usage ? { usage: plan.usage } : {}) };
   },
 };

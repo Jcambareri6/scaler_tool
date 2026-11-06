@@ -93,6 +93,35 @@ export function appearsIn(haystack: string, needle: string | undefined): boolean
   return n.length > 0 && haystack.includes(n);
 }
 
+// Que el grafico se entienda sin la voz (mismas reglas que el verificador
+// del formato documental). Literal del guion no alcanza: salian citas
+// cortadas ("Pero los operadores de radio trabajaban"), preguntas que no eran
+// preguntas ("llegar a América 500 años antes que Colón") o listas de pedazos.
+const CONECTORES = new Set(["que", "y", "e", "o", "u", "el", "la", "los", "las", "lo", "un", "una", "de", "del", "a", "al", "en", "con", "por", "para", "su", "sus", "se", "ni", "pero", "como", "mas", "más", "muy"]);
+const CONECTOR_INICIAL = /^(peor|además|ademas|pero|y|o|entonces|mientras|tambi[eé]n|incluso|encima|sin embargo)\b/i;
+const MIN_PALABRAS_CITA = 4;
+const MAX_PALABRAS_CITA = 8;
+const MAX_CARACTERES_CITA = 45;
+const palabras = (t: string) => t.split(/\s+/).filter(Boolean);
+const terminaEnConector = (t: string) => CONECTORES.has((palabras(t).pop() ?? "").toLowerCase().replace(/[.,;:!?¿¡]/g, ""));
+const tieneCifra = (t: string | undefined) => /\d/.test(t ?? "");
+
+function legible(type: OverlayType, text: string, items: { label: string; text: string }[] | undefined, icon: string | undefined): void {
+  if (type === "kinetic_quote") {
+    const n = palabras(text).length;
+    if (n < MIN_PALABRAS_CITA || n > MAX_PALABRAS_CITA || text.length > MAX_CARACTERES_CITA) throw new Error(`kinetic_quote de ${n} palabras / ${text.length} caracteres ("${text}"): tiene que ser de ${MIN_PALABRAS_CITA} a ${MAX_PALABRAS_CITA} palabras y ${MAX_CARACTERES_CITA} caracteres`);
+  }
+  if ((type === "kinetic_quote" || type === "pivot_question" || type === "title_card" || type === "list") && terminaEnConector(text)) throw new Error(`"${text}" termina en un conector: es una frase cortada`);
+  if (type === "pivot_question" && !text.includes("?")) throw new Error(`pivot_question que no es una pregunta ("${text}")`);
+  if (type === "big_number" && !tieneCifra(text)) throw new Error(`big_number sin cifra ("${text}")`);
+  if (type === "versus" && items?.length === 2 && tieneCifra(items[0]!.text) !== tieneCifra(items[1]!.text)) throw new Error("versus de una cifra contra una frase: no compara nada");
+  if (type === "scale_compare" && !icon) throw new Error("scale_compare sin un icono de la lista: quedaria un circulo vacio");
+  if (type === "list") {
+    if (CONECTOR_INICIAL.test(text)) throw new Error(`el titulo de la lista ("${text}") es un conector, no dice que se enumera`);
+    if ((items ?? []).some((i) => CONECTOR_INICIAL.test(i.text) || terminaEnConector(i.text))) throw new Error("la lista tiene renglones cortados");
+  }
+}
+
 // Gap #4 del LEEME (modo estricto): el overlay NUNCA inventa texto. Es la
 // unica Tool que no necesita Provider — valida contra el guion real, que ya
 // existe en la DB. La logica vive aca en vez de en OpenAI porque es una
@@ -174,7 +203,7 @@ export const generateOverlayTool: ToolDefinition<
           .filter(
             (item) =>
               appearsIn(normalizedScript, item.text) &&
-              (!NUMERIC_ITEM_TYPES.includes(overlay.type) || /d/.test(item.text)) &&
+              (!NUMERIC_ITEM_TYPES.includes(overlay.type) || /\d/.test(item.text)) &&
               (appearsIn(normalizedFull, item.label) ||
                 (OPTIONAL_ITEM_LABEL_TYPES.includes(overlay.type) && !item.label?.trim()))
           )
@@ -215,6 +244,7 @@ export const generateOverlayTool: ToolDefinition<
     if (overlay.type === "scoreboard" && items!.length !== 2) {
       throw new Error("scoreboard necesita exactamente 2 lados");
     }
+    legible(overlay.type, text, items, icon);
 
     return {
       overlay: {

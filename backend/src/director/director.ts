@@ -23,11 +23,13 @@ import { INTENTS, MANUAL, manualSummary } from "./manual.js";
 // Si algo del director falla, plan_overlays sigue con el planificador de
 // siempre: este modulo devuelve null y nunca tira el video.
 
-const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_MODEL = "claude-sonnet-5-5";
 const DEFAULT_DESIGNER_MODEL = "claude-haiku-5-5";
 const LLM_TIMEOUT_MS = 180 * 1000;
-const DIRECTOR_MAX_TOKENS = 10000;
-const DESIGNER_MAX_TOKENS = 8000;
+// En Sonnet 5.5 y Haiku 5.5 el razonamiento cuenta dentro de max_tokens: con
+// 10000 / 8000 el plan podia cortarse a la mitad (va por streaming).
+const DIRECTOR_MAX_TOKENS = 32000;
+const DESIGNER_MAX_TOKENS = 16000;
 const MAX_SCRIPT_CHARS = 60000;
 const DESIGNER_CONCURRENCY = 4;
 const MAX_PER_SCENE = 3;
@@ -321,18 +323,25 @@ export async function callTool(
   user: string,
   usage: Usage
 ): Promise<Record<string, unknown> | undefined> {
-  const response = await withRetry(() =>
-    client.messages
-      .stream({
-        model,
-        max_tokens: maxTokens,
-        system,
-        tools: [tool],
-        tool_choice: { type: "tool", name: tool.name },
-        messages: [{ role: "user", content: user }],
-      })
-      .finalMessage()
-  );
+  const call = (forced: boolean) =>
+    withRetry(() =>
+      client.messages
+        .stream({
+          model,
+          max_tokens: maxTokens,
+          system: forced ? system : `${system}\n\nResponde UNICAMENTE llamando a la herramienta ${tool.name}, sin texto aparte.`,
+          tools: [tool],
+          tool_choice: forced ? { type: "tool", name: tool.name } : { type: "auto" },
+          messages: [{ role: "user", content: user }],
+        })
+        .finalMessage()
+    );
+  // Opus 5.5 / Sonnet 5.5 rechazan el tool_choice forzado con un 400: ahi se
+  // pide la herramienta por prompt con tool_choice auto.
+  const response = await call(true).catch((err) => {
+    if (err instanceof Anthropic.BadRequestError) return call(false);
+    throw err;
+  });
   const spent = (usage[model] ??= { input: 0, output: 0 });
   spent.input += response.usage.input_tokens;
   spent.output += response.usage.output_tokens;
