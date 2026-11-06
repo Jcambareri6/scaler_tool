@@ -2,7 +2,7 @@ import { AbsoluteFill } from "remotion";
 import type { OverlaySpec } from "../spec";
 import type { Theme } from "../theme";
 import { parseLiteralNumber } from "../lib/literal";
-import { iconFor } from "../lib/icons";
+import { ICONS, iconFor } from "../lib/icons";
 import { Scrim, TEXT_SHADOW, useMotion } from "../lib/anim";
 
 // Mas de esto ya no se cuenta a simple vista: se dibujan MAX_ICONS y se
@@ -17,6 +17,8 @@ export function ScaleCompare({ spec, theme, exit: withExit }: { spec: OverlaySpe
   const n = Math.round(parseLiteralNumber(spec.text)?.value ?? 1);
   const count = Math.max(1, Math.min(MAX_ICONS, n));
   const Icon = iconFor(spec.icon);
+  // Sin icono conocido no se dibuja un circulo vacio: queda solo la frase.
+  const conIcono = !!spec.icon && !!ICONS[spec.icon];
   const size = (count <= 4 ? 150 : count <= 8 ? 110 : 84) * s;
   const stagger = count <= 6 ? 5 : 3;
 
@@ -30,7 +32,7 @@ export function ScaleCompare({ spec, theme, exit: withExit }: { spec: OverlaySpe
           </div>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 26 * s, maxWidth: 1300 * s }}>
-          {Array.from({ length: count }, (_, i) => {
+          {Array.from({ length: conIcono ? count : 0 }, (_, i) => {
             const t = enter(4 + i * stagger, 14);
             const isLast = i === count - 1;
             return (
@@ -48,7 +50,8 @@ export function ScaleCompare({ spec, theme, exit: withExit }: { spec: OverlaySpe
             );
           })}
         </div>
-        <div style={{ fontFamily: theme.fontSans, fontWeight: 800, fontSize: 76 * s, textTransform: "uppercase", color: theme.text, textShadow: TEXT_SHADOW, opacity: enter(8 + count * stagger), transform: `translateY(${(1 - enter(8 + count * stagger)) * 20 * s}px)` }}>
+        {/* Ancho maximo y letra segun el largo: la frase nunca se sale del cuadro. */}
+        <div style={{ fontFamily: theme.fontSans, fontWeight: 800, fontSize: (spec.text.length > 36 ? 52 : spec.text.length > 22 ? 62 : 76) * s, lineHeight: 1.15, textAlign: "center", maxWidth: 1500 * s, textTransform: "uppercase", color: theme.text, textShadow: TEXT_SHADOW, opacity: enter(8 + count * stagger), transform: `translateY(${(1 - enter(8 + count * stagger)) * 20 * s}px)` }}>
           {spec.text}
         </div>
       </AbsoluteFill>

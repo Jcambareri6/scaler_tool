@@ -15,8 +15,8 @@ export function DocNav({ nav, scenes }: { nav: TimedSpec[]; scenes: AnimatedScen
   const scene = scenes.find((sc) => t >= sc.start && t < sc.end);
   const claro = scene?.recurso ? (scene.recurso.fondo ?? (scene.recurso.tipo === "esquema_capas" ? "claro" : "oscuro")) === "claro" : scene?.background === "light";
   const k = interpolate(t - n.start, [0, 0.5], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const color = claro ? "rgba(58,69,82,0.55)" : "rgba(201,211,222,0.55)";
-  const base = { fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 15 * s, letterSpacing: 2.5 * s, textTransform: "uppercase" as const, whiteSpace: "nowrap" as const };
+  const color = claro ? "rgba(58,69,82,0.7)" : "rgba(201,211,222,0.7)";
+  const base = { fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 19 * s, letterSpacing: 2.5 * s, textTransform: "uppercase" as const, whiteSpace: "nowrap" as const };
   return (
     <div style={{ position: "absolute", left: 48 * s, right: 48 * s, top: 30 * s, display: "flex", justifyContent: "space-between", opacity: k }}>
       <div style={{ ...base, color }}>{n.spec.text}</div>

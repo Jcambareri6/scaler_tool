@@ -27,6 +27,15 @@ export interface ObjetoBase {
   alto: number;
   // Puntos de las partes en coordenadas locales (lupa, etiquetas, personaje).
   anclas: Record<string, [number, number]>;
+  // Caja de cada parte [x0, y0, x1, y1] (dibujos del Dibujante): la lupa la usa para ampliar.
+  cajas?: Record<string, [number, number, number, number]>;
+  // Partes con suficiente detalle para ampliarlas con la lupa.
+  conDetalle?: string[];
+  // Fraccion del alto bajo el agua cuando flota (si no, la del escenario).
+  calado?: number;
+  // Rellenos mayormente oscuros: en escenas de noche se invierten (si son
+  // claros solo se oscurecen un poco: el hielo tiene que seguir blanco).
+  oscuro?: boolean;
   Dibujo: FC<PropsObjeto>;
   // Vista ampliada de una parte para la lupa (centro 0,0, radio 135).
   Detalle?: FC<{ t: number; parte: string; accion?: number | undefined }>;
@@ -157,32 +166,123 @@ export interface ComponenteSvg {
   height: number;
   svg: string;
   parts: Record<string, string | null>;
+  // Fraccion del alto bajo el agua cuando flota (iceberg ~0.85, barco ~0.25).
+  calado?: number;
 }
 
 const COLOR_SIG: Record<string, string> = { seguro: DOC.seguro, peligro: DOC.peligro, foco: DOC.foco };
 
+// Caja aproximada de cada parte, leyendo las coordenadas absolutas de sus
+// formas (sin aplicar transforms): alcanza para anclar etiquetas y la lupa en
+// la parte y no en el centro del dibujo.
+// Cuantas formas tiene cada parte (para saber si vale la pena ampliarla).
+const CONTEOS = new WeakMap<object, Record<string, number>>();
+
+export function cajasDePartes(svg: string): Record<string, [number, number, number, number]> {
+  const cajas: Record<string, [number, number, number, number]> = {};
+  const formas: Record<string, number> = {};
+  CONTEOS.set(cajas, formas);
+  for (const inicio of svg.matchAll(/<g\b[^>]*\b(?:data-part|id)="([a-z][a-z0-9_]*)"[^>]*>/g)) {
+    // Contenido hasta el </g> que cierra este grupo.
+    let prof = 1;
+    let fin = inicio.index! + inicio[0].length;
+    const etiquetas = /<(\/?)g\b[^>]*?(\/?)>/g;
+    etiquetas.lastIndex = fin;
+    for (let m = etiquetas.exec(svg); m && prof > 0; m = etiquetas.exec(svg)) {
+      if (m[1]) prof--;
+      else if (!m[2]) prof++;
+      fin = m.index;
+    }
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const num = (s: string) => (s.match(/-?\d*\.?\d+(?:e-?\d+)?/gi) ?? []).map(Number);
+    for (const f of svg.slice(inicio.index, fin).matchAll(/<(rect|circle|ellipse|line|polyline|polygon|path)\b([^>]*)>/g)) {
+      const a: Record<string, number[]> = {};
+      for (const [, k, v] of f[2]!.matchAll(/([a-z0-9-]+)="([^"]*)"/g)) a[k!] = num(v!);
+      const v1 = (k: string) => a[k]?.[0] ?? 0;
+      if (f[1] === "rect") xs.push(v1("x"), v1("x") + v1("width")), ys.push(v1("y"), v1("y") + v1("height"));
+      else if (f[1] === "circle") xs.push(v1("cx") - v1("r"), v1("cx") + v1("r")), ys.push(v1("cy") - v1("r"), v1("cy") + v1("r"));
+      else if (f[1] === "ellipse") xs.push(v1("cx") - v1("rx"), v1("cx") + v1("rx")), ys.push(v1("cy") - v1("ry"), v1("cy") + v1("ry"));
+      else if (f[1] === "line") xs.push(v1("x1"), v1("x2")), ys.push(v1("y1"), v1("y2"));
+      else {
+        // points o d: pares x,y (los comandos relativos quedan aproximados).
+        const n = a.points ?? (/[a-z]/.test(f[2]!.match(/\bd="([^"]*)"/)?.[1] ?? "") ? [] : a.d) ?? [];
+        for (let i = 0; i + 1 < n.length; i += 2) xs.push(n[i]!), ys.push(n[i + 1]!);
+      }
+    }
+    if (xs.length) cajas[inicio[1]!] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    formas[inicio[1]!] = (svg.slice(inicio.index, fin).match(/<(rect|circle|ellipse|line|polyline|polygon|path)/g) ?? []).length;
+  }
+  return cajas;
+}
+
+// Brillo medio de los rellenos del dibujo (#rgb / #rrggbb): mayormente oscuro?
+function rellenoOscuro(svg: string): boolean {
+  const lums = [...svg.matchAll(/fill="#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})"/g)].map((m) => {
+    const h = m[1]!.length === 3 ? [...m[1]!].map((c) => c + c).join("") : m[1]!;
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  });
+  return lums.length > 0 && lums.reduce((a, b) => a + b, 0) / lums.length < 0.45;
+}
+
+// Vida del objeto: balanceo leve y continuo (nunca queda una figura muerta).
+const VAIVEN_S = 3.4;
+// Fraccion del dibujo a partir de la cual una "parte" es el objeto entero.
+const PARTE_GRANDE = 0.35;
+// Formas minimas para que ampliar una parte con la lupa muestre algo.
+const LUPA_FORMAS = 4;
+
 export function objetoDesdeSvg(comp: ComponenteSvg): ObjetoBase {
+  const cajas = cajasDePartes(comp.svg);
   const anclas: Record<string, [number, number]> = {};
-  for (const parte of Object.keys(comp.parts)) anclas[parte] = [comp.width / 2, comp.height / 2];
+  for (const parte of Object.keys(comp.parts)) {
+    const c = cajas[parte];
+    anclas[parte] = c
+      ? [Math.min(Math.max((c[0] + c[2]) / 2, 0), comp.width), Math.min(Math.max((c[1] + c[3]) / 2, 0), comp.height)]
+      : [comp.width / 2, comp.height / 2];
+  }
   return {
     nombre: comp.name,
     ancho: comp.width,
     alto: comp.height,
     anclas,
+    cajas,
+    conDetalle: Object.keys(cajas).filter((p) => (CONTEOS.get(cajas)?.[p] ?? 0) >= LUPA_FORMAS),
+    ...(typeof comp.calado === "number" && comp.calado >= 0 && comp.calado <= 0.95 ? { calado: comp.calado } : {}),
+    oscuro: rellenoOscuro(comp.svg),
     Dibujo: ({ t, partes, evento }) => {
       const sel = `[data-obj="${comp.id}"]`;
+      // Parte marcada por la voz: se pinta con un fundido, da un golpe de
+      // escala y brilla un momento; despues queda pintada.
       const reglas = Object.entries(partes)
         .filter(([, e]) => e && t >= e.at)
-        .map(([parte, e]) => `${sel} [data-part="${parte}"],${sel} [data-part="${parte}"] *:not([fill="none"]){fill:${COLOR_SIG[e!.significado ?? "foco"] ?? DOC.foco};transition:none}`)
+        .map(([parte, e]) => {
+          const color = COLOR_SIG[e!.significado ?? "foco"] ?? DOC.foco;
+          const kColor = entra(t, e!.at, 0.4);
+          const pop = golpe(t, e!.at, 0.18) * (1 - entra(t, e!.at + 0.18, 0.5));
+          const brillo = 1 - entra(t, e!.at + 0.3, 1.2);
+          const p = `${sel} [data-part="${parte}"]`;
+          // Parte que es casi todo el objeto (el iceberg, el casco entero): no se
+          // pinta (quedaba un objeto naranja), se marca con contorno y brillo.
+          const c = cajas[parte];
+          const grande = c ? ((c[2] - c[0]) * (c[3] - c[1])) / Math.max(1, comp.width * comp.height) > PARTE_GRANDE : false;
+          if (grande) return `${p},${p} *{stroke:${mezcla(T.linea, color, kColor)}}${p}{filter:drop-shadow(0 0 ${4 + 10 * brillo}px ${color})}`;
+          return `${p}{transform-box:fill-box;transform-origin:center;transform:scale(${1 + 0.14 * pop});filter:drop-shadow(0 0 ${10 * brillo}px ${color})}${p},${p} *:not([fill="none"]){fill:${mezcla(T.relleno, color, kColor)}}`;
+        })
         .join("");
       const kE = golpe(t, evento);
+      // Evento: sacudida corta y seca sobre el objeto.
+      const tE = evento === undefined ? -1 : t - evento;
+      const sacude = tE >= 0 && tE < 0.5 ? Math.sin(tE * 70) * 9 * (1 - tE / 0.5) : 0;
+      const fase = (t / VAIVEN_S) * Math.PI * 2;
+      const vaiven = `translate(${sacude} ${Math.sin(fase) * 3}) rotate(${Math.sin(fase + 1) * 0.5} ${comp.width / 2} ${comp.height})`;
       return (
-        <g data-obj={comp.id}>
+        <g data-obj={comp.id} transform={vaiven}>
           <style dangerouslySetInnerHTML={{ __html: reglas }} />
           <svg x={0} y={0} width={comp.width} height={comp.height} viewBox={`0 0 ${comp.width} ${comp.height}`} overflow="visible" style={{ color: T.linea, ["--accent" as string]: DOC.foco }} dangerouslySetInnerHTML={{ __html: comp.svg }} />
           {kE > 0 && (
             <>
-              <rect x={0} y={0} width={comp.width} height={comp.height} fill={DOC.peligro} opacity={0.25 * kE} />
               <polyline points={`${comp.width * 0.3},0 ${comp.width * 0.4},${comp.height * 0.2} ${comp.width * 0.33},${comp.height * 0.35} ${comp.width * 0.45},${comp.height * 0.55}`} fill="none" stroke={DOC.peligro} strokeWidth={5} opacity={kE} />
             </>
           )}

@@ -15,7 +15,9 @@ export function Captions({ chunks, theme, scenes }: { chunks: CaptionChunk[]; th
   if (!chunk) return null;
   const s = height / 1080;
   const scene = scenes?.find((sc) => t >= sc.start && t < sc.end);
-  const light = scene?.recurso ? (scene.recurso.fondo ?? (scene.recurso.tipo === "esquema_capas" ? "claro" : "oscuro")) === "claro" : scene?.background === "light";
+  // En una escena clara el agua es celeste: el texto claro no se leia ahi
+  // (s8, s23 del Titanic), asi que va tinta oscura con halo blanco tambien en el mar.
+  const light = scene?.recurso ? (scene.recurso.fondo ?? (scene.recurso.tipo === "esquema_capas" || scene.recurso.tipo === "leccion" ? "claro" : "oscuro")) === "claro" : scene?.background === "light";
   const visibles = chunk.words.filter((w) => w.start <= t);
   if (visibles.length === 0) return null;
 
@@ -26,10 +28,11 @@ export function Captions({ chunks, theme, scenes }: { chunks: CaptionChunk[]; th
           textAlign: "center",
           fontFamily: theme.fontSans,
           fontWeight: 500,
-          fontSize: 38 * s,
+          fontSize: 44 * s,
           lineHeight: 1.25,
           letterSpacing: 0.2 * s,
-          color: light ? "#3A4552" : "#C9D3DE",
+          color: light ? DOC.tintaClaro : "#E1E8EF",
+          textShadow: light ? `0 0 ${6 * s}px rgba(255,255,255,0.95), 0 0 ${14 * s}px rgba(255,255,255,0.85)` : `0 ${2 * s}px ${10 * s}px rgba(0,0,0,0.75)`,
         }}
       >
         {visibles.map((w, i) => {
@@ -40,8 +43,12 @@ export function Captions({ chunks, theme, scenes }: { chunks: CaptionChunk[]; th
               style={
                 actual
                   ? {
-                      color: light ? DOC.resaltadoClaro : DOC.resaltadoOscuro,
+                      // En claro la palabra azul se perdia sobre el agua celeste: tinta
+                      // oscura y el azul queda en el subrayado.
+                      color: light ? DOC.tintaClaro : DOC.resaltadoOscuro,
+                      fontWeight: light ? 700 : undefined,
                       textDecoration: "underline",
+                      textDecorationColor: light ? DOC.resaltadoClaro : undefined,
                       textUnderlineOffset: 6 * s,
                       textDecorationThickness: 2 * s,
                     }

@@ -25,6 +25,7 @@ const STRIKE = DOC.peligro;
 // Movimiento de base: toda escena se acerca (o se aleja) y se desliza de
 // costado sin parar, aunque el plan no tenga pasos. Nunca hay un cuadro
 // congelado (referencia: 0-2 segundos quietos cada 30).
+const GRAFICO_ESPERA_S = 1.2;
 const CAMERA_ZOOM = 0.08;
 const CAMERA_DRIFT = 0.018; // fraccion del ancho, de punta a punta
 
@@ -284,7 +285,7 @@ export function SceneView({
   if (scene.recurso) {
     return (
       <AbsoluteFill style={{ opacity: fade }}>
-        <RecursoView t={t} rec={scene.recurso} inicio={scene.start} fin={scene.end} componentes={components} />
+        <RecursoView t={t} rec={scene.recurso} inicio={scene.start} fin={scene.end} componentes={components} locale={locale} />
       </AbsoluteFill>
     );
   }
@@ -304,8 +305,11 @@ export function SceneView({
     .filter((el) => el.kind === "drawing" && el.component && components?.[el.component])
     .map((el) => <DrawingView key={el.id} el={el} comp={components![el.component!]!} scene={scene} t={t} theme={theme} />);
   const avance = interpolate(frame, [0, Math.max(1, total + SCENE_OVERLAP)], [0, 1], { easing: Easing.inOut(Easing.sin), extrapolateRight: "clamp" });
-  const camera = pushIn ? 1 + CAMERA_ZOOM * avance : 1 + CAMERA_ZOOM * (1 - avance);
-  const deriva = (pushIn ? avance - 0.5 : 0.5 - avance) * CAMERA_DRIFT * width;
+  // Con texto en pantalla (graficos del catalogo) no hay zoom ni deriva: el
+  // texto ampliado se salia del cuadro ("casi tres canchas…").
+  const quieta = !scene.elements.some((el) => el.kind === "drawing");
+  const camera = quieta ? 1 : pushIn ? 1 + CAMERA_ZOOM * avance : 1 + CAMERA_ZOOM * (1 - avance);
+  const deriva = quieta ? 0 : (pushIn ? avance - 0.5 : 0.5 - avance) * CAMERA_DRIFT * width;
 
   return (
     <AbsoluteFill style={{ opacity: fade, transform: `translateX(${deriva}px) scale(${camera})` }}>
@@ -345,9 +349,12 @@ export function SceneView({
         .filter((el) => el.kind === "graphic" && el.spec)
         .map((el) => {
           const state = stateAt(el, scene, scene.end);
-          const from = Math.max(0, Math.round((state.shownAt - scene.start) * fps));
+          // Si la palabra cae tarde (o despues de la escena) la pantalla
+          // quedaba vacia: el grafico entra a mas tardar GRAFICO_ESPERA_S.
+          const shownAt = Math.min(state.shownAt, scene.start + GRAFICO_ESPERA_S);
+          const from = Math.max(0, Math.round((shownAt - scene.start) * fps));
           const until = state.hiddenAt ?? scene.end;
-          const duration = Math.max(1, Math.round((until - state.shownAt) * fps));
+          const duration = Math.max(1, Math.round((until - shownAt) * fps));
           return (
             <Sequence key={el.id} from={from} durationInFrames={duration} layout="none">
               <Overlay spec={fechasEnSpec(el.spec!)} theme={palette} locale={locale} durationSeconds={duration / fps} exit />

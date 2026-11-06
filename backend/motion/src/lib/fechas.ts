@@ -24,18 +24,38 @@ const FECHA = new RegExp(
   "gi"
 );
 
+const NOMBRES = Object.keys(MESES).join("|");
+// "23/abril/1912", "23-abril-1912" (la IA a veces mezcla numero y nombre).
+const MIXTA = new RegExp(`\\b(\\d{1,2})\\s*[/-]\\s*(${NOMBRES})\\s*[/-]\\s*(\\d{4})\\b`, "gi");
+// Sin año: "23 de abril", "23/abril" -> DD/MM.
+const SIN_ANIO = new RegExp(`\\b(\\d{1,2})(?:\\.?\\s*[ºo°])?\\s*(?:de\\s+|[/-]\\s*|\\s+)(${NOMBRES})\\b`, "gi");
+// Mes y año: "abril de 1912" -> MM/AAAA.
+const MES_ANIO = new RegExp(`\\b(${NOMBRES})(?:\\s+de\\s+|\\s*[/,-]\\s*|\\s+)(\\d{4})\\b`, "gi");
+
 const dos = (n: number) => String(n).padStart(2, "0");
 
 export function conFechas(text: string): string;
 export function conFechas(text: string | undefined): string | undefined;
 export function conFechas(text: string | undefined): string | undefined {
   if (!text) return text;
-  return text.replace(FECHA, (match, dia: string, mes: string, anio: string) => {
+  const completa = (match: string, dia: string, mes: string, anio: string) => {
     const d = Number(dia);
     const m = MESES[mes.toLowerCase()];
     if (!m || d < 1 || d > 31) return match;
     return `${dos(d)}/${dos(m)}/${anio}`;
-  });
+  };
+  return text
+    .replace(FECHA, completa)
+    .replace(MIXTA, completa)
+    .replace(SIN_ANIO, (match, dia: string, mes: string) => {
+      const d = Number(dia);
+      const m = MESES[mes.toLowerCase()];
+      return !m || d < 1 || d > 31 ? match : `${dos(d)}/${dos(m)}`;
+    })
+    .replace(MES_ANIO, (match, mes: string, anio: string) => {
+      const m = MESES[mes.toLowerCase()];
+      return m ? `${dos(m)}/${anio}` : match;
+    });
 }
 
 // Aplica conFechas a todos los textos de un spec de grafico (map_marker, etc.).

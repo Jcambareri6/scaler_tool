@@ -1,15 +1,21 @@
 import type { ComponenteSvg } from "../biblioteca";
-import { conFechas } from "../lib/fechas";
+import { useMemo } from "react";
+import { conFechas, fechasEnSpec } from "../lib/fechas";
 import { DOC } from "../scenes/palette";
 import { entra } from "./comun";
 import { EsquemaCapas } from "./EsquemaCapas";
+import { AB, Contador, Documento, Leccion, Reloj } from "./Datos";
+import { Pictogramas } from "./Pictogramas";
 import type { Recurso } from "./tipos";
 import { Ubicacion } from "./Ubicacion";
 
 // Escena armada con un recurso: fondo, titulo arriba a la izquierda (debajo de
 // la linea de capitulo) y el recurso. Subtitulos y capa fija los pone el video.
-export function RecursoView({ t, rec, inicio, fin, componentes }: { t: number; rec: Recurso; inicio: number; fin: number; componentes?: Record<string, ComponenteSvg> | undefined }) {
-  const claro = (rec.fondo ?? (rec.tipo === "esquema_capas" ? "claro" : "oscuro")) === "claro";
+export function RecursoView({ t, rec: original, inicio, fin, componentes, locale = "es-AR" }: { t: number; rec: Recurso; inicio: number; fin: number; componentes?: Record<string, ComponenteSvg> | undefined; locale?: string }) {
+  // Fechas DD/MM/AAAA en TODOS los textos del recurso (etiquetas, lupa,
+  // escudo, pictogramas), no solo en el titulo.
+  const rec = useMemo(() => fechasEnSpec(original), [original]);
+  const claro = (rec.fondo ?? (rec.tipo === "esquema_capas" || rec.tipo === "leccion" ? "claro" : "oscuro")) === "claro";
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
       <div
@@ -21,9 +27,25 @@ export function RecursoView({ t, rec, inicio, fin, componentes }: { t: number; r
             : `radial-gradient(ellipse at 50% 45%, #0B1424 0%, ${DOC.fondoOscuro} 75%)`,
         }}
       />
-      {rec.tipo === "ubicacion" ? <Ubicacion t={t} rec={rec} inicio={inicio} fin={fin} /> : <EsquemaCapas t={t} rec={rec} inicio={inicio} fin={fin} componentes={componentes} />}
+      {rec.tipo === "ubicacion" ? (
+        <Ubicacion t={t} rec={rec} inicio={inicio} fin={fin} />
+      ) : rec.tipo === "pictogramas" ? (
+        <Pictogramas t={t} rec={rec} inicio={inicio} />
+      ) : rec.tipo === "documento" ? (
+        <Documento t={t} rec={rec} inicio={inicio} />
+      ) : rec.tipo === "reloj" ? (
+        <Reloj t={t} rec={rec} inicio={inicio} />
+      ) : rec.tipo === "contador" ? (
+        <Contador t={t} rec={rec} inicio={inicio} locale={locale} />
+      ) : rec.tipo === "leccion" ? (
+        <Leccion t={t} rec={rec} inicio={inicio} />
+      ) : rec.tipo === "ab" ? (
+        <AB t={t} rec={rec} inicio={inicio} claro={claro} />
+      ) : (
+        <EsquemaCapas t={t} rec={rec} inicio={inicio} fin={fin} componentes={componentes} />
+      )}
       {rec.titulo && rec.titulo.length > 0 && (
-        <div style={{ position: "absolute", top: "7.6%", left: "3.3%", fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: "1.6vw", color: claro ? DOC.tintaClaro : DOC.tintaOscuro }}>
+        <div style={{ position: "absolute", top: "7.6%", left: "3.3%", fontFamily: "Inter, sans-serif", fontWeight: 700, fontSize: "2.1vw", color: claro ? DOC.tintaClaro : DOC.tintaOscuro }}>
           {rec.titulo.map((p, i) => {
             const k = entra(t, p.at);
             return (
