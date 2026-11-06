@@ -1,0 +1,1295 @@
+{
+  "_doc": "Nichos -> paletas y criterio visual de los graficos animados. El nicho lo detecta el pipeline (LLM) y la paleta se elige de aca (determinista), salvo que el canal tenga sus colores fijados. nexlev = IDs de categoria de NexLev (get_niche_finder_categories) que caen en el nicho. blur: bajo/medio/alto multiplica el desenfoque del catalogo. Contraste verificado con scripts/check-palettes.ts.",
+  "default": "curiosidades",
+  "niches": {
+    "ciencia": {
+      "name": "Ciencia",
+      "keywords": [
+        "ciencia",
+        "física",
+        "química",
+        "biología",
+        "experimento",
+        "científicos",
+        "clima"
+      ],
+      "nexlev": [
+        186,
+        189,
+        192,
+        191,
+        188,
+        193,
+        91,
+        194,
+        98
+      ],
+      "titleFont": "serif",
+      "blur": "medio",
+      "favor": [
+        "big_number",
+        "data_viz_single",
+        "scale_compare",
+        "timeline",
+        "lower_third",
+        "myth_fact"
+      ],
+      "palettes": [
+        {
+          "id": "laboratorio",
+          "name": "Laboratorio",
+          "accent": "#4FD1FF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(225,240,255,0.78)",
+          "scrim": "rgba(2,10,20,0.62)"
+        },
+        {
+          "id": "atomo",
+          "name": "Átomo",
+          "accent": "#7CF29A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(230,255,238,0.78)",
+          "scrim": "rgba(2,14,8,0.62)"
+        },
+        {
+          "id": "plasma",
+          "name": "Plasma",
+          "accent": "#B794FF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(240,232,255,0.78)",
+          "scrim": "rgba(10,4,22,0.68)"
+        }
+      ]
+    },
+    "espacio": {
+      "name": "Espacio",
+      "keywords": [
+        "espacio",
+        "planeta",
+        "universo",
+        "galaxia",
+        "nasa",
+        "astronauta",
+        "agujero negro",
+        "estrella"
+      ],
+      "nexlev": [
+        199,
+        70
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "big_number",
+        "scale_compare",
+        "versus",
+        "profile_card",
+        "timeline",
+        "title_card"
+      ],
+      "palettes": [
+        {
+          "id": "nebulosa",
+          "name": "Nebulosa",
+          "accent": "#A79BFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,232,255,0.78)",
+          "scrim": "rgba(6,4,20,0.68)"
+        },
+        {
+          "id": "orbita",
+          "name": "Órbita",
+          "accent": "#5EC8FF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(225,242,255,0.78)",
+          "scrim": "rgba(2,8,20,0.62)"
+        },
+        {
+          "id": "estrella",
+          "name": "Estrella",
+          "accent": "#FFD36E",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,230,0.78)",
+          "scrim": "rgba(8,6,16,0.62)"
+        }
+      ]
+    },
+    "historia": {
+      "name": "Historia",
+      "keywords": [
+        "historia",
+        "antiguo",
+        "imperio",
+        "guerra",
+        "siglo",
+        "rey",
+        "civilización",
+        "medieval",
+        "romanos"
+      ],
+      "nexlev": [
+        187,
+        128,
+        122,
+        121,
+        158,
+        13,
+        8
+      ],
+      "titleFont": "serif",
+      "blur": "medio",
+      "favor": [
+        "timeline",
+        "location",
+        "title_card",
+        "profile_card",
+        "big_number",
+        "kinetic_quote"
+      ],
+      "palettes": [
+        {
+          "id": "pergamino",
+          "name": "Pergamino",
+          "accent": "#D9B377",
+          "text": "#FBF5EA",
+          "textMuted": "rgba(251,245,234,0.76)",
+          "scrim": "rgba(20,12,4,0.65)"
+        },
+        {
+          "id": "imperio",
+          "name": "Imperio",
+          "accent": "#E07A5F",
+          "text": "#FBF5EA",
+          "textMuted": "rgba(251,240,232,0.76)",
+          "scrim": "rgba(22,8,4,0.75)"
+        },
+        {
+          "id": "bronce",
+          "name": "Bronce",
+          "accent": "#E0A458",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,244,230,0.76)",
+          "scrim": "rgba(16,10,4,0.67)"
+        }
+      ]
+    },
+    "true_crime": {
+      "name": "True crime",
+      "keywords": [
+        "crimen",
+        "asesino",
+        "caso",
+        "policía",
+        "juicio",
+        "desaparición",
+        "investigación",
+        "detective"
+      ],
+      "nexlev": [
+        115,
+        116,
+        117,
+        118,
+        300,
+        93,
+        119
+      ],
+      "titleFont": "sans",
+      "blur": "alto",
+      "favor": [
+        "timeline",
+        "profile_card",
+        "location",
+        "kinetic_quote",
+        "lower_third",
+        "badge"
+      ],
+      "palettes": [
+        {
+          "id": "rojo_noche",
+          "name": "Rojo noche",
+          "accent": "#FF4D4D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,235,235,0.76)",
+          "scrim": "rgba(10,0,0,0.75)"
+        },
+        {
+          "id": "evidencia",
+          "name": "Evidencia",
+          "accent": "#F2C94C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,250,232,0.76)",
+          "scrim": "rgba(8,8,6,0.66)"
+        },
+        {
+          "id": "forense",
+          "name": "Forense",
+          "accent": "#7CC4D6",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,244,248,0.76)",
+          "scrim": "rgba(2,8,12,0.66)"
+        }
+      ]
+    },
+    "misterio": {
+      "name": "Misterio y paranormal",
+      "keywords": [
+        "misterio",
+        "paranormal",
+        "fantasma",
+        "leyenda",
+        "inexplicable",
+        "ovni",
+        "maldición",
+        "terror"
+      ],
+      "nexlev": [
+        104,
+        6,
+        120,
+        114,
+        195,
+        296
+      ],
+      "titleFont": "serif",
+      "blur": "alto",
+      "favor": [
+        "kinetic_quote",
+        "myth_fact",
+        "location",
+        "title_card",
+        "timeline"
+      ],
+      "palettes": [
+        {
+          "id": "niebla",
+          "name": "Niebla",
+          "accent": "#8FE3C8",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(230,250,244,0.74)",
+          "scrim": "rgba(2,10,8,0.68)"
+        },
+        {
+          "id": "vela",
+          "name": "Vela",
+          "accent": "#FFB347",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,244,228,0.74)",
+          "scrim": "rgba(10,6,2,0.68)"
+        },
+        {
+          "id": "sangre",
+          "name": "Sangre",
+          "accent": "#FF5A5F",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,232,232,0.74)",
+          "scrim": "rgba(12,0,2,0.73)"
+        }
+      ]
+    },
+    "finanzas": {
+      "name": "Finanzas y negocios",
+      "keywords": [
+        "dinero",
+        "inversión",
+        "millones",
+        "empresa",
+        "bolsa",
+        "economía",
+        "cripto",
+        "negocio",
+        "ricos"
+      ],
+      "nexlev": [
+        145,
+        57,
+        58,
+        53,
+        67,
+        61,
+        66,
+        63,
+        153,
+        59,
+        64,
+        56,
+        62
+      ],
+      "titleFont": "sans",
+      "blur": "bajo",
+      "favor": [
+        "big_number",
+        "data_viz_single",
+        "versus",
+        "rank_reveal",
+        "list",
+        "timeline"
+      ],
+      "palettes": [
+        {
+          "id": "ganancia",
+          "name": "Ganancia",
+          "accent": "#2EE59D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(230,255,240,0.78)",
+          "scrim": "rgba(0,12,6,0.62)"
+        },
+        {
+          "id": "oro",
+          "name": "Oro",
+          "accent": "#F5C451",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,228,0.78)",
+          "scrim": "rgba(10,8,2,0.62)"
+        },
+        {
+          "id": "wall_street",
+          "name": "Wall Street",
+          "accent": "#5B9BFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,238,255,0.78)",
+          "scrim": "rgba(2,6,16,0.72)"
+        }
+      ]
+    },
+    "psicologia": {
+      "name": "Psicología y desarrollo personal",
+      "keywords": [
+        "psicología",
+        "mente",
+        "cerebro",
+        "emociones",
+        "hábitos",
+        "personalidad",
+        "estoicismo",
+        "filosofía"
+      ],
+      "nexlev": [
+        203,
+        148,
+        129,
+        130,
+        156,
+        87
+      ],
+      "titleFont": "serif",
+      "blur": "medio",
+      "favor": [
+        "kinetic_quote",
+        "list",
+        "lower_third",
+        "myth_fact",
+        "big_number"
+      ],
+      "palettes": [
+        {
+          "id": "mente",
+          "name": "Mente",
+          "accent": "#C49BFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(244,236,255,0.78)",
+          "scrim": "rgba(10,4,18,0.66)"
+        },
+        {
+          "id": "calma",
+          "name": "Calma",
+          "accent": "#67D5C4",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(230,250,246,0.78)",
+          "scrim": "rgba(2,12,10,0.62)"
+        },
+        {
+          "id": "coral",
+          "name": "Coral",
+          "accent": "#FF8A7A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,238,234,0.78)",
+          "scrim": "rgba(14,4,2,0.67)"
+        }
+      ]
+    },
+    "salud": {
+      "name": "Salud y cuerpo",
+      "keywords": [
+        "salud",
+        "cuerpo",
+        "enfermedad",
+        "médico",
+        "nutrición",
+        "dormir",
+        "ejercicio",
+        "longevidad"
+      ],
+      "nexlev": [
+        71,
+        77,
+        88,
+        86,
+        72,
+        79,
+        74,
+        83,
+        84,
+        78,
+        75
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "big_number",
+        "list",
+        "myth_fact",
+        "lower_third",
+        "data_viz_single"
+      ],
+      "palettes": [
+        {
+          "id": "clinico",
+          "name": "Clínico",
+          "accent": "#4CC9F0",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,246,255,0.78)",
+          "scrim": "rgba(2,10,16,0.63)"
+        },
+        {
+          "id": "vital",
+          "name": "Vital",
+          "accent": "#5EE08A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(232,255,238,0.78)",
+          "scrim": "rgba(2,12,6,0.62)"
+        },
+        {
+          "id": "pulso",
+          "name": "Pulso",
+          "accent": "#FF7A8C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,236,240,0.78)",
+          "scrim": "rgba(14,2,4,0.69)"
+        }
+      ]
+    },
+    "naturaleza": {
+      "name": "Naturaleza y animales",
+      "keywords": [
+        "animal",
+        "especie",
+        "selva",
+        "océano",
+        "depredador",
+        "naturaleza",
+        "salvaje",
+        "mascota"
+      ],
+      "nexlev": [
+        201,
+        141,
+        142,
+        162,
+        176
+      ],
+      "titleFont": "serif",
+      "blur": "bajo",
+      "favor": [
+        "profile_card",
+        "scale_compare",
+        "location",
+        "big_number",
+        "versus",
+        "rank_reveal"
+      ],
+      "palettes": [
+        {
+          "id": "selva",
+          "name": "Selva",
+          "accent": "#7BD389",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,252,238,0.78)",
+          "scrim": "rgba(2,12,4,0.62)"
+        },
+        {
+          "id": "sabana",
+          "name": "Sabana",
+          "accent": "#F2B544",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,246,228,0.78)",
+          "scrim": "rgba(12,8,2,0.62)"
+        },
+        {
+          "id": "oceano",
+          "name": "Océano",
+          "accent": "#3FC1D9",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,248,252,0.78)",
+          "scrim": "rgba(0,8,14,0.65)"
+        }
+      ]
+    },
+    "tecnologia": {
+      "name": "Tecnología e IA",
+      "keywords": [
+        "tecnología",
+        "inteligencia artificial",
+        "robot",
+        "computadora",
+        "internet",
+        "hackers",
+        "software",
+        "chip"
+      ],
+      "nexlev": [
+        197,
+        198,
+        133,
+        131,
+        134,
+        136,
+        137,
+        132,
+        135,
+        202,
+        138
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "big_number",
+        "timeline",
+        "versus",
+        "data_viz_single",
+        "lower_third",
+        "list"
+      ],
+      "palettes": [
+        {
+          "id": "neon",
+          "name": "Neón",
+          "accent": "#22E5FF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(226,250,255,0.78)",
+          "scrim": "rgba(0,8,14,0.64)"
+        },
+        {
+          "id": "circuito",
+          "name": "Circuito",
+          "accent": "#A3FF5C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(240,255,228,0.78)",
+          "scrim": "rgba(4,10,2,0.64)"
+        },
+        {
+          "id": "ia",
+          "name": "IA",
+          "accent": "#9D8CFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,232,255,0.78)",
+          "scrim": "rgba(6,4,18,0.71)"
+        }
+      ]
+    },
+    "geopolitica": {
+      "name": "Geopolítica y actualidad",
+      "keywords": [
+        "país",
+        "gobierno",
+        "guerra",
+        "conflicto",
+        "elecciones",
+        "potencia",
+        "frontera",
+        "sanciones"
+      ],
+      "nexlev": [
+        124,
+        123,
+        90,
+        99,
+        95,
+        125,
+        126,
+        127,
+        92,
+        96
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "location",
+        "versus",
+        "data_viz_single",
+        "timeline",
+        "big_number",
+        "rank_reveal"
+      ],
+      "palettes": [
+        {
+          "id": "diplomatico",
+          "name": "Diplomático",
+          "accent": "#5B9BFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,238,255,0.78)",
+          "scrim": "rgba(2,6,16,0.72)"
+        },
+        {
+          "id": "alerta",
+          "name": "Alerta",
+          "accent": "#FF5A4E",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,236,234,0.78)",
+          "scrim": "rgba(12,2,2,0.74)"
+        },
+        {
+          "id": "atlas",
+          "name": "Atlas",
+          "accent": "#E8C468",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,230,0.78)",
+          "scrim": "rgba(10,8,4,0.64)"
+        }
+      ]
+    },
+    "desastres": {
+      "name": "Desastres y supervivencia",
+      "keywords": [
+        "desastre",
+        "tsunami",
+        "terremoto",
+        "huracán",
+        "accidente",
+        "sobrevivir",
+        "catástrofe",
+        "erupción"
+      ],
+      "nexlev": [
+        97,
+        298,
+        60,
+        147
+      ],
+      "titleFont": "sans",
+      "blur": "alto",
+      "favor": [
+        "big_number",
+        "timeline",
+        "location",
+        "scale_compare",
+        "kinetic_quote",
+        "badge"
+      ],
+      "palettes": [
+        {
+          "id": "emergencia",
+          "name": "Emergencia",
+          "accent": "#FF6A3D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,238,230,0.78)",
+          "scrim": "rgba(14,4,0,0.72)"
+        },
+        {
+          "id": "advertencia",
+          "name": "Advertencia",
+          "accent": "#FFC93C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,228,0.78)",
+          "scrim": "rgba(10,8,0,0.66)"
+        },
+        {
+          "id": "tormenta",
+          "name": "Tormenta",
+          "accent": "#8DB3D6",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(232,240,248,0.78)",
+          "scrim": "rgba(2,6,12,0.66)"
+        }
+      ]
+    },
+    "deportes": {
+      "name": "Deportes",
+      "keywords": [
+        "fútbol",
+        "jugador",
+        "partido",
+        "campeón",
+        "mundial",
+        "goles",
+        "equipo",
+        "entrenador"
+      ],
+      "nexlev": [
+        204,
+        239,
+        224,
+        213,
+        244,
+        238,
+        206,
+        219,
+        248,
+        233,
+        212,
+        236,
+        246,
+        230
+      ],
+      "titleFont": "sans",
+      "blur": "bajo",
+      "favor": [
+        "big_number",
+        "versus",
+        "rank_reveal",
+        "data_viz_single",
+        "profile_card",
+        "timeline"
+      ],
+      "palettes": [
+        {
+          "id": "estadio",
+          "name": "Estadio",
+          "accent": "#39E07A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(232,255,240,0.8)",
+          "scrim": "rgba(0,10,4,0.6)"
+        },
+        {
+          "id": "campeon",
+          "name": "Campeón",
+          "accent": "#FFC83D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,226,0.8)",
+          "scrim": "rgba(10,8,0,0.6)"
+        },
+        {
+          "id": "energia",
+          "name": "Energía",
+          "accent": "#FF6A45",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,238,232,0.8)",
+          "scrim": "rgba(12,4,0,0.72)"
+        }
+      ]
+    },
+    "motor": {
+      "name": "Motor, aviación y transporte",
+      "keywords": [
+        "auto",
+        "motor",
+        "avión",
+        "velocidad",
+        "fórmula 1",
+        "tren",
+        "barco",
+        "moto"
+      ],
+      "nexlev": [
+        159,
+        69,
+        183,
+        168,
+        167,
+        251,
+        253,
+        252,
+        160,
+        68
+      ],
+      "titleFont": "sans",
+      "blur": "bajo",
+      "favor": [
+        "big_number",
+        "versus",
+        "data_viz_single",
+        "profile_card",
+        "rank_reveal",
+        "timeline"
+      ],
+      "palettes": [
+        {
+          "id": "escuderia",
+          "name": "Escudería",
+          "accent": "#FF4B3E",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,236,234,0.8)",
+          "scrim": "rgba(12,2,0,0.76)"
+        },
+        {
+          "id": "turbo",
+          "name": "Turbo",
+          "accent": "#FF9F1C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,244,228,0.8)",
+          "scrim": "rgba(12,6,0,0.64)"
+        },
+        {
+          "id": "cromo",
+          "name": "Cromo",
+          "accent": "#A9C1D6",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,242,248,0.8)",
+          "scrim": "rgba(4,6,10,0.61)"
+        }
+      ]
+    },
+    "religion": {
+      "name": "Religión y espiritualidad",
+      "keywords": [
+        "dios",
+        "biblia",
+        "fe",
+        "espiritual",
+        "profecía",
+        "iglesia",
+        "oración",
+        "alma"
+      ],
+      "nexlev": [
+        106,
+        105,
+        111,
+        109,
+        107,
+        108,
+        110,
+        112,
+        155
+      ],
+      "titleFont": "serif",
+      "blur": "medio",
+      "favor": [
+        "kinetic_quote",
+        "title_card",
+        "timeline",
+        "location",
+        "lower_third"
+      ],
+      "palettes": [
+        {
+          "id": "luz",
+          "name": "Luz",
+          "accent": "#F3D27A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,250,234,0.78)",
+          "scrim": "rgba(10,8,4,0.62)"
+        },
+        {
+          "id": "vitral",
+          "name": "Vitral",
+          "accent": "#7FB2E5",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(232,242,252,0.78)",
+          "scrim": "rgba(2,6,14,0.66)"
+        },
+        {
+          "id": "purpura",
+          "name": "Púrpura",
+          "accent": "#B794E0",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(244,236,252,0.78)",
+          "scrim": "rgba(10,4,16,0.69)"
+        }
+      ]
+    },
+    "entretenimiento": {
+      "name": "Cine, TV y celebridades",
+      "keywords": [
+        "película",
+        "actor",
+        "famoso",
+        "serie",
+        "hollywood",
+        "cantante",
+        "escándalo",
+        "estreno"
+      ],
+      "nexlev": [
+        289,
+        5,
+        27,
+        293,
+        28,
+        290,
+        291,
+        292,
+        19,
+        297
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "rank_reveal",
+        "profile_card",
+        "big_number",
+        "timeline",
+        "kinetic_quote",
+        "list"
+      ],
+      "palettes": [
+        {
+          "id": "alfombra_roja",
+          "name": "Alfombra roja",
+          "accent": "#FF4D6D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,234,240,0.8)",
+          "scrim": "rgba(12,0,4,0.74)"
+        },
+        {
+          "id": "flash",
+          "name": "Flash",
+          "accent": "#FFD60A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,250,224,0.8)",
+          "scrim": "rgba(10,8,0,0.62)"
+        },
+        {
+          "id": "neon_rosa",
+          "name": "Neón rosa",
+          "accent": "#FF6AD5",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,236,250,0.8)",
+          "scrim": "rgba(12,0,10,0.69)"
+        }
+      ]
+    },
+    "gaming": {
+      "name": "Videojuegos",
+      "keywords": [
+        "videojuego",
+        "juego",
+        "gamer",
+        "consola",
+        "nintendo",
+        "playstation",
+        "minecraft",
+        "jugadores"
+      ],
+      "nexlev": [
+        36,
+        37,
+        42,
+        52,
+        40,
+        287,
+        39,
+        41,
+        44,
+        48,
+        286,
+        269
+      ],
+      "titleFont": "sans",
+      "blur": "medio",
+      "favor": [
+        "rank_reveal",
+        "list",
+        "big_number",
+        "versus",
+        "timeline",
+        "profile_card"
+      ],
+      "palettes": [
+        {
+          "id": "arcade",
+          "name": "Arcade",
+          "accent": "#B26BFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(244,234,255,0.8)",
+          "scrim": "rgba(8,2,18,0.75)"
+        },
+        {
+          "id": "pixel",
+          "name": "Pixel",
+          "accent": "#22D3EE",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(226,250,255,0.8)",
+          "scrim": "rgba(0,8,14,0.62)"
+        },
+        {
+          "id": "xp",
+          "name": "XP",
+          "accent": "#9BE15D",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(242,255,230,0.8)",
+          "scrim": "rgba(4,10,0,0.62)"
+        }
+      ]
+    },
+    "viajes": {
+      "name": "Viajes y culturas",
+      "keywords": [
+        "viaje",
+        "país",
+        "ciudad",
+        "cultura",
+        "tradición",
+        "pueblo",
+        "turistas",
+        "lugares"
+      ],
+      "nexlev": [
+        179,
+        178,
+        288,
+        140,
+        177,
+        103
+      ],
+      "titleFont": "serif",
+      "blur": "bajo",
+      "favor": [
+        "location",
+        "profile_card",
+        "list",
+        "big_number",
+        "rank_reveal"
+      ],
+      "palettes": [
+        {
+          "id": "atardecer",
+          "name": "Atardecer",
+          "accent": "#FF9E5E",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,242,232,0.8)",
+          "scrim": "rgba(12,6,2,0.64)"
+        },
+        {
+          "id": "turquesa",
+          "name": "Turquesa",
+          "accent": "#2EC4B6",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,250,248,0.8)",
+          "scrim": "rgba(0,10,10,0.66)"
+        },
+        {
+          "id": "terracota",
+          "name": "Terracota",
+          "accent": "#E8896C",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,240,234,0.8)",
+          "scrim": "rgba(14,6,2,0.7)"
+        }
+      ]
+    },
+    "historias": {
+      "name": "Historias narradas",
+      "keywords": [
+        "historia real",
+        "me pasó",
+        "relato",
+        "vida",
+        "familia",
+        "traición",
+        "reddit",
+        "confesión"
+      ],
+      "nexlev": [
+        294,
+        270,
+        302,
+        295,
+        152
+      ],
+      "titleFont": "serif",
+      "blur": "alto",
+      "favor": [
+        "kinetic_quote",
+        "title_card",
+        "timeline",
+        "badge",
+        "lower_third"
+      ],
+      "palettes": [
+        {
+          "id": "intimo",
+          "name": "Íntimo",
+          "accent": "#F4A261",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,242,232,0.78)",
+          "scrim": "rgba(12,6,2,0.66)"
+        },
+        {
+          "id": "medianoche",
+          "name": "Medianoche",
+          "accent": "#94AEFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,240,255,0.78)",
+          "scrim": "rgba(2,4,14,0.66)"
+        },
+        {
+          "id": "rosa_viejo",
+          "name": "Rosa viejo",
+          "accent": "#E8A0BF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,238,246,0.78)",
+          "scrim": "rgba(12,4,8,0.66)"
+        }
+      ]
+    },
+    "ingenieria": {
+      "name": "Ingeniería y megaproyectos",
+      "keywords": [
+        "construcción",
+        "puente",
+        "edificio",
+        "ingeniería",
+        "megaproyecto",
+        "máquina",
+        "infraestructura",
+        "rascacielos"
+      ],
+      "nexlev": [
+        196,
+        166,
+        2,
+        18
+      ],
+      "titleFont": "sans",
+      "blur": "bajo",
+      "favor": [
+        "big_number",
+        "scale_compare",
+        "data_viz_single",
+        "timeline",
+        "profile_card",
+        "versus"
+      ],
+      "palettes": [
+        {
+          "id": "acero",
+          "name": "Acero",
+          "accent": "#8FB8DE",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(236,244,252,0.8)",
+          "scrim": "rgba(2,6,12,0.64)"
+        },
+        {
+          "id": "obra",
+          "name": "Obra",
+          "accent": "#FFB627",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,228,0.8)",
+          "scrim": "rgba(10,8,0,0.62)"
+        },
+        {
+          "id": "plano",
+          "name": "Plano",
+          "accent": "#4FC3F7",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(228,246,255,0.8)",
+          "scrim": "rgba(0,8,16,0.63)"
+        }
+      ]
+    },
+    "estilo_vida": {
+      "name": "Estilo de vida, cocina y hogar",
+      "keywords": [
+        "comida",
+        "receta",
+        "casa",
+        "hogar",
+        "jardín",
+        "lujo",
+        "moda",
+        "rutina"
+      ],
+      "nexlev": [
+        143,
+        139,
+        100,
+        144,
+        180,
+        181,
+        150,
+        149,
+        146
+      ],
+      "titleFont": "serif",
+      "blur": "bajo",
+      "favor": [
+        "list",
+        "big_number",
+        "rank_reveal",
+        "lower_third",
+        "profile_card"
+      ],
+      "palettes": [
+        {
+          "id": "miel",
+          "name": "Miel",
+          "accent": "#F6BD60",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,248,232,0.8)",
+          "scrim": "rgba(12,8,2,0.6)"
+        },
+        {
+          "id": "salvia",
+          "name": "Salvia",
+          "accent": "#9CCB9A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(240,252,240,0.8)",
+          "scrim": "rgba(4,10,4,0.61)"
+        },
+        {
+          "id": "durazno",
+          "name": "Durazno",
+          "accent": "#FFA987",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,242,236,0.8)",
+          "scrim": "rgba(12,6,4,0.61)"
+        }
+      ]
+    },
+    "curiosidades": {
+      "name": "Curiosidades y general",
+      "keywords": [
+        "qué pasaría",
+        "curiosidades",
+        "datos",
+        "sabías",
+        "increíble",
+        "por qué"
+      ],
+      "nexlev": [
+        32,
+        151,
+        258,
+        271,
+        35
+      ],
+      "titleFont": "serif",
+      "blur": "medio",
+      "favor": [
+        "big_number",
+        "kinetic_quote",
+        "scale_compare",
+        "myth_fact",
+        "versus",
+        "list"
+      ],
+      "palettes": [
+        {
+          "id": "documental",
+          "name": "Documental",
+          "accent": "#E8B65A",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,255,255,0.78)",
+          "scrim": "rgba(0,0,0,0.6)"
+        },
+        {
+          "id": "celeste",
+          "name": "Celeste",
+          "accent": "#6CC6FF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(230,244,255,0.78)",
+          "scrim": "rgba(0,4,12,0.61)"
+        },
+        {
+          "id": "minimal",
+          "name": "Minimal",
+          "accent": "#FFFFFF",
+          "text": "#FFFFFF",
+          "textMuted": "rgba(255,255,255,0.7)",
+          "scrim": "rgba(0,0,0,0.55)"
+        }
+      ]
+    }
+  }
+}

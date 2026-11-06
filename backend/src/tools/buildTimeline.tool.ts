@@ -3,6 +3,9 @@ import type { TranscribedWord } from "./transcribeAudio.tool.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { supabase } from "../lib/supabase.js";
 import { alignScriptTokens, tokenizeScript, type TokenTiming } from "../lib/wordAlignment.js";
+import type { CaptionCue } from "../lib/captions.js";
+import { anchorSceneOverlays } from "../lib/overlayTiming.js";
+import type { OverlaySpec } from "../types/shared/typeShared.js";
 
 export interface BuildTimelineInput {
   video_project_id: string;
@@ -60,14 +63,16 @@ function sceneTokens(scene: SceneRow): string[] {
 function buildCaptionSegments(
   scriptWords: string[],
   timings: TokenTiming[]
-): { text: string; start: number; end: number }[] {
-  const cues: { text: string; start: number; end: number }[] = [];
+): CaptionCue[] {
+  const cues: CaptionCue[] = [];
   for (let i = 0; i < scriptWords.length; i += CAPTION_WORDS_PER_CUE) {
     const last = Math.min(i + CAPTION_WORDS_PER_CUE, scriptWords.length) - 1;
     cues.push({
       text: scriptWords.slice(i, last + 1).join(" "),
       start: timings[i]!.start,
       end: timings[last]!.end,
+      // Para los subtitulos palabra por palabra (lib/captions.ts).
+      words: timings.slice(i, last + 1).map((t) => ({ start: t.start, end: t.end })),
     });
   }
   return cues;
@@ -240,12 +245,25 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
 
     const timelineScenes: Record<string, unknown>[] = [];
 
+    // Indice del primer token de cada escena dentro de scriptWords (mismo
+    // orden que wordTimings) -- para anclar los overlays a su palabra.
+    let tokenCursor = 0;
+    const firstTokenIndex = sceneRows.map((scene) => {
+      const first = tokenCursor;
+      tokenCursor += sceneTokens(scene).length;
+      return first;
+    });
+
     for (const [sceneIndex, scene] of sceneRows.entries()) {
       const { start, end } = ranges[sceneIndex]!;
       const durationSeconds = end - start;
 
       const sceneVisualAssets = visualAssetsByScene.get(scene.id) ?? [];
       const overlay = (scene.content as { overlay?: unknown } | null)?.overlay ?? null;
+      const rawOverlays = (scene.content as { overlays?: OverlaySpec[] } | null)?.overlays;
+      const overlays = Array.isArray(rawOverlays)
+        ? anchorSceneOverlays(rawOverlays, sceneTokens(scene), firstTokenIndex[sceneIndex]!, wordTimings, start, end)
+        : [];
 
       // Reparte [start, end] de la escena entre sus assets en orden,
       // usando metadata.duration_seconds como porcion de cada uno (el
@@ -302,6 +320,7 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
           ? { storage_key: sceneAssets[0].storage_key, metadata: sceneAssets[0].metadata, type: sceneAssets[0].type }
           : null,
         overlay,
+        overlays,
       });
     }
 

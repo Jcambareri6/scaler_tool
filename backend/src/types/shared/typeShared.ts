@@ -126,12 +126,88 @@ export type OverlayType =
   | "badge"
   | "data_viz_single"
   | "cta"
+  | "versus"
+  | "timeline"
+  | "location"
+  // Frase clave en mayusculas, palabra por palabra; `label` = la palabra
+  // (o palabras) de `text` que va en el color de acento.
+  | "kinetic_quote"
+  // Enumeracion: `text` = titulo, `items` = entradas (label opcional).
+  | "list"
+  // Ficha de un protagonista: `text` = nombre, `items` = datos clave.
+  | "profile_card"
+  // Mito vs realidad: `text` = el mito (se tacha), `label` = la realidad.
+  | "myth_fact"
+  // Escala/analogia ("pesa como 3 autos"): `icon` repetido N veces.
+  | "scale_compare"
+  // Capa fija de arriba (canal · tema | capitulo): no la planifica el LLM,
+  // la arma placeNavHeaders (lib/overlayTiming.ts).
+  | "nav_header"
+  // Tendencia: `text` = titulo, `label` = fuente, `items` = puntos en orden.
+  | "line_chart"
+  // Pregunta sola en pantalla; `label` = palabra clave que se subraya.
+  | "pivot_question"
+  // Muchos casos a la vez: `text` = titulo, `items` = tarjetas.
+  | "card_grid"
+  // Resultado/enfrentamiento: `items` = los 2 lados ({label: nombre, text: resultado}).
+  | "scoreboard"
+  // Palabra o frase corta que se desmiente: se tacha en rojo.
+  | "strike_word"
+  // `text` se funde en `label` (dos ideas contrapuestas).
+  | "phrase_swap"
+  // Lo que viene: `text` = titulo, `items` = las partes en orden.
+  | "chapter_index"
+  // Frase con la cifra en un recuadro del acento.
+  | "number_phrase"
+  // Persona sin foto: `text` = nombre, `label` = rol.
+  | "person_card"
+  // Hito chico arriba a la izquierda: `text` = que paso, `label` = fecha.
+  | "milestone"
+  // Tarjeta tipo YouTube con cursor que toca Suscribirse y la campana.
+  | "subscribe_cta"
+  // Mapas (`geo` = coordenada del lugar): globo que gira hasta el pais, o
+  // mapa plano con reticula y opcional segundo lugar (`ref`).
+  | "map_globe"
+  | "map_marker"
+  // Diagramas: corte por capas (`items` de arriba a abajo: text = nombre,
+  // label = medida opcional) y ciclo (`items` = pasos, text del grafico =
+  // nombre del ciclo).
+  | "layers_diagram"
+  | "cycle_diagram"
   | "ninguno";
+
+// Item de un overlay con varios valores (barras de data_viz_single, los dos
+// lados de versus, los hitos de timeline). `text` es el valor tal cual lo
+// dice el guion ("1,670 km/h"), `label` a que corresponde ("Quito").
+export interface OverlayItem {
+  label: string;
+  text: string;
+}
 
 export interface OverlaySpec {
   type: OverlayType;
   text: string;
   source: "script";
+  // Titulo/etiqueta corta (tambien literal del guion, ver generate_overlay).
+  label?: string;
+  items?: OverlayItem[];
+  // Posicion relativa (0-1) del texto dentro de la escena -- el render la
+  // usa para que el overlay aparezca cuando la narracion lo dice.
+  anchor?: number;
+  // Segundos en pantalla; sin esto el render usa el default de cada tipo.
+  duration?: number;
+  // Solo title_card, los pone placeOverlays: numero de capitulo (1, 2...) y
+  // en que fraccion del video arranca (0-1, barra de progreso).
+  chapter?: number;
+  progress?: number;
+  // Icono (scale_compare): uno de motion/catalog.json "icons". No es texto
+  // del guion, asi que no pasa por el modo estricto.
+  icon?: string;
+  // Mapas (map_globe, map_marker): coordenada del lugar de `text`, la da el
+  // planificador; solo ubica el mapa, no se muestra. `ref`: segundo lugar
+  // de map_marker (su `name` si es texto del guion y se valida).
+  geo?: { lat: number; lon: number };
+  ref?: { name: string; lat: number; lon: number };
 }
 export interface Provider {
   id: string;

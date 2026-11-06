@@ -1,4 +1,4 @@
-import type { ProjectStatus, VideoProject, Script, Scene, SceneVisualStatus, Job, JobStatus, Asset, AssetType, ScriptStyle, ScriptStyleStatus, VisualSource } from "@/types";
+import type { ProjectStatus, VideoProject, Script, Scene, SceneVisualStatus, Job, JobStatus, Asset, AssetType, ScriptStyle, ScriptStyleStatus, VisualSource, OverlayTheme } from "@/types";
 
 // --- video_projects -------------------------------------------------------
 
@@ -10,8 +10,11 @@ interface ProjectRow {
   script_style_id: string | null;
   voice_id: string | null;
   visual_source?: string | null;
+  video_format?: string | null;
   transitions_enabled?: boolean | null;
   subtitles_enabled?: boolean | null;
+  overlays_enabled?: boolean | null;
+  overlay_theme?: string | null;
   render_quality?: string | null;
   render_charged?: boolean | null;
   workspace_id?: string | null;
@@ -24,6 +27,12 @@ const VISUAL_SOURCES: VisualSource[] = ["stock", "ai", "mixed", "flow"];
 
 function toVisualSource(value: string | null | undefined): VisualSource {
   return (VISUAL_SOURCES as string[]).includes(value ?? "") ? (value as VisualSource) : "stock";
+}
+
+const OVERLAY_THEMES: OverlayTheme[] = ["documental", "ciencia", "finanzas", "historia", "crimen", "minimal"];
+
+function toOverlayTheme(value: string | null | undefined): OverlayTheme {
+  return (OVERLAY_THEMES as string[]).includes(value ?? "") ? (value as OverlayTheme) : "documental";
 }
 
 const PROJECT_STATUSES: ProjectStatus[] = ["DRAFT", "IN_PROGRESS", "GENERATING", "DONE", "ERROR"];
@@ -42,8 +51,11 @@ export function mapProject(row: ProjectRow): VideoProject {
     scriptStyleId: row.script_style_id ?? undefined,
     voiceId: row.voice_id ?? undefined,
     visualSource: toVisualSource(row.visual_source),
+    videoFormat: row.video_format === "animated" ? "animated" : "stock",
     transitionsEnabled: Boolean(row.transitions_enabled),
     subtitlesEnabled: Boolean(row.subtitles_enabled),
+    overlaysEnabled: Boolean(row.overlays_enabled),
+    overlayTheme: toOverlayTheme(row.overlay_theme),
     renderQuality: row.render_quality === "1080p" ? "1080p" : "720p",
     renderCharged: Boolean(row.render_charged),
     workspaceId: row.workspace_id ?? undefined,

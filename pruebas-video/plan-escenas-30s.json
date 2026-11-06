@@ -1,0 +1,618 @@
+{
+  "scenes": [
+    {
+      "id": "s1",
+      "start": 0,
+      "end": 15.730000114440918,
+      "elements": [
+        {
+          "id": "reloj",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "reloj_noche",
+          "x": 50,
+          "y": 50,
+          "w": 48
+        },
+        {
+          "id": "central",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "central_nuclear",
+          "x": 50,
+          "y": 52,
+          "w": 72
+        },
+        {
+          "id": "sala",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "sala_control",
+          "x": 50,
+          "y": 52,
+          "w": 62
+        },
+        {
+          "id": "boton",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "boton_emergencia",
+          "x": 60,
+          "y": 68,
+          "w": 14
+        },
+        {
+          "id": "ingeniero",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "ingeniero",
+          "x": 26,
+          "y": 60,
+          "w": 8
+        }
+      ],
+      "steps": [
+        {
+          "action": "show",
+          "target": "reloj",
+          "at": 0
+        },
+        {
+          "action": "highlight",
+          "target": "reloj",
+          "part": "hora",
+          "at": 4.21999979019165
+        },
+        {
+          "action": "loop",
+          "target": "reloj",
+          "part": "dos_puntos",
+          "loop": "pulse",
+          "at": 5.340000152587891
+        },
+        {
+          "action": "hide",
+          "target": "reloj",
+          "at": 6.579999923706055
+        },
+        {
+          "action": "show",
+          "target": "central",
+          "at": 6.579999923706055
+        },
+        {
+          "action": "highlight",
+          "target": "central",
+          "part": "cartel",
+          "at": 7.5
+        },
+        {
+          "action": "highlight",
+          "target": "central",
+          "part": "edificio_4",
+          "at": 9.920000076293945
+        },
+        {
+          "action": "camera",
+          "target": "central",
+          "duration": 2,
+          "zoom": 1.3,
+          "at": 9.920000076293945
+        },
+        {
+          "action": "hide",
+          "target": "central",
+          "at": 10.84000015258789
+        },
+        {
+          "action": "camera",
+          "target": "sala",
+          "duration": 1.5,
+          "zoom": 1,
+          "at": 10.84000015258789
+        },
+        {
+          "action": "show",
+          "target": "sala",
+          "at": 10.84000015258789
+        },
+        {
+          "action": "show",
+          "target": "boton",
+          "at": 10.84000015258789
+        },
+        {
+          "action": "show",
+          "target": "ingeniero",
+          "at": 10.84000015258789
+        },
+        {
+          "action": "act",
+          "target": "ingeniero",
+          "duration": 2.5,
+          "act": "walk",
+          "at": 10.84000015258789
+        },
+        {
+          "action": "move",
+          "target": "ingeniero",
+          "duration": 2.5,
+          "dx": 250,
+          "at": 10.84000015258789
+        },
+        {
+          "action": "camera",
+          "target": "boton",
+          "duration": 2,
+          "zoom": 1.3,
+          "at": 12.9399995803833
+        },
+        {
+          "action": "rotate",
+          "target": "boton",
+          "part": "tapa",
+          "duration": 0.8,
+          "deg": -100,
+          "at": 12.9399995803833
+        },
+        {
+          "action": "act",
+          "target": "ingeniero",
+          "duration": 1.2,
+          "act": "press",
+          "at": 14.420000076293945
+        },
+        {
+          "action": "move",
+          "target": "boton",
+          "part": "boton",
+          "duration": 0.4,
+          "dy": 25,
+          "at": 14.420000076293945
+        },
+        {
+          "action": "paint",
+          "target": "boton",
+          "part": "boton",
+          "tone": "alert",
+          "at": 15.100000381469727
+        },
+        {
+          "action": "paint",
+          "target": "sala",
+          "part": "luces",
+          "tone": "alert",
+          "at": 15.100000381469727
+        },
+        {
+          "action": "loop",
+          "target": "sala",
+          "part": "luces",
+          "loop": "pulse",
+          "at": 15.100000381469727
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "start": 15.730000114440918,
+      "end": 30.679999160766602,
+      "elements": [
+        {
+          "id": "reactor",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "reactor_corte",
+          "x": 47,
+          "y": 52,
+          "w": 32
+        },
+        {
+          "id": "boton",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "boton_emergencia",
+          "x": 21,
+          "y": 56,
+          "w": 16
+        },
+        {
+          "id": "freno",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "freno_mano",
+          "x": 21,
+          "y": 56,
+          "w": 16
+        },
+        {
+          "id": "ciudad",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "ciudad",
+          "x": 77,
+          "y": 66,
+          "w": 22
+        },
+        {
+          "id": "explosion",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "explosion",
+          "x": 47,
+          "y": 52,
+          "w": 32
+        },
+        {
+          "id": "l_apagar",
+          "kind": "label",
+          "slot": "top",
+          "x": 21,
+          "y": 36,
+          "text": "APAGAR"
+        },
+        {
+          "id": "l_ciudad",
+          "kind": "label",
+          "slot": "top",
+          "x": 77,
+          "y": 48,
+          "text": "ciudad entera"
+        }
+      ],
+      "steps": [
+        {
+          "action": "show",
+          "target": "reactor",
+          "at": 15.880000114440918
+        },
+        {
+          "action": "show",
+          "target": "boton",
+          "at": 16
+        },
+        {
+          "action": "rotate",
+          "target": "boton",
+          "part": "tapa",
+          "duration": 0.8,
+          "deg": -110,
+          "at": 16.299999237060547
+        },
+        {
+          "action": "show",
+          "target": "l_apagar",
+          "at": 18.579999923706055
+        },
+        {
+          "action": "paint",
+          "target": "boton",
+          "part": "boton",
+          "tone": "alert",
+          "at": 18.579999923706055
+        },
+        {
+          "action": "move",
+          "target": "reactor",
+          "part": "barras",
+          "duration": 2.5,
+          "dy": 45,
+          "at": 19.079999923706055
+        },
+        {
+          "action": "hide",
+          "target": "boton",
+          "at": 22.959999084472656
+        },
+        {
+          "action": "hide",
+          "target": "l_apagar",
+          "at": 22.959999084472656
+        },
+        {
+          "action": "show",
+          "target": "freno",
+          "at": 22.959999084472656
+        },
+        {
+          "action": "rotate",
+          "target": "freno",
+          "part": "palanca",
+          "duration": 1,
+          "deg": -40,
+          "at": 23.440000534057617
+        },
+        {
+          "action": "show",
+          "target": "ciudad",
+          "at": 25.3799991607666
+        },
+        {
+          "action": "show",
+          "target": "l_ciudad",
+          "at": 26.31999969482422
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "cable",
+          "tone": "accent",
+          "at": 26.31999969482422
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "ventana_1",
+          "tone": "accent",
+          "at": 26.5
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "ventana_4",
+          "tone": "accent",
+          "at": 26.5
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "ventana_8",
+          "tone": "accent",
+          "at": 26.5
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "ventana_12",
+          "tone": "accent",
+          "at": 26.5
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "part": "ventana_16",
+          "tone": "accent",
+          "at": 26.5
+        },
+        {
+          "action": "hide",
+          "target": "l_ciudad",
+          "at": 26.920000076293945
+        },
+        {
+          "action": "camera",
+          "target": "reactor",
+          "duration": 2,
+          "zoom": 1.2,
+          "at": 26.920000076293945
+        },
+        {
+          "action": "paint",
+          "target": "reactor",
+          "part": "nucleo",
+          "tone": "alert",
+          "at": 27.6200008392334
+        },
+        {
+          "action": "loop",
+          "target": "ciudad",
+          "loop": "pulse",
+          "at": 27.979999542236328
+        },
+        {
+          "action": "loop",
+          "target": "reactor",
+          "loop": "shake",
+          "at": 28.899999618530273
+        },
+        {
+          "action": "hide",
+          "target": "reactor",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "show",
+          "target": "explosion",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "move",
+          "target": "explosion",
+          "part": "tapa",
+          "duration": 1.5,
+          "dy": -90,
+          "at": 29.100000381469727
+        },
+        {
+          "action": "camera",
+          "target": "explosion",
+          "duration": 1.5,
+          "zoom": 1,
+          "at": 29.100000381469727
+        }
+      ]
+    }
+  ],
+  "components": {
+    "freno_mano": {
+      "id": "freno_mano",
+      "name": "Freno de mano",
+      "width": 200,
+      "height": 200,
+      "svg": "<g><rect x=\"30\" y=\"165\" width=\"140\" height=\"35\" rx=\"6\" fill=\"currentColor\"/><g data-part=\"palanca\"><rect x=\"94\" y=\"40\" width=\"12\" height=\"120\" rx=\"6\" fill=\"currentColor\"/><rect x=\"86\" y=\"10\" width=\"28\" height=\"70\" rx=\"12\" fill=\"var(--accent)\"/></g><circle cx=\"100\" cy=\"162\" r=\"9\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"2\"/></g>",
+      "parts": {
+        "palanca": "50% 100%"
+      }
+    },
+    "ciudad": {
+      "id": "ciudad",
+      "name": "Ciudad iluminada",
+      "width": 400,
+      "height": 240,
+      "svg": "<g><rect x=\"20\" y=\"100\" width=\"70\" height=\"110\" fill=\"currentColor\"/><rect x=\"100\" y=\"50\" width=\"80\" height=\"160\" fill=\"currentColor\"/><rect x=\"190\" y=\"120\" width=\"60\" height=\"90\" fill=\"currentColor\"/><rect x=\"260\" y=\"70\" width=\"70\" height=\"140\" fill=\"currentColor\"/><rect x=\"340\" y=\"130\" width=\"50\" height=\"80\" fill=\"currentColor\"/><g fill=\"var(--accent)\"><rect x=\"35\" y=\"120\" width=\"14\" height=\"16\" data-part=\"ventana_1\"/><rect x=\"63\" y=\"120\" width=\"14\" height=\"16\" data-part=\"ventana_2\"/><rect x=\"35\" y=\"155\" width=\"14\" height=\"16\" data-part=\"ventana_3\"/><rect x=\"63\" y=\"155\" width=\"14\" height=\"16\" data-part=\"ventana_4\"/><rect x=\"113\" y=\"70\" width=\"14\" height=\"16\" data-part=\"ventana_5\"/><rect x=\"153\" y=\"70\" width=\"14\" height=\"16\" data-part=\"ventana_6\"/><rect x=\"113\" y=\"110\" width=\"14\" height=\"16\" data-part=\"ventana_7\"/><rect x=\"153\" y=\"110\" width=\"14\" height=\"16\" data-part=\"ventana_8\"/><rect x=\"113\" y=\"150\" width=\"14\" height=\"16\" data-part=\"ventana_9\"/><rect x=\"153\" y=\"150\" width=\"14\" height=\"16\" data-part=\"ventana_10\"/><rect x=\"203\" y=\"140\" width=\"14\" height=\"16\" data-part=\"ventana_11\"/><rect x=\"227\" y=\"140\" width=\"14\" height=\"16\" data-part=\"ventana_12\"/><rect x=\"273\" y=\"90\" width=\"14\" height=\"16\" data-part=\"ventana_13\"/><rect x=\"303\" y=\"90\" width=\"14\" height=\"16\" data-part=\"ventana_14\"/><rect x=\"273\" y=\"130\" width=\"14\" height=\"16\" data-part=\"ventana_15\"/><rect x=\"303\" y=\"130\" width=\"14\" height=\"16\" data-part=\"ventana_16\"/><rect x=\"357\" y=\"150\" width=\"14\" height=\"16\" data-part=\"ventana_17\"/></g><g fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" data-part=\"cable\"><polyline points=\"0,228 400,228\"/><line x1=\"55\" y1=\"210\" x2=\"55\" y2=\"228\"/><line x1=\"140\" y1=\"210\" x2=\"140\" y2=\"228\"/><line x1=\"220\" y1=\"210\" x2=\"220\" y2=\"228\"/><line x1=\"295\" y1=\"210\" x2=\"295\" y2=\"228\"/><line x1=\"365\" y1=\"210\" x2=\"365\" y2=\"228\"/></g></g>",
+      "parts": {
+        "ventana_1": null,
+        "ventana_2": null,
+        "ventana_3": null,
+        "ventana_4": null,
+        "ventana_5": null,
+        "ventana_6": null,
+        "ventana_7": null,
+        "ventana_8": null,
+        "ventana_9": null,
+        "ventana_10": null,
+        "ventana_11": null,
+        "ventana_12": null,
+        "ventana_13": null,
+        "ventana_14": null,
+        "ventana_15": null,
+        "ventana_16": null,
+        "ventana_17": null,
+        "cable": null
+      }
+    },
+    "explosion": {
+      "id": "explosion",
+      "name": "Explosión",
+      "width": 300,
+      "height": 300,
+      "svg": "<g><g fill=\"currentColor\" fill-opacity=\"0.35\" data-part=\"humo\"><circle cx=\"105\" cy=\"45\" r=\"30\"/><circle cx=\"160\" cy=\"30\" r=\"35\"/><circle cx=\"210\" cy=\"55\" r=\"28\"/></g><circle cx=\"150\" cy=\"180\" r=\"85\" fill=\"#ffffff\" stroke=\"currentColor\" stroke-opacity=\"0.3\" stroke-width=\"2\" data-part=\"destello\"/><polygon fill=\"var(--accent)\" points=\"150,60 167,117 210,76 196,134 254,120 213,163 270,180 213,197 254,240 196,226 210,284 167,243 150,298 133,243 90,284 104,226 46,240 87,197 30,180 87,163 46,120 104,134 90,76 133,117\" data-part=\"estallido\"/><path d=\"M85 220 H215 V290 a6 6 0 0 1 -6 6 H91 a6 6 0 0 1 -6 -6 Z\" fill=\"currentColor\"/><rect x=\"80\" y=\"194\" width=\"140\" height=\"22\" rx=\"6\" fill=\"currentColor\" data-part=\"tapa\"/></g>",
+      "parts": {
+        "humo": null,
+        "destello": null,
+        "estallido": null,
+        "tapa": null
+      }
+    },
+    "reloj_noche": {
+      "id": "reloj_noche",
+      "name": "Reloj y calendario nocturno",
+      "width": 400,
+      "height": 300,
+      "svg": "<g><rect x=\"0\" y=\"0\" width=\"400\" height=\"300\" fill=\"#1b2440\" data-part=\"cielo\"/><g data-part=\"luna\"><circle cx=\"330\" cy=\"55\" r=\"24\" fill=\"#e8e4d0\"/><circle cx=\"340\" cy=\"48\" r=\"21\" fill=\"#1b2440\"/></g><g fill=\"#e8e4d0\" data-part=\"estrellas\"><circle cx=\"50\" cy=\"40\" r=\"3\" data-part=\"estrella_1\"/><circle cx=\"140\" cy=\"25\" r=\"2\" data-part=\"estrella_2\"/><circle cx=\"230\" cy=\"50\" r=\"3\" data-part=\"estrella_3\"/><circle cx=\"90\" cy=\"90\" r=\"2\" data-part=\"estrella_4\"/><circle cx=\"300\" cy=\"110\" r=\"2\" data-part=\"estrella_5\"/><circle cx=\"370\" cy=\"130\" r=\"3\" data-part=\"estrella_6\"/></g><rect x=\"40\" y=\"130\" width=\"320\" height=\"130\" rx=\"14\" fill=\"#0d1220\" stroke=\"#8a93a8\" stroke-width=\"5\"/><g fill=\"var(--accent)\" opacity=\"0.35\" data-part=\"hora\"><rect x=\"70\" y=\"152\" width=\"42\" height=\"60\" rx=\"6\"/><rect x=\"122\" y=\"152\" width=\"42\" height=\"60\" rx=\"6\"/><rect x=\"236\" y=\"152\" width=\"42\" height=\"60\" rx=\"6\"/><rect x=\"288\" y=\"152\" width=\"42\" height=\"60\" rx=\"6\"/></g><g fill=\"var(--accent)\" data-part=\"dos_puntos\"><circle cx=\"200\" cy=\"170\" r=\"7\"/><circle cx=\"200\" cy=\"196\" r=\"7\"/></g><g fill=\"#8a93a8\" opacity=\"0.6\" data-part=\"fecha\"><rect x=\"110\" y=\"228\" width=\"180\" height=\"12\" rx=\"6\"/></g></g>",
+      "parts": {
+        "cielo": null,
+        "luna": null,
+        "estrellas": null,
+        "estrella_1": null,
+        "estrella_2": null,
+        "estrella_3": null,
+        "estrella_4": null,
+        "estrella_5": null,
+        "estrella_6": null,
+        "hora": null,
+        "dos_puntos": null,
+        "fecha": null
+      }
+    },
+    "central_nuclear": {
+      "id": "central_nuclear",
+      "name": "Central de Chernobyl",
+      "width": 600,
+      "height": 320,
+      "svg": "<g><line x1=\"0\" y1=\"300\" x2=\"600\" y2=\"300\" stroke=\"currentColor\" stroke-width=\"4\"/><rect x=\"272\" y=\"60\" width=\"22\" height=\"240\" fill=\"currentColor\" opacity=\"0.6\" data-part=\"chimenea\"/><rect x=\"30\" y=\"170\" width=\"100\" height=\"130\" fill=\"currentColor\" data-part=\"edificio_1\"/><rect x=\"145\" y=\"170\" width=\"100\" height=\"130\" fill=\"currentColor\" data-part=\"edificio_2\"/><rect x=\"310\" y=\"170\" width=\"100\" height=\"130\" fill=\"currentColor\" data-part=\"edificio_3\"/><g data-part=\"edificio_4\"><rect x=\"425\" y=\"170\" width=\"100\" height=\"130\" fill=\"var(--accent)\"/><rect x=\"445\" y=\"145\" width=\"60\" height=\"25\" fill=\"var(--accent)\"/></g><g data-part=\"cartel\"><rect x=\"553\" y=\"215\" width=\"6\" height=\"85\" fill=\"currentColor\"/><rect x=\"538\" y=\"180\" width=\"36\" height=\"40\" rx=\"4\" fill=\"currentColor\"/><circle cx=\"556\" cy=\"196\" r=\"6\" fill=\"var(--accent)\"/><path d=\"M550 202 L556 214 L562 202 Z\" fill=\"var(--accent)\"/></g></g>",
+      "parts": {
+        "chimenea": null,
+        "edificio_1": null,
+        "edificio_2": null,
+        "edificio_3": null,
+        "edificio_4": null,
+        "cartel": null
+      }
+    },
+    "sala_control": {
+      "id": "sala_control",
+      "name": "Sala de control",
+      "width": 600,
+      "height": 400,
+      "svg": "<g><rect x=\"0\" y=\"0\" width=\"600\" height=\"400\" fill=\"currentColor\" opacity=\"0.12\"/><rect x=\"0\" y=\"360\" width=\"600\" height=\"40\" fill=\"currentColor\" opacity=\"0.35\"/><rect x=\"40\" y=\"50\" width=\"520\" height=\"310\" rx=\"10\" fill=\"currentColor\"/><g data-part=\"medidor_1\"><circle cx=\"130\" cy=\"130\" r=\"46\" fill=\"#e9e9e9\"/><line x1=\"130\" y1=\"130\" x2=\"130\" y2=\"96\" stroke=\"#222\" stroke-width=\"5\" stroke-linecap=\"round\" data-part=\"aguja_1\"/></g><g data-part=\"medidor_2\"><circle cx=\"300\" cy=\"130\" r=\"46\" fill=\"#e9e9e9\"/><line x1=\"300\" y1=\"130\" x2=\"300\" y2=\"96\" stroke=\"#222\" stroke-width=\"5\" stroke-linecap=\"round\" data-part=\"aguja_2\"/></g><g data-part=\"medidor_3\"><circle cx=\"470\" cy=\"130\" r=\"46\" fill=\"#e9e9e9\"/><line x1=\"470\" y1=\"130\" x2=\"470\" y2=\"96\" stroke=\"var(--accent)\" stroke-width=\"5\" stroke-linecap=\"round\" data-part=\"aguja_3\"/></g><g data-part=\"luces\"><circle cx=\"90\" cy=\"250\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_1\"/><circle cx=\"150\" cy=\"250\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_2\"/><circle cx=\"210\" cy=\"250\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_3\"/><circle cx=\"270\" cy=\"250\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_4\"/><circle cx=\"330\" cy=\"250\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_5\"/><circle cx=\"390\" cy=\"250\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_6\"/><circle cx=\"450\" cy=\"250\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_7\"/><circle cx=\"510\" cy=\"250\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_8\"/><circle cx=\"120\" cy=\"310\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_9\"/><circle cx=\"240\" cy=\"310\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_10\"/><circle cx=\"360\" cy=\"310\" r=\"14\" fill=\"#e9e9e9\" opacity=\"0.5\" data-part=\"luz_11\"/><circle cx=\"480\" cy=\"310\" r=\"14\" fill=\"var(--accent)\" data-part=\"luz_12\"/></g></g>",
+      "parts": {
+        "medidor_1": null,
+        "aguja_1": "50% 100%",
+        "medidor_2": null,
+        "aguja_2": "50% 100%",
+        "medidor_3": null,
+        "aguja_3": "50% 100%",
+        "luces": null,
+        "luz_1": null,
+        "luz_2": null,
+        "luz_3": null,
+        "luz_4": null,
+        "luz_5": null,
+        "luz_6": null,
+        "luz_7": null,
+        "luz_8": null,
+        "luz_9": null,
+        "luz_10": null,
+        "luz_11": null,
+        "luz_12": null
+      }
+    },
+    "ingeniero": {
+      "id": "ingeniero",
+      "name": "Ingeniero joven",
+      "width": 120,
+      "height": 400,
+      "svg": "<g><g data-part=\"pierna_izq\"><rect x=\"38\" y=\"195\" width=\"20\" height=\"195\" rx=\"10\" fill=\"currentColor\"/></g><g data-part=\"pierna_der\"><rect x=\"62\" y=\"195\" width=\"20\" height=\"195\" rx=\"10\" fill=\"currentColor\"/></g><g data-part=\"torso\"><rect x=\"34\" y=\"70\" width=\"52\" height=\"150\" rx=\"24\" fill=\"var(--accent)\"/></g><g data-part=\"brazo_izq\"><rect x=\"14\" y=\"80\" width=\"18\" height=\"115\" rx=\"9\" fill=\"currentColor\"/></g><g data-part=\"brazo_der\"><rect x=\"88\" y=\"80\" width=\"18\" height=\"62\" rx=\"9\" fill=\"currentColor\"/><g data-part=\"antebrazo_der\"><rect x=\"88\" y=\"134\" width=\"18\" height=\"61\" rx=\"9\" fill=\"currentColor\"/></g></g><g data-part=\"cabeza\"><circle cx=\"60\" cy=\"40\" r=\"26\" fill=\"currentColor\"/></g></g>",
+      "parts": {
+        "pierna_izq": "50% 0%",
+        "pierna_der": "50% 0%",
+        "torso": null,
+        "brazo_izq": "50% 0%",
+        "brazo_der": "50% 0%",
+        "antebrazo_der": "50% 0%",
+        "cabeza": "50% 100%"
+      }
+    },
+    "boton_emergencia": {
+      "id": "boton_emergencia",
+      "name": "Botón de emergencia",
+      "width": 200,
+      "height": 200,
+      "svg": "<g><rect x=\"20\" y=\"140\" width=\"160\" height=\"50\" rx=\"6\" fill=\"currentColor\"/><rect x=\"50\" y=\"120\" width=\"100\" height=\"22\" rx=\"4\" fill=\"currentColor\" opacity=\"0.6\"/><g data-part=\"boton\"><rect x=\"68\" y=\"84\" width=\"64\" height=\"38\" rx=\"10\" fill=\"var(--accent)\"/></g><g data-part=\"tapa\"><path d=\"M46 120 L46 70 Q46 40 100 40 Q154 40 154 70 L154 120\" fill=\"currentColor\" fill-opacity=\"0.15\" stroke=\"currentColor\" stroke-width=\"6\" stroke-linejoin=\"round\"/></g></g>",
+      "parts": {
+        "boton": null,
+        "tapa": "0% 100%"
+      }
+    },
+    "reactor_corte": {
+      "id": "reactor_corte",
+      "name": "Reactor en corte",
+      "width": 500,
+      "height": 400,
+      "svg": "<g><rect x=\"30\" y=\"40\" width=\"440\" height=\"340\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"8\" data-part=\"edificio\"/><rect x=\"10\" y=\"380\" width=\"480\" height=\"10\" fill=\"currentColor\"/><rect x=\"130\" y=\"110\" width=\"240\" height=\"230\" rx=\"20\" fill=\"currentColor\" opacity=\"0.25\" stroke=\"currentColor\" stroke-width=\"6\" data-part=\"vasija\"/><rect x=\"155\" y=\"175\" width=\"190\" height=\"140\" rx=\"10\" fill=\"#4f8fa8\" data-part=\"nucleo\"/><g fill=\"currentColor\" data-part=\"barras\"><rect x=\"180\" y=\"50\" width=\"14\" height=\"200\" rx=\"4\" data-part=\"barra_1\"/><rect x=\"230\" y=\"50\" width=\"14\" height=\"200\" rx=\"4\" data-part=\"barra_2\"/><rect x=\"280\" y=\"50\" width=\"14\" height=\"200\" rx=\"4\" data-part=\"barra_3\"/><rect x=\"330\" y=\"50\" width=\"14\" height=\"200\" rx=\"4\" data-part=\"barra_4\"/></g><rect x=\"370\" y=\"150\" width=\"100\" height=\"10\" fill=\"currentColor\"/><rect x=\"30\" y=\"300\" width=\"100\" height=\"10\" fill=\"currentColor\"/></g>",
+      "parts": {
+        "edificio": null,
+        "vasija": null,
+        "nucleo": null,
+        "barras": null,
+        "barra_1": null,
+        "barra_2": null,
+        "barra_3": null,
+        "barra_4": null
+      }
+    }
+  },
+  "nav": [
+    {
+      "spec": {
+        "type": "nav_header",
+        "text": "COMO PUDO UN REACTOR NUCLEAR EXPLOTAR DURANTE UNA PRUEBA DE SEG…",
+        "source": "script",
+        "label": "Capítulo 1 de 1 · 26 de abril de 1986, 1 y 23 de la…"
+      },
+      "start": 0,
+      "end": 30.679999160766602
+    }
+  ],
+  "durationSeconds": 30.679999160766602,
+  "theme": {
+    "accent": "#6CC6FF",
+    "text": "#FFFFFF",
+    "textMuted": "rgba(230,244,255,0.78)",
+    "scrim": "rgba(0,4,12,0.61)",
+    "titleFont": "serif"
+  },
+  "locale": "es-AR",
+  "audioSrc": "https://pub-7f585887fbac46ecbdcd64457d2e646d.r2.dev/skaler-audio/4443658c-67cc-4ed9-9054-f9f6bd9b54a6-upload-1793384000559.mp3"
+}

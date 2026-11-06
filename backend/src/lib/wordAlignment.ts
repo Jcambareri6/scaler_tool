@@ -15,7 +15,7 @@ export function tokenizeScript(text: string): string[] {
 // Minusculas, sin acentos ni puntuacion: "¿Cómo?" y " como" de Whisper
 // tienen que comparar igual. Un token que queda vacio ("—", "...") es solo
 // puntuacion -- Whisper nunca lo devuelve como palabra.
-function normalize(token: string): string {
+export function normalizeToken(token: string): string {
   return token
     .toLowerCase()
     .normalize("NFD")
@@ -52,7 +52,7 @@ export function alignScriptTokens(scriptTokens: string[], words: TranscribedWord
   const aIdx: number[] = [];
   const aNorm: string[] = [];
   scriptTokens.forEach((t, i) => {
-    const n = normalize(t);
+    const n = normalizeToken(t);
     if (n) {
       aIdx.push(i);
       aNorm.push(n);
@@ -61,7 +61,7 @@ export function alignScriptTokens(scriptTokens: string[], words: TranscribedWord
   const bIdx: number[] = [];
   const bNorm: string[] = [];
   words.forEach((w, j) => {
-    const n = normalize(w.word);
+    const n = normalizeToken(w.word);
     if (n) {
       bIdx.push(j);
       bNorm.push(n);

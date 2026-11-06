@@ -1,0 +1,41 @@
+{
+  "fps": 30,
+  "components": {
+    "big_number": { "introSeconds": 1.7, "blur": 0 },
+    "title_card": { "introSeconds": 1.4, "blur": 14 },
+    "kinetic_quote": { "introSeconds": 2.2, "blur": 10 },
+    "data_viz_single": { "introSeconds": 2.0, "blur": 6 },
+    "versus": { "introSeconds": 2.0, "blur": 6 },
+    "scale_compare": { "introSeconds": 2.2, "blur": 6 },
+    "timeline": { "introSeconds": 3.0, "blur": 6 },
+    "lower_third": { "introSeconds": 1.3, "blur": 0 },
+    "list": { "introSeconds": 2.1, "blur": 4 },
+    "rank_reveal": { "introSeconds": 1.3, "blur": 8 },
+    "profile_card": { "introSeconds": 1.7, "blur": 0 },
+    "location": { "introSeconds": 1.3, "blur": 0 },
+    "myth_fact": { "introSeconds": 1.9, "blur": 10 },
+    "badge": { "introSeconds": 1.0, "blur": 0 },
+    "cta": { "introSeconds": 1.4, "blur": 0 },
+    "nav_header": { "introSeconds": 1.0, "blur": 0 },
+    "line_chart": { "introSeconds": 2.0, "blur": 8 },
+    "pivot_question": { "introSeconds": 1.6, "blur": 12 },
+    "card_grid": { "introSeconds": 1.7, "blur": 8 },
+    "scoreboard": { "introSeconds": 1.2, "blur": 8 },
+    "strike_word": { "introSeconds": 1.1, "blur": 12 },
+    "phrase_swap": { "introSeconds": 1.8, "blur": 10 },
+    "chapter_index": { "introSeconds": 1.5, "blur": 8 },
+    "number_phrase": { "introSeconds": 1.0, "blur": 10 },
+    "person_card": { "introSeconds": 1.0, "blur": 0 },
+    "milestone": { "introSeconds": 0.6, "blur": 0 },
+    "subscribe_cta": { "introSeconds": 2.4, "blur": 0 },
+    "map_globe": { "introSeconds": 2.0, "blur": 10 },
+    "map_marker": { "introSeconds": 2.1, "blur": 0 },
+    "layers_diagram": { "introSeconds": 2.0, "blur": 10 },
+    "cycle_diagram": { "introSeconds": 2.4, "blur": 10 }
+  },
+  "icons": [
+    "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",
+    "egg", "fish", "fire", "footprint", "globe", "heart", "house", "mountain", "person", "plane",
+    "rabbit", "rocket", "ship", "phone", "sun", "train", "tree", "truck", "weight"
+  ]
+}

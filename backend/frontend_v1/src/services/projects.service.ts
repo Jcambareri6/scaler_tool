@@ -1,6 +1,7 @@
 import { api, ApiError } from "@/lib/api";
+import type { CaptionCue } from "@/lib/captions";
 import { mapProject, mapScript, mapScene, mapJob, mapAsset, sceneToContent } from "@/lib/mappers";
-import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt } from "@/types";
+import type { VideoProject, Script, Scene, Job, Asset, SceneImagePrompt, ProjectOverlays, PaletteTheme, OverlayStyle } from "@/types";
 
 function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -56,8 +57,11 @@ export const projectsService = {
     if (updates.scriptStyleId !== undefined) body.script_style_id = updates.scriptStyleId || null;
     if (updates.voiceId !== undefined) body.voice_id = updates.voiceId || null;
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
+    if (updates.videoFormat !== undefined) body.video_format = updates.videoFormat;
     if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
     if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
+    if (updates.overlaysEnabled !== undefined) body.overlays_enabled = updates.overlaysEnabled;
+    if (updates.overlayTheme !== undefined) body.overlay_theme = updates.overlayTheme;
     if (updates.renderQuality !== undefined) body.render_quality = updates.renderQuality;
     if (updates.workspaceId !== undefined) body.workspace_id = updates.workspaceId;
 
@@ -169,9 +173,25 @@ export const projectsService = {
   // transcribe_audio.tool.ts / orchestrator.ts, fusionados en
   // timelines.content.segments) -- usados para armar los subtitulos del
   // preview (PreviewPanel arma un WebVTT client-side a partir de esto).
-  async getTimelineSegments(projectId: string): Promise<{ text: string; start: number; end: number }[]> {
+  // Graficos animados ya ubicados en el tiempo (mismo calculo que el render,
+  // ver backend projectOverlays.service.ts) para la revision de stock.
+  async getOverlays(projectId: string): Promise<ProjectOverlays> {
+    return api.get<ProjectOverlays>(`/projects/${projectId}/overlays`);
+  },
+
+  // Paleta de los graficos: "channel" la fija para el canal (videos
+  // siguientes incluidos, requiere admin), "video" solo para este proyecto.
+  async setOverlayPalette(
+    projectId: string,
+    palette: string,
+    scope: "channel" | "video"
+  ): Promise<{ theme: PaletteTheme | null; paletteKey: string | null; source: OverlayStyle["source"] | null }> {
+    return api.post(`/projects/${projectId}/overlay-palette`, { palette, scope });
+  },
+
+  async getTimelineSegments(projectId: string): Promise<CaptionCue[]> {
     const detail = await api.get<{
-      timeline: { content?: { segments?: { text: string; start: number; end: number }[] } } | null;
+      timeline: { content?: { segments?: CaptionCue[] } } | null;
     }>(`/projects/${projectId}/details`);
     return detail.timeline?.content?.segments ?? [];
   },
@@ -218,12 +238,18 @@ export const projectsService = {
   // Prompts de imagen por escena para generar afuera (ej: Google Flow, sin
   // API) -- ver sceneBatch.service.ts::generateSceneImagePrompts. Solo genera
   // los que faltan salvo regenerate (opcionalmente limitado a sceneIds).
-  async getSceneImagePrompts(projectId: string): Promise<SceneImagePrompt[]> {
+  async getSceneImagePrompts(
+    projectId: string,
+    options?: { regenerate?: boolean; sceneIds?: string[] }
+  ): Promise<SceneImagePrompt[]> {
     const script = await this.getScript(projectId);
     if (!script) throw new Error("El proyecto todavía no tiene guion");
     const rows = await api.post<
       { scene_id: string; order: number; text: string; image_prompt: string | null; image_prompt_style_key?: string | null; image_prompt_edited?: boolean; has_visual: boolean; error?: string }[]
-    >(`/scripts/${script.id}/scenes/image-prompts`, {});
+    >(`/scripts/${script.id}/scenes/image-prompts`, {
+      ...(options?.regenerate ? { regenerate: true } : {}),
+      ...(options?.sceneIds ? { scene_ids: options.sceneIds } : {}),
+    });
     return rows.map((r) => ({
       sceneId: r.scene_id,
       order: r.order,

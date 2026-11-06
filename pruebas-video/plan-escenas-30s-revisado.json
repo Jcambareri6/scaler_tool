@@ -1,0 +1,436 @@
+{
+  "scenes": [
+    {
+      "id": "s1",
+      "start": 0,
+      "end": 9.770000076293945,
+      "elements": [
+        {
+          "id": "mapa",
+          "kind": "graphic",
+          "slot": "full",
+          "spec": {
+            "type": "map_marker",
+            "text": "Chernobyl",
+            "source": "script",
+            "label": "26 de abril de 1986, 1 y 23 de la madrugada",
+            "geo": {
+              "lat": 51.389,
+              "lon": 30.099
+            }
+          }
+        }
+      ],
+      "steps": [
+        {
+          "action": "show",
+          "target": "mapa",
+          "at": 0
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "start": 9.770000076293945,
+      "end": 30.679999160766602,
+      "elements": [
+        {
+          "id": "sala",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "sala_control",
+          "x": 37,
+          "y": 62,
+          "w": 34
+        },
+        {
+          "id": "reactor",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "reactor",
+          "x": 66,
+          "y": 60,
+          "w": 22
+        },
+        {
+          "id": "barras",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "barras_control",
+          "x": 66,
+          "y": 49,
+          "w": 8
+        },
+        {
+          "id": "ingeniero",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "ingeniero",
+          "x": 14,
+          "y": 64,
+          "w": 6
+        },
+        {
+          "id": "boton",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "boton",
+          "x": 37,
+          "y": 58,
+          "w": 12
+        },
+        {
+          "id": "ciudad",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "ciudad",
+          "x": 83,
+          "y": 72,
+          "w": 12
+        },
+        {
+          "id": "explosion",
+          "kind": "drawing",
+          "slot": "full",
+          "component": "explosion",
+          "x": 66,
+          "y": 55,
+          "w": 20
+        },
+        {
+          "id": "rotulo_reactor",
+          "kind": "label",
+          "slot": "top",
+          "x": 66,
+          "y": 22,
+          "text": "Reactor 4"
+        },
+        {
+          "id": "rotulo_freno",
+          "kind": "label",
+          "slot": "top",
+          "x": 37,
+          "y": 33,
+          "text": "freno de mano"
+        }
+      ],
+      "steps": [
+        {
+          "action": "paint",
+          "target": "ingeniero",
+          "part": "torso",
+          "tone": "accent",
+          "at": 9.920000076293945
+        },
+        {
+          "action": "act",
+          "target": "ingeniero",
+          "duration": 2.5,
+          "act": "walk",
+          "at": 10.300000190734863
+        },
+        {
+          "action": "move",
+          "target": "ingeniero",
+          "duration": 2.5,
+          "dx": 200,
+          "at": 10.300000190734863
+        },
+        {
+          "action": "show",
+          "target": "rotulo_reactor",
+          "at": 11.0600004196167
+        },
+        {
+          "action": "paint",
+          "target": "reactor",
+          "part": "cartel",
+          "tone": "accent",
+          "at": 11.399999618530273
+        },
+        {
+          "action": "camera",
+          "target": "boton",
+          "duration": 2,
+          "zoom": 1.3,
+          "at": 14.420000076293945
+        },
+        {
+          "action": "act",
+          "target": "ingeniero",
+          "duration": 1.2,
+          "act": "press",
+          "at": 14.420000076293945
+        },
+        {
+          "action": "move",
+          "target": "boton",
+          "part": "boton_rojo",
+          "duration": 0.5,
+          "dy": 15,
+          "at": 14.420000076293945
+        },
+        {
+          "action": "show",
+          "target": "boton",
+          "part": "destello",
+          "at": 14.420000076293945
+        },
+        {
+          "action": "paint",
+          "target": "boton",
+          "part": "boton_rojo",
+          "tone": "alert",
+          "at": 17.200000762939453
+        },
+        {
+          "action": "camera",
+          "target": "reactor",
+          "duration": 1.5,
+          "zoom": 1,
+          "at": 18.579999923706055
+        },
+        {
+          "action": "move",
+          "target": "barras",
+          "duration": 3,
+          "dy": 70,
+          "at": 18.579999923706055
+        },
+        {
+          "action": "paint",
+          "target": "barras",
+          "tone": "accent",
+          "at": 18.579999923706055
+        },
+        {
+          "action": "paint",
+          "target": "reactor",
+          "part": "nucleo",
+          "tone": "alert",
+          "at": 20.280000686645508
+        },
+        {
+          "action": "scale",
+          "target": "reactor",
+          "part": "nucleo",
+          "duration": 0.5,
+          "factor": 1.3,
+          "at": 20.280000686645508
+        },
+        {
+          "action": "show",
+          "target": "rotulo_freno",
+          "at": 22.959999084472656
+        },
+        {
+          "action": "show",
+          "target": "ciudad",
+          "at": 24.739999771118164
+        },
+        {
+          "action": "show",
+          "target": "ciudad",
+          "part": "cable",
+          "at": 24.739999771118164
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "tone": "accent",
+          "at": 26.31999969482422
+        },
+        {
+          "action": "scale",
+          "target": "reactor",
+          "part": "nucleo",
+          "duration": 0.6,
+          "factor": 1.5,
+          "at": 27.6200008392334
+        },
+        {
+          "action": "paint",
+          "target": "sala",
+          "part": "luces",
+          "tone": "alert",
+          "at": 27.6200008392334
+        },
+        {
+          "action": "loop",
+          "target": "ciudad",
+          "loop": "pulse",
+          "at": 27.6200008392334
+        },
+        {
+          "action": "show",
+          "target": "explosion",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "scale",
+          "target": "explosion",
+          "duration": 0.8,
+          "factor": 2.6,
+          "at": 29.100000381469727
+        },
+        {
+          "action": "rotate",
+          "target": "reactor",
+          "part": "tapa_superior",
+          "duration": 0.8,
+          "deg": -80,
+          "at": 29.100000381469727
+        },
+        {
+          "action": "loop",
+          "target": "explosion",
+          "part": "humo",
+          "loop": "spin",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "loop",
+          "target": "reactor",
+          "loop": "shake",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "act",
+          "target": "ingeniero",
+          "duration": 1.4,
+          "act": "recoil",
+          "at": 29.100000381469727
+        },
+        {
+          "action": "paint",
+          "target": "ciudad",
+          "tone": "neutral",
+          "at": 29.100000381469727
+        }
+      ]
+    }
+  ],
+  "components": {
+    "ciudad": {
+      "id": "ciudad",
+      "name": "Ciudad",
+      "width": 400,
+      "height": 200,
+      "svg": "<g fill=\"currentColor\" data-part=\"edificios\"><rect x=\"10\" y=\"110\" width=\"50\" height=\"90\"/><rect x=\"65\" y=\"60\" width=\"42\" height=\"140\"/><rect x=\"112\" y=\"125\" width=\"55\" height=\"75\"/><rect x=\"172\" y=\"85\" width=\"45\" height=\"115\"/><rect x=\"222\" y=\"135\" width=\"55\" height=\"65\"/></g><g fill=\"var(--accent)\"><rect x=\"20\" y=\"125\" width=\"10\" height=\"12\" data-part=\"ventana_1\"/><rect x=\"40\" y=\"150\" width=\"10\" height=\"12\" data-part=\"ventana_2\"/><rect x=\"75\" y=\"80\" width=\"10\" height=\"12\" data-part=\"ventana_3\"/><rect x=\"90\" y=\"110\" width=\"10\" height=\"12\" data-part=\"ventana_4\"/><rect x=\"78\" y=\"145\" width=\"10\" height=\"12\" data-part=\"ventana_5\"/><rect x=\"125\" y=\"145\" width=\"10\" height=\"12\" data-part=\"ventana_6\"/><rect x=\"182\" y=\"105\" width=\"10\" height=\"12\" data-part=\"ventana_7\"/><rect x=\"198\" y=\"140\" width=\"10\" height=\"12\" data-part=\"ventana_8\"/><rect x=\"235\" y=\"155\" width=\"10\" height=\"12\" data-part=\"ventana_9\"/></g><path d=\"M277 175 Q 330 205 400 170\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"4\" stroke-linecap=\"round\" data-part=\"cable\"/>",
+      "parts": {
+        "edificios": null,
+        "ventana_1": null,
+        "ventana_2": null,
+        "ventana_3": null,
+        "ventana_4": null,
+        "ventana_5": null,
+        "ventana_6": null,
+        "ventana_7": null,
+        "ventana_8": null,
+        "ventana_9": null,
+        "cable": null
+      }
+    },
+    "explosion": {
+      "id": "explosion",
+      "name": "Explosion",
+      "width": 300,
+      "height": 300,
+      "svg": "<g fill=\"currentColor\" opacity=\"0.55\" data-part=\"humo\"><circle cx=\"150\" cy=\"225\" r=\"55\"/><circle cx=\"95\" cy=\"245\" r=\"40\"/><circle cx=\"205\" cy=\"245\" r=\"42\"/><circle cx=\"125\" cy=\"180\" r=\"42\"/><circle cx=\"178\" cy=\"170\" r=\"38\"/><circle cx=\"150\" cy=\"125\" r=\"34\"/><rect x=\"50\" y=\"250\" width=\"200\" height=\"50\"/></g><g data-part=\"fogonazo\"><polygon fill=\"var(--accent)\" points=\"150,10 175,85 240,40 205,110 290,130 205,160 245,230 170,195 150,280 130,195 55,230 95,160 10,130 95,110 60,40 125,85\"/></g>",
+      "parts": {
+        "humo": "50% 100%",
+        "fogonazo": "50% 60%"
+      }
+    },
+    "sala_control": {
+      "id": "sala_control",
+      "name": "Sala de control",
+      "width": 480,
+      "height": 300,
+      "svg": "<g><rect x=\"0\" y=\"0\" width=\"480\" height=\"300\" fill=\"currentColor\" opacity=\"0.08\"/><rect x=\"20\" y=\"30\" width=\"440\" height=\"180\" rx=\"6\" fill=\"currentColor\" opacity=\"0.85\"/><g fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" opacity=\"0.9\"><rect x=\"36\" y=\"46\" width=\"120\" height=\"70\" fill=\"#1b1b1b\" stroke=\"none\" opacity=\"0.5\"/><rect x=\"180\" y=\"46\" width=\"120\" height=\"70\" fill=\"#1b1b1b\" stroke=\"none\" opacity=\"0.5\"/><rect x=\"324\" y=\"46\" width=\"120\" height=\"70\" fill=\"#1b1b1b\" stroke=\"none\" opacity=\"0.5\"/></g><g fill=\"#f2f2f2\" opacity=\"0.8\"><circle cx=\"60\" cy=\"150\" r=\"9\"/><circle cx=\"100\" cy=\"150\" r=\"9\"/><circle cx=\"140\" cy=\"150\" r=\"9\"/><circle cx=\"60\" cy=\"186\" r=\"9\"/><circle cx=\"100\" cy=\"186\" r=\"9\"/><circle cx=\"140\" cy=\"186\" r=\"9\"/></g><g data-part=\"luces\"><circle cx=\"220\" cy=\"150\" r=\"10\" fill=\"var(--accent)\" data-part=\"luz_1\"/><circle cx=\"260\" cy=\"150\" r=\"10\" fill=\"var(--accent)\" opacity=\"0.4\" data-part=\"luz_2\"/><circle cx=\"300\" cy=\"150\" r=\"10\" fill=\"var(--accent)\" opacity=\"0.4\" data-part=\"luz_3\"/><circle cx=\"220\" cy=\"186\" r=\"10\" fill=\"var(--accent)\" opacity=\"0.4\" data-part=\"luz_4\"/></g><g fill=\"#f2f2f2\" opacity=\"0.8\"><rect x=\"340\" y=\"140\" width=\"100\" height=\"8\" rx=\"4\"/><rect x=\"340\" y=\"163\" width=\"100\" height=\"8\" rx=\"4\"/><rect x=\"340\" y=\"186\" width=\"100\" height=\"8\" rx=\"4\"/></g><rect x=\"0\" y=\"210\" width=\"480\" height=\"90\" fill=\"currentColor\"/></g>",
+      "parts": {
+        "luces": null,
+        "luz_1": null,
+        "luz_2": null,
+        "luz_3": null,
+        "luz_4": null
+      }
+    },
+    "ingeniero": {
+      "id": "ingeniero",
+      "name": "Ingeniero",
+      "width": 120,
+      "height": 400,
+      "svg": "<g><g data-part=\"pierna_izq\"><rect x=\"36\" y=\"190\" width=\"20\" height=\"208\" rx=\"10\" fill=\"currentColor\"/></g><g data-part=\"pierna_der\"><rect x=\"64\" y=\"190\" width=\"20\" height=\"208\" rx=\"10\" fill=\"currentColor\"/></g><g data-part=\"torso\"><rect x=\"32\" y=\"68\" width=\"56\" height=\"150\" rx=\"26\" fill=\"#f4f4f4\" stroke=\"currentColor\" stroke-width=\"3\"/></g><g data-part=\"brazo_izq\"><rect x=\"14\" y=\"76\" width=\"16\" height=\"104\" rx=\"8\" fill=\"#f4f4f4\" stroke=\"currentColor\" stroke-width=\"3\"/></g><g data-part=\"brazo_der\"><rect x=\"90\" y=\"76\" width=\"16\" height=\"56\" rx=\"8\" fill=\"#f4f4f4\" stroke=\"currentColor\" stroke-width=\"3\"/><g data-part=\"antebrazo_der\"><rect x=\"90\" y=\"124\" width=\"16\" height=\"56\" rx=\"8\" fill=\"#f4f4f4\" stroke=\"currentColor\" stroke-width=\"3\"/></g></g><g data-part=\"cabeza\"><circle cx=\"60\" cy=\"38\" r=\"26\" fill=\"currentColor\"/></g></g>",
+      "parts": {
+        "pierna_izq": "50% 0%",
+        "pierna_der": "50% 0%",
+        "torso": null,
+        "brazo_izq": "50% 0%",
+        "brazo_der": "50% 0%",
+        "antebrazo_der": "50% 0%",
+        "cabeza": "50% 100%"
+      }
+    },
+    "boton": {
+      "id": "boton",
+      "name": "Boton de emergencia",
+      "width": 160,
+      "height": 160,
+      "svg": "<g><circle cx=\"80\" cy=\"88\" r=\"62\" fill=\"var(--accent)\" opacity=\"0\" data-part=\"destello\"/><rect x=\"14\" y=\"120\" width=\"132\" height=\"38\" rx=\"6\" fill=\"currentColor\"/><rect x=\"40\" y=\"108\" width=\"80\" height=\"14\" rx=\"4\" fill=\"currentColor\"/><g data-part=\"boton_rojo\"><path d=\"M46 108 L46 90 Q46 64 80 64 Q114 64 114 90 L114 108 Z\" fill=\"var(--accent)\"/></g><g data-part=\"tapa\"><path d=\"M34 108 L34 52 Q34 40 46 40 L114 40 Q126 40 126 52 L126 108\" fill=\"currentColor\" fill-opacity=\"0.2\" stroke=\"currentColor\" stroke-width=\"5\" stroke-linejoin=\"round\"/></g></g>",
+      "parts": {
+        "destello": null,
+        "boton_rojo": null,
+        "tapa": "0% 100%"
+      }
+    },
+    "reactor": {
+      "id": "reactor",
+      "name": "Reactor numero 4 en corte",
+      "width": 400,
+      "height": 400,
+      "svg": "<g><rect x=\"40\" y=\"110\" width=\"320\" height=\"286\" fill=\"currentColor\" opacity=\"0.18\"/><rect x=\"40\" y=\"110\" width=\"320\" height=\"286\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"10\"/><rect x=\"100\" y=\"150\" width=\"200\" height=\"190\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"6\"/><rect x=\"110\" y=\"160\" width=\"180\" height=\"170\" fill=\"var(--accent)\" opacity=\"0.3\" data-part=\"nucleo\"/><g data-part=\"cartel\"><rect x=\"150\" y=\"346\" width=\"100\" height=\"38\" rx=\"4\" fill=\"currentColor\"/><g fill=\"#f2f2f2\"><rect x=\"172\" y=\"354\" width=\"8\" height=\"22\" rx=\"2\"/><rect x=\"188\" y=\"354\" width=\"8\" height=\"22\" rx=\"2\"/><rect x=\"204\" y=\"354\" width=\"8\" height=\"22\" rx=\"2\"/><rect x=\"220\" y=\"354\" width=\"8\" height=\"22\" rx=\"2\"/></g></g><g data-part=\"tapa_superior\"><rect x=\"26\" y=\"78\" width=\"348\" height=\"32\" fill=\"currentColor\"/></g></g>",
+      "parts": {
+        "nucleo": null,
+        "cartel": null,
+        "tapa_superior": "0% 100%"
+      }
+    },
+    "barras_control": {
+      "id": "barras_control",
+      "name": "Barras de control",
+      "width": 180,
+      "height": 240,
+      "svg": "<g><g data-part=\"barra_1\"><rect x=\"12\" y=\"0\" width=\"16\" height=\"210\" rx=\"3\" fill=\"currentColor\"/><rect x=\"12\" y=\"210\" width=\"16\" height=\"30\" rx=\"3\" fill=\"var(--accent)\"/></g><g data-part=\"barra_2\"><rect x=\"47\" y=\"0\" width=\"16\" height=\"210\" rx=\"3\" fill=\"currentColor\"/><rect x=\"47\" y=\"210\" width=\"16\" height=\"30\" rx=\"3\" fill=\"var(--accent)\"/></g><g data-part=\"barra_3\"><rect x=\"82\" y=\"0\" width=\"16\" height=\"210\" rx=\"3\" fill=\"currentColor\"/><rect x=\"82\" y=\"210\" width=\"16\" height=\"30\" rx=\"3\" fill=\"var(--accent)\"/></g><g data-part=\"barra_4\"><rect x=\"117\" y=\"0\" width=\"16\" height=\"210\" rx=\"3\" fill=\"currentColor\"/><rect x=\"117\" y=\"210\" width=\"16\" height=\"30\" rx=\"3\" fill=\"var(--accent)\"/></g><g data-part=\"barra_5\"><rect x=\"152\" y=\"0\" width=\"16\" height=\"210\" rx=\"3\" fill=\"currentColor\"/><rect x=\"152\" y=\"210\" width=\"16\" height=\"30\" rx=\"3\" fill=\"var(--accent)\"/></g></g>",
+      "parts": {
+        "barra_1": null,
+        "barra_2": null,
+        "barra_3": null,
+        "barra_4": null,
+        "barra_5": null
+      }
+    }
+  },
+  "nav": [
+    {
+      "spec": {
+        "type": "nav_header",
+        "text": "Chernobyl: la prueba fatal",
+        "source": "script",
+        "label": "Capítulo 1 de 1 · El botón final"
+      },
+      "start": 0,
+      "end": 30.679999160766602
+    }
+  ],
+  "durationSeconds": 30.679999160766602,
+  "theme": {
+    "accent": "#6CC6FF",
+    "text": "#FFFFFF",
+    "textMuted": "rgba(230,244,255,0.78)",
+    "scrim": "rgba(0,4,12,0.61)",
+    "titleFont": "serif"
+  },
+  "locale": "es-AR",
+  "audioSrc": "https://pub-7f585887fbac46ecbdcd64457d2e646d.r2.dev/skaler-audio/4443658c-67cc-4ed9-9054-f9f6bd9b54a6-upload-1793384000559.mp3"
+}

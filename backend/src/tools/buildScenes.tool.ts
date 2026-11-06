@@ -53,10 +53,14 @@ interface RawFragment {
 // maximo un signo de puntuacion (una corrida de ".","!","?" cuenta como uno
 // solo, asi "..." no se parte en tres). El texto se preserva tal cual
 // (incluye espacios) para poder reconstruir el original sin tocar una sola
-// palabra.
+// palabra. Un "." "," o ":" entre dos digitos ("1.600", "3,5", "23:40") es parte del
+// numero, no un corte: antes "107.000" terminaba una escena en "107." y
+// la siguiente arrancaba con "000", y la cifra quedaba "1. 600" en el texto.
 function tokenizeFragments(fullText: string): RawFragment[] {
   const fragments: RawFragment[] = [];
-  const regex = /([^.!?;:,]+)([.!?]+|[;:,])?/g;
+  // ":" entre digitos tambien es parte del numero: la hora "23:40" se cortaba
+  // en "23:" | "40" y quedaba "23: 40" (y una frase que empezaba con "40").
+  const regex = /((?:[^.!?;:,]|(?<=\d)[.,:](?=\d))+)([.!?]+|[;:,])?/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(fullText)) !== null) {
     const text = match[1] ?? "";
@@ -212,23 +216,28 @@ export const buildScenesTool: ToolDefinition<BuildScenesInput, BuildScenesOutput
       throw new Error("El proyecto no tiene guion todavia");
     }
 
-    const fullText = ((script.content as { text?: string } | null)?.text) ?? "";
-    if (!fullText.trim()) {
-      throw new Error("El guion del proyecto esta vacio");
-    }
+    const scriptText = ((script.content as { text?: string } | null)?.text) ?? "";
 
     const { data: timeline } = await supabase
       .from("timelines")
       .select("content")
       .eq("video_project_id", video_project_id)
       .maybeSingle();
-    const timelineContent = timeline?.content as { words?: TranscribedWord[]; duration_seconds?: number } | null;
+    const timelineContent = timeline?.content as { words?: TranscribedWord[]; segments?: { text: string }[]; duration_seconds?: number } | null;
     const words = timelineContent?.words ?? [];
     const audioDurationSeconds = timelineContent?.duration_seconds;
     if (words.length === 0) {
       throw new Error(
         "Todavia no hay transcripcion (Whisper) para este proyecto -- corre generate_voice + transcribe_audio primero"
       );
+    }
+
+    // Audio subido a mano sin guion (o con un "." de relleno): la transcripcion
+    // hace de guion, y trae la puntuacion que hace falta para cortar escenas.
+    const transcript = (timelineContent?.segments ?? []).map((s) => s.text.trim()).join(" ");
+    const fullText = /\p{L}/u.test(scriptText) ? scriptText : transcript;
+    if (!/\p{L}/u.test(fullText)) {
+      throw new Error("El guion del proyecto esta vacio");
     }
 
     const clauses = splitIntoClauses(fullText);

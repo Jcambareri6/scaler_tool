@@ -12,12 +12,17 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { isAdmin } from "../lib/accounts.js";
+import { effectiveFormat } from "../lib/formats.js";
+import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
+import { directScenes } from "../director/managedSceneDirector.js";
+import { buildPhrases } from "../director/phrases.js";
 import type { ContentPolicy, JobStatus } from "../types/shared/typeShared.js";
 import type { GenerateVideoInput, GenerateVideoOutput } from "../tools/generateVideo.tool.js";
 import type { GenerateVoiceInput, GenerateVoiceOutput } from "../tools/generateVoice.tool.js";
 import type {
   TranscribeAudioInput,
   TranscribeAudioOutput,
+  TranscribedWord,
 } from "../tools/transcribeAudio.tool.js";
 import type { SearchStockInput, SearchStockOutput } from "../tools/searchStock.tool.js";
 import type {
@@ -29,10 +34,12 @@ import type {
   GenerateVisualContextOutput,
 } from "../tools/generateVisualContext.tool.js";
 import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/generateOverlay.tool.js";
+import type { PlanOverlaysInput, PlanOverlaysOutput } from "../tools/planOverlays.tool.js";
+import type { OverlaySpec } from "../types/shared/typeShared.js";
 import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
-import { buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
+import { buildSceneImagePrompts, buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
 
 export interface PipelineContext {
   userId: string;
@@ -273,6 +280,9 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // stock, que es lo que mas tarda) y al final se arman los prompts de
   // imagen, asi la extension los encuentra hechos.
   const flowOnly = project.visual_source === "flow";
+  // Formato todo animado (lib/formats.ts, solo admins): sin stock ni video
+  // con IA -- las escenas quedan sin visual y Remotion dibuja todo.
+  const animated = effectiveFormat(project.video_format, ctx.userId) === "animated";
   // Escenas a las que hay que buscarles visual: todas, salvo que se esten
   // conservando las que ya tienen (paso 4) -- esas no se tocan.
   const sceneRows = ((scenes ?? []) as SceneRow[]).filter((s) => !preservedVisuals?.has(s.id));
@@ -287,12 +297,14 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // que las 4 queries de cada escena (Fase 2, generate_stock_keywords) sean
   // coherentes entre si -- misma epoca, misma ubicacion, mismo tono.
   const sceneKeywords = new Map<string, string[]>();
-  if (sceneRows.length > 0 && !flowOnly && !aiOnly) {
+  let videoGenre: string | undefined;
+  if (sceneRows.length > 0 && !flowOnly && !aiOnly && !animated) {
     const contextResult = await runTool<GenerateVisualContextInput, GenerateVisualContextOutput>(
       "generate_visual_context",
       { full_text: scriptText, ...(videoTopic ? { video_topic: videoTopic } : {}) },
       toolCtx
     );
+    videoGenre = contextResult.visual_context.genre;
 
     // Generacion de las 4 queries POR ESCENA en orden SECUENCIAL -- a
     // diferencia del resto del loop (que corre en paralelo con
@@ -316,6 +328,81 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       );
       sceneKeywords.set(scene.id, keywordsResult.keywords);
       previousQueries = keywordsResult.keywords;
+    }
+  }
+
+  // Metricas animadas (contadores, barras, versus, linea de tiempo...): se
+  // eligen UNA vez con el guion completo para repartir el ritmo en todo el
+  // video (ver plan_overlays), y despues cada escena valida las suyas en
+  // modo estricto con generate_overlay. Un fallo aca nunca tira el video:
+  // las escenas quedan sin overlays. Se planifica sobre TODAS las escenas,
+  // tambien las conservadas con sus imagenes (Flow, "Regenerar"): esas no
+  // pasan por el loop de stock de abajo, asi que se validan aca mismo.
+  const allScenes = (scenes ?? []) as SceneRow[];
+  let plannedOverlays: Record<number, OverlaySpec[]> = {};
+  const validateOverlays = async (scene: SceneRow, sceneText: string): Promise<OverlaySpec[]> => {
+    // Cada overlay planificado se valida en modo estricto (texto literal del
+    // guion); el que no pasa se descarta solo, sin tirar la escena. `anchor`
+    // = donde cae el texto dentro de la escena, para que el render lo
+    // muestre cuando la narracion lo dice.
+    const valid: OverlaySpec[] = [];
+    for (const planned of plannedOverlays[scene.order] ?? []) {
+      try {
+        const { overlay } = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
+          "generate_overlay",
+          { scene_id: scene.id, script_text: sceneText, full_text: scriptText, overlay: planned },
+          toolCtx
+        );
+        const at = sceneText.toLowerCase().indexOf(overlay.text.toLowerCase());
+        valid.push({ ...overlay, anchor: at >= 0 && sceneText.length > 0 ? at / sceneText.length : 0 });
+      } catch (err) {
+        console.warn(`[pipeline] escena ${scene.order}: overlay descartado (${(err as Error).message})`);
+      }
+    }
+    return valid;
+  };
+  // Graficos animados: solo para admins mientras estan en prueba. En el
+  // formato animado no van encima de nada: los dibuja el director de escenas.
+  if (allScenes.length > 0 && project.overlays_enabled && !animated && isAdmin(ctx.userId)) {
+    await reportJobProgress(ctx.jobId, 28, "Eligiendo los gráficos animados...", { force: true });
+    try {
+      const plan = await runTool<PlanOverlaysInput, PlanOverlaysOutput>(
+        "plan_overlays",
+        {
+          scenes: allScenes.map((s) => ({
+            order: s.order,
+            text: ((s.content as { text?: string } | null)?.text) ?? "",
+            ...(() => {
+              const d = parseDurationSeconds((s.content as { duration?: unknown } | null)?.duration);
+              return d ? { duration_seconds: d } : {};
+            })(),
+          })),
+          ...(videoTopic ? { video_topic: videoTopic } : {}),
+          ...(videoGenre ? { genre: videoGenre } : {}),
+        },
+        toolCtx
+      );
+      plannedOverlays = plan.overlays;
+      // Nicho del video: decide la paleta por defecto mientras el canal no
+      // haya elegido la suya (ver lib/niches.ts). No frena el video si falla.
+      // overlay_storyboard: el plan del director (null con el planificador viejo).
+      const { error: nicheError } = await supabase
+        .from("video_projects")
+        .update({ niche: plan.niche, overlay_storyboard: plan.storyboard ?? null })
+        .eq("id", projectId);
+      if (nicheError) console.warn(`[pipeline] ${projectId}: no se pudo guardar el nicho:`, nicheError.message);
+    } catch (err) {
+      console.warn(`[pipeline] ${projectId}: no se pudieron planificar los overlays:`, err);
+    }
+
+    for (const scene of allScenes.filter((s) => preservedVisuals?.has(s.id))) {
+      const sceneText = ((scene.content as { text?: string } | null)?.text) ?? "";
+      const overlays = await validateOverlays(scene, sceneText);
+      const { error: overlaysError } = await supabase
+        .from("scenes")
+        .update({ content: { ...(scene.content ?? {}), overlays } })
+        .eq("id", scene.id);
+      if (overlaysError) throw new Error(overlaysError.message);
     }
   }
 
@@ -370,7 +457,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
 
     if (aiOnly) {
       aiScenes.push(scene);
-    } else if (!flowOnly) {
+    } else if (!flowOnly && !animated) {
       // exclude_keys: sin esto, la cascada de search_stock se corta en la
       // primera keyword que traiga CUALQUIER resultado no bloqueado, sin
       // saber si esos resultados ya estan gastados en otra escena de este
@@ -411,22 +498,22 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       }
     }
 
-    // Sin decision de producto todavia sobre que overlay corresponde a
-    // cada escena (queda fuera de esta fase) -- se valida "ninguno" para
-    // que el paso quede trazado sin inventar texto.
-    const overlayResult = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
-      "generate_overlay",
-      {
-        scene_id: scene.id,
-        script_text: sceneText,
-        overlay: { type: "ninguno", text: "", source: "script" },
-      },
-      toolCtx
-    );
+    const validOverlays = await validateOverlays(scene, sceneText);
+    const overlayResult = validOverlays[0]
+      ? { overlay: validOverlays[0] }
+      : await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
+          "generate_overlay",
+          {
+            scene_id: scene.id,
+            script_text: sceneText,
+            overlay: { type: "ninguno", text: "", source: "script" },
+          },
+          toolCtx
+        );
 
     const { error: sceneUpdateError } = await supabase
       .from("scenes")
-      .update({ content: { ...(scene.content ?? {}), overlay: overlayResult.overlay } })
+      .update({ content: { ...(scene.content ?? {}), overlay: overlayResult.overlay, overlays: validOverlays } })
       .eq("id", scene.id);
     if (sceneUpdateError) throw new Error(sceneUpdateError.message);
 
@@ -438,7 +525,7 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       await reportJobProgress(
         ctx.jobId,
         progress,
-        flowOnly || aiOnly
+        flowOnly || aiOnly || animated
           ? `Armando las escenas (${completedScenes}/${sceneRows.length})...`
           : `Buscando visuales (escena ${completedScenes}/${sceneRows.length})...`,
         { force: completedScenes === sceneRows.length }
@@ -476,6 +563,46 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     });
   }
 
+  if (flowOnly) {
+    // Los mismos prompts que arma "Cargar prompts del proyecto" en la
+    // extension (biblia visual + diseño del canal, por tramos). Un fallo
+    // no tira el video: las escenas quedan armadas y la extension vuelve a
+    // pedir los que falten.
+    await reportJobProgress(ctx.jobId, 85, "Armando los prompts de imagen para Flow...", { force: true });
+    try {
+      const prompts = await buildSceneImagePrompts({ scriptId: script.id, videoProjectId: projectId, userId: ctx.userId });
+      const failed = prompts.filter((p) => p.error).length;
+      if (failed) console.warn(`[pipeline] ${projectId}: ${failed} escenas sin prompt de imagen`);
+    } catch (err) {
+      console.warn(`[pipeline] ${projectId}: no se pudieron armar los prompts de imagen:`, err);
+    }
+  }
+
+  if (animated) {
+    await reportJobProgress(ctx.jobId, 60, "El director está armando las escenas...", { force: true });
+    const { data: timelineRow, error: timelineError } = await supabase
+      .from("timelines")
+      .select("content")
+      .eq("video_project_id", projectId)
+      .single();
+    if (timelineError) throw new Error(timelineError.message);
+    const words = (timelineRow.content as { words?: TranscribedWord[] } | null)?.words ?? [];
+    const phrases = buildPhrases(allScenes.map((s) => ((s.content as { text?: string } | null)?.text) ?? ""), words);
+    const animatedStyle = await resolveProjectStyle(projectId);
+    const animatedPlan = await directScenes({
+      phrases,
+      ...(animatedStyle ? { theme: animatedStyle.theme } : {}),
+      ...(videoTopic ? { videoTopic } : {}),
+      nav: { ...(await navHeaderContext(projectId)), locale: (await getChannelSettingsForProject(projectId)).channel_language },
+    });
+    if (!animatedPlan) throw new Error("El director de escenas no pudo armar el video");
+    const { error: planError } = await supabase
+      .from("video_projects")
+      .update({ animated_plan: animatedPlan, overlay_storyboard: animatedPlan.storyboard })
+      .eq("id", projectId);
+    if (planError) throw new Error(planError.message);
+  }
+
   await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
 
   // 7. Timeline resuelto (vuelve a leer la DB, ahora con escenas + assets +
@@ -489,7 +616,11 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
   // 8. Gate humano
   await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
     progress: 100,
-    progress_message: flowOnly ? "Escenas listas para cargar desde Flow" : "Listo para revisar el stock",
+    progress_message: flowOnly
+      ? "Escenas listas para cargar desde Flow"
+      : animated
+        ? "Escenas animadas listas para revisar"
+        : "Listo para revisar el stock",
   });
 }
 

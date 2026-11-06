@@ -1,0 +1,405 @@
+import Anthropic from "@anthropic-ai/sdk";
+import type { ToolDefinition } from "./tool.types.js";
+import { getActiveProvider } from "../lib/providers.js";
+import { withRetry } from "../lib/retry.js";
+import { fetchWithTimeout } from "../lib/http.js";
+import { providerApiError } from "../lib/errors.js";
+import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
+import { supportedOverlayIcons, supportedOverlayTypes } from "../lib/motion.js";
+import { getNiche, guessNiche, nicheIds } from "../lib/niches.js";
+import { callTool, directOverlays, type Storyboard, type Usage } from "../director/director.js";
+
+// Decide QUE metrica animada va en cada escena (contador, barras, versus,
+// linea de tiempo, ubicacion, capitulo, CTA), leyendo el guion completo de
+// una sola vez -- asi el ritmo se reparte en todo el video y no se repite
+// el mismo tipo escena tras escena. El render (motion/, Remotion) los
+// dibuja; generate_overlay valida despues que cada texto salga del guion.
+//
+// Patrones sacados de canales documentales tipo "¿Que pasaria si...?"
+// (ej. MAGNITUD): gancho con una cifra en los primeros segundos, cifras
+// con unidad como numero gigante con contador, comparaciones entre lugares
+// como barras, "X vs Y" como pantalla dividida, progresiones ("24 h... 30
+// h... 100 h", "hace 4.600 millones de años") como linea de tiempo,
+// capitulos ("Escenario 1") como title card, lugares como pin, y los
+// pedidos de like/suscripcion/comentario como CTA. Una metrica cada 20-40s.
+
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
+const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const LLM_TIMEOUT_MS = 180 * 1000;
+const MAX_OUTPUT_TOKENS = 32000;
+const MAX_SCRIPT_CHARS = 60000;
+// Segundos promedio entre overlays que se le pide al LLM.
+const TARGET_SECONDS_PER_OVERLAY = 25;
+const MAX_OVERLAYS_PER_SCENE = 3;
+
+// Que hace cada tipo (para el prompt). Solo se le ofrecen al LLM los que
+// tienen componente en motion/ (ver supportedOverlayTypes): el catalogo
+// crece por fases sin tocar este archivo.
+export const TYPE_GUIDE: Partial<Record<OverlayType, string>> = {
+  big_number: 'una cifra con unidad que impacta ("1.500 km por hora", "el 70% de las personas", "40.000 millones"). Se anima como contador. "label" = de que es la cifra.',
+  data_viz_single: 'comparacion de 2 a 5 valores de la misma magnitud (velocidad en distintas ciudades, poblacion de paises). Barras que crecen. "items" = [{label, text}] con el valor literal de cada uno. "label" = titulo del grafico.',
+  versus: 'exactamente 2 cosas enfrentadas ("huracanes de 300 km por hora" vs "más de 1,000 km por hora"). "items" = los 2 lados ({label: que es, text: su valor}); los dos con cifra o los dos sin cifra, nunca una cifra contra una frase. "text" = la conclusion o el titulo de la comparacion.',
+  timeline: 'progresion o hitos en orden (fechas, eras, etapas de un proceso). "items" = hitos en orden, 2 a 6 ({label: la fecha/etapa, text: que pasa}). "text" = titulo corto.',
+  location: 'cuando la narracion nos lleva a un lugar concreto ("Quito", "el Serengueti"). "text" = el lugar, "label" opcional = el dato del lugar.',
+  list: 'enumeracion de 2 a 5 cosas ("tres razones", "los sintomas son..."). "text" = el titulo de la lista, que nombra lo que se enumera (nunca un conector como "Peor todavía"), "items" = las entradas en orden ({label: "", text: la entrada, <= 6 palabras, que se entienda sola}).',
+  profile_card: 'cuando se presenta un protagonista (una especie, una persona, un objeto) con 2 a 4 datos clave. "text" = el nombre, "items" = los datos ({label: que dato, text: el valor}).',
+  myth_fact: 'cuando el guion desmiente una creencia ("muchos creen que... pero en realidad..."). "text" = el mito tal cual, "label" = la realidad tal cual. Los dos literales.',
+  scale_compare: 'analogia de tamaño o cantidad con un numero chico ("pesa como 3 autos", "10 veces más grande"). "text" = la frase con el numero. "icon" = el objeto que se repite, de la lista de iconos.',
+  line_chart: 'una tendencia en el tiempo con 3 o mas valores (temperatura por año, poblacion por decada, precio a lo largo de los años). Linea que se dibuja con los puntos marcados. "text" = titulo, "label" opcional = la fuente si el guion la nombra ("la NASA"), "items" = puntos en orden ({label: año o etapa, text: el valor con su cifra}).',
+  pivot_question: 'una pregunta que abre intriga antes de explicar algo ("¿por qué no frenó?", "¿y entonces qué pasó?"). Pocas: 1 a 3 en todo el video. "text" = la pregunta literal con sus signos ¿ ? (<= 8 palabras; si el guion no la escribe como pregunta, no uses pivot_question), "label" = la palabra clave de esa misma pregunta que se subraya.',
+  card_grid: 'muchos casos o ejemplos comparables a la vez (3 a 6: años, paises, especies) con un dato cada uno. Tarjetas que aparecen de a una. "text" = titulo, "items" = las tarjetas ({label: el caso, text: su dato}).',
+  scoreboard: 'un resultado o enfrentamiento entre dos con marcador ("ganó cuatro partidas a una", "3 a 1"). "text" = el contexto corto, "items" = exactamente 2 lados ({label: el nombre, text: su resultado}).',
+  strike_word: 'el narrador desmiente UNA palabra o idea corta ("parecía imposible... pero"). Se tacha en rojo. "text" = la palabra o frase desmentida (1 a 3 palabras). Si hay mito y realidad completos, mejor myth_fact.',
+  phrase_swap: 'dos frases cortas que se contraponen y la segunda corrige o da vuelta a la primera ("un talento que nadie entendía" -> "un punto ciego que tampoco"). "text" = la primera, "label" = la segunda; las dos literales.',
+  chapter_index: 'cuando el narrador anuncia las partes que vienen ("primero veremos..., después..., y al final..."). "text" = titulo corto, "items" = las partes en orden ({label: "", text: la parte, <= 5 palabras}).',
+  number_phrase: 'una proporcion o cifra que se entiende mejor dentro de su frase ("una vez de cada 10.000", "3 de cada 4 personas"). "text" = la frase con la cifra en numeros (<= 7 palabras). Si es solo una magnitud, mejor big_number.',
+  person_card: 'cuando se presenta a una persona real por su nombre y su rol ("el biólogo John McGeehan"). "text" = el nombre, "label" = el rol. Si hay 2 o mas datos de la persona, mejor profile_card.',
+  milestone: 'un hito fechado que sitúa el tramo en el tiempo sin interrumpir ("en 2018, el descubrimiento"). Chico, en una esquina. "text" = que paso (<= 3 palabras), "label" = la fecha o el año.',
+  subscribe_cta: 'igual que cta pero como tarjeta de YouTube con el cursor que toca Suscribirse y la campana. Para el pedido principal de suscripcion; usa uno solo de los dos por video.',
+  map_globe: 'cuando la narracion lleva a un PAIS o region del mundo y conviene ubicarlo en el planeta ("en Groenlandia", "llegaron a Perú"). Globo que gira hasta el lugar y lo resalta. "text" = el lugar literal, "label" opcional = su dato. "lat"/"lon" = coordenadas del lugar (no se muestran).',
+  map_marker: 'cuando importa DONDE queda algo mas chico (una ciudad, un epicentro, un sitio) o su distancia a otro lugar nombrado. Mapa plano que se acerca con una reticula. "text" = el lugar literal, "label" opcional = su dato literal (la distancia si el guion la dice), "lat"/"lon" = sus coordenadas; "ref" opcional = otro lugar NOMBRADO en el guion para ubicarlo ({name literal, lat, lon}). Usa location si el lugar no se puede ubicar en un mapa.',
+  layers_diagram: 'algo que se explica por CAPAS de arriba hacia abajo (corteza, manto y nucleo; capas de la atmosfera; capas de la piel), idealmente con sus medidas. Corte animado. "text" = titulo corto, "items" = las capas en orden de arriba a abajo ({text: el nombre de la capa, label: su medida o dato si el guion la dice, si no ""}).',
+  cycle_diagram: 'un proceso que se repite en CICLO (el ciclo del agua, un circulo vicioso, las etapas de una estrella que vuelven a empezar). Pasos en un circulo con una flecha que lo recorre. "text" = el nombre del ciclo (corto), "items" = 3 a 6 pasos en orden ({label: "", text: el paso, <= 3 palabras}).',
+  title_card: 'inicio de un capitulo/parte ("Escenario 1", "Pero hay algo peor") o la pregunta central del video al arrancar. Pocos: 2 a 5 en todo el video, solo donde de verdad cambia de parte. "text" = el titulo, "label" opcional = subtitulo. El numero de capitulo y la barra de progreso se agregan solos.',
+  rank_reveal: 'posicion en un top/ranking ("número 3", "el puesto 1"). "text" incluye el numero.',
+  lower_third: 'concepto, termino o nombre propio que conviene fijar en pantalla ("sesgo de confirmación", "fuerza de Coriolis"). "text" = el termino, "label" = su definicion corta del guion.',
+  badge: 'dato de estado que sigue valiendo un buen rato y conviene dejar fijo en una esquina ("un día dura / 1 año"). "text" = el valor corto, "label" = de que es.',
+  cta: 'cuando la narracion pide suscribirse, dar like o comentar ("suscríbete y activa la campana").',
+  kinetic_quote: 'una frase corta y contundente del guion que conviene que el espectador LEA, sin cifra (el remate de una idea, la revelacion, la pregunta que engancha: "ese día no terminaría nunca"). "text" = la frase, 4 a 8 palabras y como mucho 45 caracteres, que se entienda sola sin la voz (nunca cortada ni terminada en "que", "y", "de"). "label" = UNA palabra (dos como mucho) de esa misma frase que se resalta en color, la de mas peso ("nunca", no "no terminaría nunca"). Para los momentos fuertes, no para cualquier oracion.',
+};
+
+export function plannableTypes(): OverlayType[] {
+  const supported = new Set(supportedOverlayTypes());
+  return (Object.keys(TYPE_GUIDE) as OverlayType[]).filter((t) => supported.has(t));
+}
+
+export interface PlanOverlaysScene {
+  order: number;
+  text: string;
+  duration_seconds?: number;
+}
+
+export interface PlanOverlaysInput {
+  scenes: PlanOverlaysScene[];
+  video_topic?: string;
+  // Genero del video (de generate_visual_context si se corrio): ajusta que
+  // tipo de overlay conviene (finanzas: cifras/barras, historia: lineas de
+  // tiempo/lugares, top N: rank_reveal...).
+  genre?: string;
+}
+
+export interface PlanOverlaysOutput {
+  // order de la escena -> overlays (todavia sin validar contra el guion).
+  overlays: Record<number, OverlaySpec[]>;
+  source: "director" | "anthropic" | "openai" | "heuristic";
+  // Nicho del video (motion/niches.json): lo clasifica el LLM en la misma
+  // llamada; sin LLM, por palabras clave (guessNiche).
+  niche: string;
+  // Solo con el director: estructura y momentos (elegidos y descartados con
+  // el motivo), para revisar por que eligio cada grafico.
+  storyboard?: Storyboard;
+  // Tokens del planificador de respaldo (el director los guarda en storyboard.usage).
+  usage?: Usage;
+}
+
+function buildSystemPrompt(types: OverlayType[]): string {
+  return `Sos el motion designer de un canal de YouTube faceless de cualquier nicho (ciencia, animales, psicologia, finanzas, historia, curiosidades...). Sobre el video de stock/IA se superponen GRAFICOS ANIMADOS que refuerzan lo que dice la narracion. Te paso el guion dividido en escenas numeradas con su duracion. Elegi que graficos van en cada escena.
+
+TIPOS DISPONIBLES (usa el que mejor encaje con lo que se narra; no hay otros):
+${types.map((t) => `- ${t}: ${TYPE_GUIDE[t]}`).join("\n")}
+${types.includes("scale_compare") && supportedOverlayIcons().length ? `\nICONOS (campo "icon", solo scale_compare): ${supportedOverlayIcons().join(", ")}. Si ninguno representa el objeto, no uses scale_compare.\n` : ""}
+REGLAS ESTRICTAS:
+1. "text", "label" y cada items[].text / items[].label tienen que ser fragmentos COPIADOS LITERALMENTE del guion (mismas palabras, mismos numeros, misma forma de escribirlos). Nunca inventes, redondees, traduzcas ni reformules. Si no podes copiarlo literal, no lo pongas. items[].text tiene que estar en el texto de ESA escena.
+2. Textos cortos: text <= 6 palabras (salvo title_card y kinetic_quote <= 8), label <= 5 palabras, items[].label <= 3 palabras.
+3. Ritmo: aproximadamente un overlay cada ${TARGET_SECONDS_PER_OVERLAY} segundos de video en total, maximo ${MAX_OVERLAYS_PER_SCENE} por escena. Muchas escenas pueden no tener ninguno. Prioriza las cifras y comparaciones mas impactantes; la primera cifra fuerte del gancho siempre va.
+4. Si hay mas de un tipo disponible, varia: no repitas el mismo tipo tres veces seguidas si otro muestra mejor lo que se narra.
+5. Si un tramo no tiene nada que encaje con los tipos disponibles, no pongas nada: es mejor un grafico menos que uno forzado.
+6. Dentro de cada escena, lista los overlays en el orden en que se narran.
+${nicheIds().length ? `\nNICHO: ademas, clasifica el video entero en UNO de estos nichos (campo "niche", el id), segun de que trata el guion y no solo su titulo:\n${nicheIds().map((id) => `- ${id}: ${getNiche(id)!.name}`).join("\n")}` : ""}`;
+}
+
+function buildUserPrompt(input: PlanOverlaysInput): string {
+  const totalSeconds = input.scenes.reduce((sum, s) => sum + (s.duration_seconds ?? 0), 0);
+  const header = [
+    input.video_topic ? `Tema del video: ${input.video_topic}` : null,
+    input.genre ? `Genero: ${input.genre}` : null,
+    totalSeconds > 0
+      ? `Duracion total: ${Math.round(totalSeconds)}s -> apunta a unos ${Math.max(1, Math.round(totalSeconds / TARGET_SECONDS_PER_OVERLAY))} overlays en total.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  let budget = MAX_SCRIPT_CHARS;
+  const body: string[] = [];
+  for (const scene of input.scenes) {
+    const line = `[Escena ${scene.order}${scene.duration_seconds ? ` · ${Math.round(scene.duration_seconds)}s` : ""}]\n${scene.text.trim()}`;
+    if (line.length > budget) break;
+    budget -= line.length;
+    body.push(line);
+  }
+  return `${header}\n\nGUION POR ESCENAS:\n\n${body.join("\n\n")}`;
+}
+
+function returnOverlaysTool(types: OverlayType[]): Anthropic.Tool {
+  return {
+  name: "return_overlays",
+  description: "Devuelve los overlays elegidos, agrupados por numero de escena.",
+  input_schema: {
+    type: "object",
+    properties: {
+      scenes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            order: { type: "number", description: "Numero de escena" },
+            overlays: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: types },
+                  text: { type: "string" },
+                  label: { type: "string" },
+                  lat: { type: "number", description: "Solo mapas: latitud del lugar" },
+                  lon: { type: "number", description: "Solo mapas: longitud del lugar" },
+                  ref: {
+                    type: "object",
+                    description: "Solo map_marker: segundo lugar nombrado en el guion",
+                    properties: { name: { type: "string" }, lat: { type: "number" }, lon: { type: "number" } },
+                    required: ["name", "lat", "lon"],
+                  },
+                  ...(supportedOverlayIcons().length > 0
+                    ? { icon: { type: "string", enum: supportedOverlayIcons() } }
+                    : {}),
+                  items: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: { label: { type: "string" }, text: { type: "string" } },
+                      required: ["text"],
+                    },
+                  },
+                },
+                required: ["type", "text"],
+              },
+            },
+          },
+          required: ["order", "overlays"],
+        },
+      },
+      ...(nicheIds().length ? { niche: { type: "string", enum: nicheIds() } } : {}),
+    },
+    required: nicheIds().length ? ["scenes", "niche"] : ["scenes"],
+  },
+  };
+}
+
+interface RawPlan {
+  scenes: unknown[];
+  niche: string | null;
+  // Tokens por modelo (solo Claude): para saber cuanto cuesta cada video.
+  usage?: Usage;
+}
+
+function pickNiche(value: unknown): string | null {
+  return typeof value === "string" && getNiche(value) ? value : null;
+}
+
+async function planWithAnthropic(user: string, types: OverlayType[]): Promise<RawPlan | null> {
+  const provider = await getActiveProvider("anthropic");
+  if (!provider?.api_key) return null;
+  const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_ANTHROPIC_MODEL;
+  const client = new Anthropic({ apiKey: provider.api_key, timeout: LLM_TIMEOUT_MS });
+  // callTool: pide la herramienta forzada y, si el modelo la rechaza (Sonnet
+  // 5.5 / Opus 5.5 dan 400), la pide por prompt; y cuenta los tokens.
+  const usage: Usage = {};
+  const input = (await callTool(client, model, MAX_OUTPUT_TOKENS, buildSystemPrompt(types), returnOverlaysTool(types), user, usage)) as { scenes?: unknown; niche?: unknown } | undefined;
+  return { scenes: sceneList(input?.scenes), niche: pickNiche(input?.niche), usage };
+}
+
+// Claude a veces devuelve el array anidado como texto JSON (visto con
+// claude-sonnet-5: `scenes: "{\"scenes\":[...]}"`) en vez de un array --
+// sin esto el plan entero se perdia en silencio y el video salia sin
+// graficos. Acepta el array, el texto JSON y el objeto envuelto.
+function sceneList(value: unknown): unknown[] {
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return [];
+    }
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) v = (v as { scenes?: unknown }).scenes;
+  return Array.isArray(v) ? v : [];
+}
+
+async function planWithOpenAI(user: string, types: OverlayType[]): Promise<RawPlan | null> {
+  const provider = await getActiveProvider("openai");
+  if (!provider?.api_key) return null;
+  const model = (provider.configuration?.model as string | undefined) ?? DEFAULT_OPENAI_MODEL;
+
+  const data = await withRetry(async () => {
+    const response = await fetchWithTimeout(
+      OPENAI_CHAT_COMPLETIONS_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.api_key}` },
+        body: JSON.stringify({
+          model,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: `${buildSystemPrompt(types)}\n\nRespondé EXCLUSIVAMENTE con un objeto JSON { "scenes": [ { "order": number, "overlays": [ { "type": string, "text": string, "label"?: string, "items"?: [ { "label": string, "text": string } ], "icon"?: string } ] } ], "niche": string }.`,
+            },
+            { role: "user", content: user },
+          ],
+        }),
+      },
+      LLM_TIMEOUT_MS
+    );
+    if (!response.ok) {
+      throw providerApiError("OpenAI", response.status, await response.text(), [provider.api_key]);
+    }
+    return (await response.json()) as { choices: { message: { content: string | null } }[] };
+  });
+
+  const raw = data.choices[0]?.message.content;
+  if (!raw) return { scenes: [], niche: null };
+  try {
+    const parsed = JSON.parse(raw) as { scenes?: unknown; niche?: unknown };
+    return { scenes: sceneList(parsed.scenes), niche: pickNiche(parsed.niche) };
+  } catch {
+    return { scenes: [], niche: null };
+  }
+}
+
+export function toOverlaySpec(raw: unknown, types: OverlayType[]): OverlaySpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as { type?: unknown; text?: unknown; label?: unknown; items?: unknown; icon?: unknown; lat?: unknown; lon?: unknown; ref?: unknown };
+  if (typeof r.type !== "string" || !(types as string[]).includes(r.type)) return null;
+  if (typeof r.text !== "string" || !r.text.trim()) return null;
+  const items = Array.isArray(r.items)
+    ? r.items
+        .filter(
+          (i): i is { label?: string; text: string } =>
+            Boolean(i) && typeof (i as { text?: unknown }).text === "string"
+        )
+        // label opcional (entradas de una lista).
+        .map((i) => ({ label: typeof i.label === "string" ? i.label : "", text: i.text }))
+    : undefined;
+  return {
+    type: r.type as OverlayType,
+    text: r.text.trim(),
+    source: "script",
+    ...(typeof r.label === "string" && r.label.trim() ? { label: r.label.trim() } : {}),
+    ...(items?.length ? { items } : {}),
+    ...(typeof r.icon === "string" && r.icon ? { icon: r.icon } : {}),
+    // Mapas: generate_overlay valida rangos y descarta si falta.
+    ...(typeof r.lat === "number" && typeof r.lon === "number" ? { geo: { lat: r.lat, lon: r.lon } } : {}),
+    ...(r.ref && typeof r.ref === "object" ? { ref: r.ref as NonNullable<OverlaySpec["ref"]> } : {}),
+  };
+}
+
+// Sin LLM: toma las cifras con unidad de cada escena (las que el lector
+// "siente": km/h, %, años, millones...) como big_number, respetando el
+// ritmo de un overlay cada ~TARGET_SECONDS_PER_OVERLAY segundos.
+const NUMBER_WITH_UNIT =
+  /(?:US\$|\$|€)?\s?\d[\d.,]*\s?(?:%|por ciento|km\/h|km por hora|kil[oó]metros?|km|metros|m|cm|kg|toneladas|grados|°C?|horas|d[ií]as|años|meses|segundos|minutos|mil millones(?: de \p{L}+)?|millones(?: de \p{L}+)?|mil(?: \p{L}+)?|d[oó]lares|personas|veces)(?!\p{L})/giu;
+
+export function heuristicOverlays(scenes: PlanOverlaysScene[]): Record<number, OverlaySpec[]> {
+  const result: Record<number, OverlaySpec[]> = {};
+  let secondsSinceLast = TARGET_SECONDS_PER_OVERLAY;
+  for (const scene of scenes) {
+    const duration = scene.duration_seconds ?? 20;
+    const matches = [...scene.text.matchAll(NUMBER_WITH_UNIT)].map((m) => m[0].trim());
+    const perScene = Math.min(MAX_OVERLAYS_PER_SCENE, Math.floor((secondsSinceLast + duration) / TARGET_SECONDS_PER_OVERLAY));
+    const picked = [...new Set(matches)].slice(0, Math.max(0, perScene));
+    if (picked.length > 0) {
+      result[scene.order] = picked.map((text) => ({ type: "big_number", text, source: "script" }));
+      secondsSinceLast = 0;
+    } else {
+      secondsSinceLast += duration;
+    }
+  }
+  return result;
+}
+
+export const planOverlaysTool: ToolDefinition<PlanOverlaysInput, PlanOverlaysOutput> = {
+  name: "plan_overlays",
+  description:
+    "Lee el guion completo por escenas y elige las metricas animadas de cada una (contadores, barras, versus, linea de tiempo, ubicacion, capitulos, CTA). Claude primero, OpenAI de respaldo, heuristica sin LLM.",
+  parameters: {
+    type: "object",
+    properties: {
+      scenes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            order: { type: "number" },
+            text: { type: "string" },
+            duration_seconds: { type: "number" },
+          },
+          required: ["order", "text"],
+        },
+      },
+      video_topic: { type: "string" },
+      genre: { type: "string" },
+    },
+    required: ["scenes"],
+  },
+  async execute(input) {
+    const scenes = input.scenes.filter((s) => s.text?.trim());
+    const types = plannableTypes();
+    const fallbackNiche = guessNiche(`${input.video_topic ?? ""}\n${scenes.map((s) => s.text).join("\n")}`);
+    // Sin componentes instalados (motion/ ausente) no tiene sentido pedir nada.
+    if (scenes.length === 0 || types.length === 0) return { overlays: {}, source: "heuristic", niche: fallbackNiche };
+
+    // Primero el director (src/director): estructura, disenadores por
+    // capitulo y verificacion. Si falla o no devuelve nada, el planificador
+    // de una sola llamada de siempre.
+    try {
+      const directed = await directOverlays(scenes, input.video_topic, { types, typeGuide: TYPE_GUIDE, toSpec: toOverlaySpec });
+      if (directed) {
+        return { overlays: directed.overlays, source: "director", niche: directed.niche ?? fallbackNiche, storyboard: directed.storyboard };
+      }
+    } catch (err) {
+      console.warn("[plan_overlays] el director fallo, sigo con el planificador:", err);
+    }
+
+    const user = buildUserPrompt({ ...input, scenes });
+    let plan: RawPlan | null = null;
+    let source: PlanOverlaysOutput["source"] = "heuristic";
+    try {
+      plan = await planWithAnthropic(user, types);
+      if (plan) source = "anthropic";
+    } catch (err) {
+      console.warn("[plan_overlays] Claude fallo, probando OpenAI:", err);
+    }
+    if (!plan) {
+      try {
+        plan = await planWithOpenAI(user, types);
+        if (plan) source = "openai";
+      } catch (err) {
+        console.warn("[plan_overlays] OpenAI fallo, uso la heuristica:", err);
+      }
+    }
+    if (!plan) {
+      return { overlays: types.includes("big_number") ? heuristicOverlays(scenes) : {}, source: "heuristic", niche: fallbackNiche };
+    }
+
+    const overlays: Record<number, OverlaySpec[]> = {};
+    for (const entry of plan.scenes) {
+      const e = entry as { order?: unknown; overlays?: unknown };
+      if (typeof e.order !== "number" || !Array.isArray(e.overlays)) continue;
+      const specs = e.overlays.map((o) => toOverlaySpec(o, types)).filter((o): o is OverlaySpec => o !== null);
+      if (specs.length) overlays[e.order] = specs.slice(0, MAX_OVERLAYS_PER_SCENE);
+    }
+    return { overlays, source, niche: plan.niche ?? fallbackNiche, ...(plan.usage ? { usage: plan.usage } : {}) };
+  },
+};

@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { projectsService } from "@/services/projects.service";
 import { useAccount } from "@/lib/accountContext";
 import ScenePanel from "./ScenePanel";
 import SceneReplaceModal, { type ReplaceParams } from "./SceneReplaceModal";
-import type { Asset, Job, Scene } from "@/types";
+// Lazy: Remotion pesa ~400 kB y solo hace falta en esta pantalla.
+const OverlayLayer = lazy(() => import("./OverlayLayer"));
+import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
+import { captionChunks, type CaptionCue } from "@/lib/captions";
+import { CATALOG } from "@motion/catalog";
+import StylePicker from "./StylePicker";
 
 interface Props {
   projectId: string;
@@ -93,7 +98,12 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   // render, mostrados aca sincronizados con el mismo audio-clock (currentTime)
   // que ya maneja este componente, para que la revision del gate humano se
   // vea lo mas parecido posible al resultado final.
-  const [captionSegments, setCaptionSegments] = useState<{ text: string; start: number; end: number }[]>([]);
+  const [captionSegments, setCaptionSegments] = useState<CaptionCue[]>([]);
+  // Graficos animados que va a superponer el render, en vivo sobre el clip.
+  const [overlays, setOverlays] = useState<ProjectOverlays | null>(null);
+  // Paleta que se esta probando en el preview antes de guardarla (StylePicker).
+  const [previewPaletteKey, setPreviewPaletteKey] = useState<string | null>(null);
+  const [savingPalette, setSavingPalette] = useState(false);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +163,8 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       setCaptionSegments(segments);
       setLoading(false);
     });
+    // Aparte: si falla, la revision sigue igual, solo sin graficos.
+    projectsService.getOverlays(projectId).then(setOverlays).catch(() => setOverlays(null));
   }, [projectId]);
 
   // Solo Flow: las imagenes se cargan desde otra pestaña (Escenas ->
@@ -226,10 +238,34 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
 
   const activeSegment = segments[activeSegmentIndex] ?? null;
 
+  // Desenfoque del clip mientras hay un grafico que lo pide (capitulos,
+  // frases...): mismo valor del catalogo que usa ffmpeg en el render, en px
+  // a 1080p, escalado al alto real del player.
+  const playerBoxRef = useRef<HTMLDivElement>(null);
+  const backdropBlur = useMemo(() => {
+    if (!overlays?.enabled) return 0;
+    const active = overlays.overlays.find((o) => currentTime >= o.start && currentTime < o.end);
+    const px = active ? (CATALOG[active.spec.type]?.blur ?? 0) : 0;
+    return px * ((playerBoxRef.current?.clientHeight ?? 1080) / 1080);
+  }, [overlays, currentTime]);
+  // scale: el blur de CSS deja los bordes transparentes; agrandar apenas el
+  // clip los saca de cuadro (overflow-hidden del contenedor).
+  const mediaStyle = {
+    filter: backdropBlur > 0 ? `blur(${backdropBlur.toFixed(1)}px)` : "none",
+    transform: backdropBlur > 0 ? "scale(1.05)" : "none",
+    transition: "filter 0.3s ease, transform 0.3s ease",
+  };
+
   const activeCaption = useMemo(
     () => captionSegments.find((c) => currentTime >= c.start && currentTime < c.end) ?? null,
     [captionSegments, currentTime]
   );
+  // Con graficos animados, subtitulos palabra por palabra en el acento del
+  // canal (lo mismo que quema el render, ver backend lib/captions.ts).
+  const wordCaptions = Boolean(overlays?.enabled);
+  const chunks = useMemo(() => (wordCaptions ? captionChunks(captionSegments) : []), [wordCaptions, captionSegments]);
+  const activeChunk = wordCaptions ? (chunks.find((c) => currentTime >= c.start && currentTime < c.end) ?? null) : null;
+  const captionAccent = typeof overlays?.theme === "object" ? overlays.theme.accent : "#E8B65A";
 
   // El <video> sigue al segmento activo: cambia de fuente cuando el
   // playhead cruza a otro clip (sea de la misma escena completandola, o de
@@ -336,6 +372,25 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     })();
   };
 
+  // Guarda la paleta que se esta viendo: para el canal (videos siguientes
+  // incluidos) o solo para este video. Se relee el estilo para que el
+  // selector muestre de donde sale ahora.
+  const handleSavePalette = async (scope: "channel" | "video") => {
+    const key = previewPaletteKey ?? overlays?.style?.paletteKey;
+    if (!key) return;
+    setSavingPalette(true);
+    setError(null);
+    try {
+      await projectsService.setOverlayPalette(projectId, key, scope);
+      setOverlays(await projectsService.getOverlays(projectId));
+      setPreviewPaletteKey(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el estilo");
+    } finally {
+      setSavingPalette(false);
+    }
+  };
+
   const handleApprove = async () => {
     setApproving(true);
     setError(null);
@@ -369,6 +424,19 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
             : "Estos son los clips que el sistema eligió automáticamente para cada escena."}
         </p>
         {error && <p className="text-xs mt-2" style={{ color: "#f87171" }}>{error}</p>}
+        {overlays?.enabled && overlays.style && overlays.style.options.length > 0 && (
+          <StylePicker
+            key={overlays.style.paletteKey + overlays.style.source}
+            style={overlays.style}
+            activeKey={previewPaletteKey ?? overlays.style.paletteKey}
+            saving={savingPalette}
+            onPreview={(key, theme) => {
+              setPreviewPaletteKey(key);
+              setOverlays((prev) => (prev ? { ...prev, theme } : prev));
+            }}
+            onSave={handleSavePalette}
+          />
+        )}
       </div>
 
       <div className="flex-1 min-h-0 flex">
@@ -379,14 +447,15 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
               el ancho y empujaba la barra de abajo fuera de la vista. */}
           <div className="flex-1 min-h-0 flex items-center justify-center px-4 xl:px-6 py-2" style={{ containerType: "size" }}>
             <div
+              ref={playerBoxRef}
               className="relative rounded-2xl overflow-hidden flex items-center justify-center"
               style={{ aspectRatio: "16/9", width: "min(100%, 42rem, calc(100cqh * 16 / 9))", background: "#020408", border: "1px solid rgba(255,255,255,0.08)" }}
             >
               {activeSegment?.asset ? (
                 activeSegment.asset.type === "IMAGE" ? (
-                  <img key={activeSegment.asset.id} src={activeSegment.asset.storageKey} className="w-full h-full object-cover" alt="Visual de la escena" />
+                  <img key={activeSegment.asset.id} src={activeSegment.asset.storageKey} className="w-full h-full object-cover" style={mediaStyle} alt="Visual de la escena" />
                 ) : (
-                  <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" />
+                  <video ref={videoRef} muted playsInline loop className="w-full h-full object-cover" style={mediaStyle} />
                 )
               ) : (
                 <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>
@@ -394,10 +463,53 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
                 </p>
               )}
 
+              {overlays?.enabled && overlays.overlays.length > 0 && (
+                <Suspense fallback={null}>
+                  <OverlayLayer data={overlays} currentTime={currentTime} isPlaying={isPlaying} playbackRate={playbackRate} />
+                </Suspense>
+              )}
+              {overlays?.enabled && (overlays.nav?.length ?? 0) > 0 && (
+                <Suspense fallback={null}>
+                  <OverlayLayer
+                    data={{ ...overlays, overlays: overlays.nav! }}
+                    currentTime={currentTime}
+                    isPlaying={isPlaying}
+                    playbackRate={playbackRate}
+                  />
+                </Suspense>
+              )}
+
               {/* Preview de los subtitulos que van a quedar quemados en el
                   render final (ver render_video.tool.ts) -- mismo texto y
                   timing, solo que acá es una capa HTML en vez de pixeles. */}
-              {activeCaption && (
+              {activeChunk ? (
+                <div
+                  className="absolute left-0 right-0 flex justify-center px-[8%] pointer-events-none"
+                  style={{ bottom: "8.5%" }}
+                >
+                  <span
+                    className="text-center font-extrabold leading-tight"
+                    style={{
+                      fontFamily: "Arial, Helvetica, sans-serif",
+                      // Mismo tamano relativo que el .ass del render (5,8% del alto).
+                      fontSize: Math.max(12, (playerBoxRef.current?.clientHeight ?? 360) * 0.058),
+                      color: "#fff",
+                      textShadow: "0 0 3px #000, 0 0 3px #000, 0 2px 2px rgba(0,0,0,0.6)",
+                    }}
+                  >
+                    {activeChunk.words.map((w, i) => {
+                      const next = activeChunk.words[i + 1];
+                      const on = currentTime >= w.start && (!next || currentTime < next.start);
+                      return (
+                        <span key={i} style={on ? { color: captionAccent } : undefined}>
+                          {i > 0 ? " " : ""}
+                          {w.text}
+                        </span>
+                      );
+                    })}
+                  </span>
+                </div>
+              ) : !wordCaptions && activeCaption && (
                 <div
                   className="absolute left-0 right-0 flex justify-center px-6 pointer-events-none"
                   style={{ bottom: "8%" }}

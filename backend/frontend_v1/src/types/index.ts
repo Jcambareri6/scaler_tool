@@ -1,6 +1,64 @@
 export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "ERROR";
 
 export type VisualSource = "stock" | "ai" | "mixed" | "flow";
+// Formato del video (backend lib/formats.ts): "animated" = todo animado,
+// sin stock. Solo admins mientras se prueba.
+export type VideoFormat = "stock" | "animated";
+
+// Paleta de las metricas animadas segun el genero del video (ver
+// backend motion/src/theme.ts).
+export type OverlayTheme = "documental" | "ciencia" | "finanzas" | "historia" | "crimen" | "minimal";
+
+// Grafico animado ubicado en el tiempo del video (segundos absolutos), tal
+// como lo va a superponer el render (backend placeOverlays).
+export interface PlacedOverlay {
+  spec: {
+    type: string;
+    text: string;
+    label?: string;
+    items?: { label: string; text: string }[];
+    chapter?: number;
+    progress?: number;
+    icon?: string;
+  };
+  start: number;
+  end: number;
+}
+
+// Paleta de un nicho (backend/motion/niches.json), tal como la reciben los
+// componentes de motion/ como `theme`.
+export interface PaletteTheme {
+  accent: string;
+  text: string;
+  textMuted: string;
+  scrim: string;
+  titleFont: "serif" | "sans";
+}
+
+export interface OverlayStyle {
+  niche: string;
+  nicheName: string;
+  paletteKey: string;
+  paletteName: string;
+  // video: excepcion de este video; channel: la elegida para el canal;
+  // default: el canal todavia no eligio (se ofrece elegir en la revision).
+  source: "video" | "channel" | "default";
+  canSaveChannel: boolean;
+  options: { key: string; name: string; theme: PaletteTheme }[];
+}
+
+export interface ProjectOverlays {
+  enabled: boolean;
+  format?: VideoFormat;
+  theme: OverlayTheme | PaletteTheme;
+  locale: string;
+  overlays: PlacedOverlay[];
+  // Capa fija de arriba (canal · tema | capitulo), convive con los demas.
+  nav?: PlacedOverlay[];
+  // Formato todo animado: el plan del director y la voz (ver AnimatedPreview).
+  animated?: { scenes: unknown[]; components?: unknown; nav: unknown[]; durationSeconds: number; audioSrc: string | null } | null;
+  style: OverlayStyle | null;
+}
 
 export type RenderQuality = "720p" | "1080p";
 
@@ -19,8 +77,12 @@ export interface VideoProject {
   scriptStyleId?: string;
   voiceId?: string;
   visualSource: VisualSource;
+  videoFormat: VideoFormat;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
+  // Metricas animadas (contadores, barras, versus...) quemadas en el render.
+  overlaysEnabled: boolean;
+  overlayTheme: OverlayTheme;
   renderQuality: RenderQuality;
   // true si el proyecto ya desconto su video (re-renderizarlo no descuenta).
   renderCharged: boolean;
