@@ -19,7 +19,18 @@ export interface Phrase {
 const COMMA_MIN_WORDS = 6;
 
 export function buildPhrases(sceneTexts: string[], transcribed: TranscribedWord[]): Phrase[] {
-  const tokens = sceneTexts.flatMap((t) => tokenizeScript(t));
+  // Escenas ya guardadas con la hora partida ("23: 40", de antes del arreglo
+  // en build_scenes): se vuelve a unir para no cortar la frase en "23:".
+  // La hora tambien puede quedar partida ENTRE dos escenas ("A las 23:" | "40
+  // el vigia…"): salia la cita "40 el vigia Frederick Fleet".
+  const tokens = sceneTexts
+    .flatMap((t) => tokenizeScript(t.replace(/(\d):\s+(\d{2})\b/g, "$1:$2")))
+    .reduce<string[]>((acc, token) => {
+      const prev = acc[acc.length - 1];
+      if (prev && /^\d{1,2}:$/.test(prev) && /^\d{2}\b/.test(token)) acc[acc.length - 1] = prev + token;
+      else acc.push(token);
+      return acc;
+    }, []);
   if (tokens.length === 0) return [];
   const timings: TokenTiming[] = transcribed.length > 0 ? alignScriptTokens(tokens, transcribed) : estimate(tokens);
 

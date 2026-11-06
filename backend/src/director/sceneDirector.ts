@@ -111,6 +111,8 @@ export interface AnimatedPlan {
     scenes: { from: string; to: string; intent: string; idea: string; dropped: string[] }[];
     models: { director: string; designer: string };
     usage: Usage;
+    // Formato documental: escenas que rechazo el Revisor y por que.
+    revisor?: { escena: string; motivo: string }[];
     // Solo con Managed Agents: la sesion y su consumo.
     managed?: { session_id: string; usage: unknown };
   };

@@ -11,6 +11,9 @@ export interface DrawingComponent {
   svg: string;
   // Parte -> punto de giro CSS ("50% 0%") o null (el centro).
   parts: Record<string, string | null>;
+  // Formato documental: fraccion del alto que queda bajo el agua si flota
+  // (barco ~0.25, iceberg ~0.85). La da el director en objetos_nuevos.
+  calado?: number;
 }
 
 const MAX_SVG_CHARS = 14000;
@@ -18,7 +21,7 @@ const TAGS = new Set(["g", "path", "rect", "circle", "ellipse", "line", "polylin
 const ATTRS = new Set([
   "d", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry", "width", "height", "points",
   "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
-  "opacity", "fill-opacity", "stroke-opacity", "transform", "id", "data-pivot",
+  "opacity", "fill-opacity", "stroke-opacity", "transform", "id", "data-part", "data-pivot", "fill-rule", "clip-rule",
 ]);
 const COLOR = /^(none|currentColor|var\(--accent\)|#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%]+\))$/;
 const PIVOT = /^\d{1,3}% \d{1,3}%$/;
@@ -59,7 +62,8 @@ export function checkComponent(raw: Record<string, unknown>): DrawingComponent |
     const rest = attrs.replace(/([a-zA-Z0-9-]+)\s*=\s*"([^"]*)"/g, (_, attr: string, value: string) => {
       if (!ATTRS.has(attr)) throw new Error(`${id}: atributo no permitido "${attr}"`);
       if ((attr === "fill" || attr === "stroke") && !COLOR.test(value)) throw new Error(`${id}: color no permitido "${value}"`);
-      if (attr === "id") part = value;
+      // La parte llega como id (formato anterior) o data-part (dibujante documental).
+      if (attr === "id" || attr === "data-part") part = value;
       else if (attr === "data-pivot") pivot = value;
       else {
         if (attr === "transform") hasTransform = true;
