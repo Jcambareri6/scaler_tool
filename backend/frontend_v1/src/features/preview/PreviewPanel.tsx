@@ -646,7 +646,9 @@ export default function PreviewPanel({ projectId }: Props) {
 
   // Formato todo animado: no hay stock que revisar, se ve el video en vivo.
   if (job?.status === "AWAITING_STOCK_REVIEW" && animatedFormat) {
-    return <AnimatedPreview projectId={projectId} jobId={job.id} onApproved={setJob} />;
+    return (
+      <AnimatedPreview projectId={projectId} jobId={job.id} onApproved={setJob} onRegenerate={handleGenerate} regenerating={generating} />
+    );
   }
 
   if (job?.status === "AWAITING_STOCK_REVIEW") {
