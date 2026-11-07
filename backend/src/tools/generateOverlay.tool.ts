@@ -102,9 +102,13 @@ const CONECTOR_INICIAL = /^(peor|además|ademas|pero|y|o|entonces|mientras|tambi
 const MIN_PALABRAS_CITA = 4;
 const MAX_PALABRAS_CITA = 8;
 const MAX_CARACTERES_CITA = 45;
+const MAX_PALABRAS_TITULO = 8;
 const palabras = (t: string) => t.split(/\s+/).filter(Boolean);
 const terminaEnConector = (t: string) => CONECTORES.has((palabras(t).pop() ?? "").toLowerCase().replace(/[.,;:!?¿¡]/g, ""));
-const tieneCifra = (t: string | undefined) => /\d/.test(t ?? "");
+// Cifra en digitos o en letras: los guiones escriben "sesenta grados bajo
+// cero" y eso tambien es una cifra (se descartaba el big_number del gancho).
+const NUMERO_EN_LETRAS = /\b(cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieci\w+|veinte|veinti\w+|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|\w+cientos|mil|millones?|mill[oó]n|billones?|mitad|doble|triple)\b/i;
+const tieneCifra = (t: string | undefined) => /\d/.test(t ?? "") || NUMERO_EN_LETRAS.test(t ?? "");
 
 function legible(type: OverlayType, text: string, items: { label: string; text: string }[] | undefined, icon: string | undefined): void {
   if (type === "kinetic_quote") {
@@ -113,6 +117,9 @@ function legible(type: OverlayType, text: string, items: { label: string; text: 
   }
   if ((type === "kinetic_quote" || type === "pivot_question" || type === "title_card" || type === "list") && terminaEnConector(text)) throw new Error(`"${text}" termina en un conector: es una frase cortada`);
   if (type === "pivot_question" && !text.includes("?")) throw new Error(`pivot_question que no es una pregunta ("${text}")`);
+  // Un titulo es un nombre corto, no una oracion entera ("En la Tierra, los
+  // grandes pozos se refrigeran con lodos..." salio como titulo de lista).
+  if ((type === "title_card" || type === "list") && palabras(text).length > MAX_PALABRAS_TITULO) throw new Error(`titulo de ${palabras(text).length} palabras ("${text}"): tiene que ser un nombre corto`);
   if (type === "big_number" && !tieneCifra(text)) throw new Error(`big_number sin cifra ("${text}")`);
   if (type === "versus" && items?.length === 2 && tieneCifra(items[0]!.text) !== tieneCifra(items[1]!.text)) throw new Error("versus de una cifra contra una frase: no compara nada");
   if (type === "scale_compare" && !icon) throw new Error("scale_compare sin un icono de la lista: quedaria un circulo vacio");
@@ -235,7 +242,7 @@ export const generateOverlayTool: ToolDefinition<
     if (overlay.type === "phrase_swap" && !label) {
       throw new Error("phrase_swap sin label (la segunda frase) literal del guion — se descarta");
     }
-    if (overlay.type === "number_phrase" && !/\d/.test(text)) {
+    if (overlay.type === "number_phrase" && !tieneCifra(text)) {
       throw new Error("number_phrase sin cifra en el texto — se descarta");
     }
     if (overlay.type === "cycle_diagram" && items!.length < 3) {

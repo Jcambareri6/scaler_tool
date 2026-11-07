@@ -37,6 +37,13 @@ const MAX_PER_SCENE = 3;
 // las tarjetas de capitulo no cuentan, son estructura.
 const MAX_SECONDS_PER_OVERLAY = 15;
 const TARGET_SECONDS_PER_OVERLAY = 25;
+// El arranque decide si la gente se queda: los primeros HOOK_SECONDS llevan
+// un grafico cada ~HOOK_SECONDS_PER_OVERLAY (en Marte el primero salia en el
+// 2:33). Ahi la fatiga por recurso se relaja y el presupuesto no recorta.
+const HOOK_SECONDS = 90;
+const HOOK_SECONDS_PER_OVERLAY = 10;
+// Nunca mas de esto sin ningun grafico (habia un hueco de 3 minutos).
+const MAX_GAP_SECONDS = 60;
 
 export interface DirectorScene {
   order: number;
@@ -118,7 +125,11 @@ Trabaja en este orden:
 4. ASIGNACION: para cada momento elegi el recurso del manual que mejor resuelve esa intencion, respetando fatiga y topes, y variando: el mismo dato puede ir como cifra, comparacion o mapa segun lo que se quiere provocar. Solo pone un momento si el guion tiene el material literal para ese recurso (cifras, nombres, lugares, pasos).
 5. Para cada momento, en "why", una frase corta: que dice la voz y por que ese recurso.
 
-RITMO: apunta a un grafico cada ~${TARGET_SECONDS_PER_OVERLAY} segundos en total, maximo ${MAX_PER_SCENE} por escena. Al inicio de cada capitulo va un title_card (ponelo en los momentos).
+RITMO:
+- ARRANQUE (los primeros ${HOOK_SECONDS} segundos): es donde se decide si la gente se queda. Un grafico cada ~${HOOK_SECONDS_PER_OVERLAY} segundos, el primero en los primeros 5 segundos, con los recursos mas fuertes (intensidad 3: cifras que golpean, preguntas, comparaciones, mapas). En el arranque elegi SOLO momentos con material textual en esa escena: una frase que se pueda copiar entera, una pregunta tal como esta escrita, un lugar, un nombre, una cifra (en digitos o en letras). Nada que haya que resumir o inventar: eso se descarta.
+- RESTO DEL VIDEO: un grafico cada ~${TARGET_SECONDS_PER_OVERLAY} segundos, y NUNCA mas de ${MAX_GAP_SECONDS} segundos seguidos sin ninguno.
+- Maximo ${MAX_PER_SCENE} por escena. Al inicio de cada capitulo va un title_card (ponelo en los momentos).
+- Titulos (title_card, list): un nombre corto de 2 a 6 palabras, no una oracion entera.
 
 MANUAL (recurso: intenciones · intensidad · fatiga · cuando no):
 ${manualSummary(types)}
@@ -218,7 +229,10 @@ function applyRhythm(
     const t = starts.get(m.scene) ?? 0;
     const ficha = MANUAL[m.type];
     const last = lastAt.get(m.type);
-    if (ficha && last !== undefined && t - last < ficha.minGapSeconds && m.type !== "title_card") {
+    // En el arranque un mismo recurso puede volver mucho antes (un big_number
+    // a los 20 s del anterior se caia por fatiga de 50 s).
+    const minGap = ficha ? (t < HOOK_SECONDS ? Math.min(HOOK_SECONDS_PER_OVERLAY, ficha.minGapSeconds / 2) : ficha.minGapSeconds) : 0;
+    if (ficha && last !== undefined && t - last < minGap && m.type !== "title_card") {
       drop(m, `fatiga: ${m.type} repetido a ${Math.round(t - last)}s (minimo ${ficha.minGapSeconds}s)`);
       continue;
     }
@@ -243,11 +257,13 @@ function applyRhythm(
 
   // Presupuesto (sin contar capitulos): si se pasa, se sacan primero los de
   // menor intensidad fuera del gancho y el climax.
-  const max = Math.max(3, Math.ceil(totalSeconds / MAX_SECONDS_PER_OVERLAY));
+  // El arranque tiene su propio cupo (mas denso) y no se recorta.
+  const hook = Math.min(totalSeconds, HOOK_SECONDS);
+  const max = Math.max(3, Math.ceil(hook / HOOK_SECONDS_PER_OVERLAY) + Math.ceil(Math.max(0, totalSeconds - hook) / MAX_SECONDS_PER_OVERLAY));
   const kept = () => moments.filter((m) => m.status === "ok" && m.type !== "title_card");
   const candidates = kept()
     // El pedido de suscripcion tampoco: si el guion lo pide, va.
-    .filter((m) => m.type !== "title_card" && m.intent !== "pedir" && !protectedScenes.has(m.scene))
+    .filter((m) => m.type !== "title_card" && m.intent !== "pedir" && !protectedScenes.has(m.scene) && (starts.get(m.scene) ?? 0) >= HOOK_SECONDS)
     .sort((a, b) => a.intensity - b.intensity || b.scene - a.scene);
   while (kept().length > max && candidates.length > 0) {
     drop(candidates.shift()!, `presupuesto: mas de ${max} graficos para ${Math.round(totalSeconds)}s`);
@@ -378,7 +394,9 @@ export async function directOverlays(scenes: DirectorScene[], videoTopic: string
   // 1. Director.
   const header = [
     videoTopic ? `Tema del video: ${videoTopic}` : null,
-    totalSeconds > 0 ? `Duracion total: ${clock(totalSeconds)} -> unos ${Math.max(1, Math.round(totalSeconds / TARGET_SECONDS_PER_OVERLAY))} graficos en total.` : null,
+    totalSeconds > 0
+      ? `Duracion total: ${clock(totalSeconds)} -> unos ${Math.round(Math.min(totalSeconds, HOOK_SECONDS) / HOOK_SECONDS_PER_OVERLAY)} graficos en el arranque (primeros ${HOOK_SECONDS} s) y unos ${Math.max(1, Math.round(Math.max(0, totalSeconds - HOOK_SECONDS) / TARGET_SECONDS_PER_OVERLAY))} en el resto.`
+      : null,
   ]
     .filter(Boolean)
     .join("\n");
