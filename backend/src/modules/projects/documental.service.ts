@@ -61,9 +61,18 @@ export async function getProjectDocumental(req: Request, res: Response) {
         return [{ title: m.title ?? null, author: m.author ?? null, license: m.license ?? null, license_url: m.license_url ?? null, source: m.url ?? null, provider: m.provider ?? null }];
       });
     const needsAttribution = credits.filter((c) => c.license && /CC BY|Dominio|CC0|Licencia/.test(c.license) && c.provider !== "snapgen");
-    const creditsText = needsAttribution.length
-      ? ["Material de archivo:", ...needsAttribution.map((c) => `- ${[c.title, c.author].filter(Boolean).join(" — ")} (${c.license})${c.source ? ` ${c.source}` : ""}`)].join("\n")
-      : "";
+    const finalRenderMeta = (assets ?? [])
+      .filter((a) => !a.scene_id && (a.metadata as { kind?: string } | null)?.kind === "final_render")
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]?.metadata as
+      | { qc?: unknown; music?: { title: string; author: string | null; license: string; source_page: string | null } }
+      | undefined;
+    const music = finalRenderMeta?.music;
+    const creditsText = [
+      ...(needsAttribution.length
+        ? ["Material de archivo:", ...needsAttribution.map((c) => `- ${[c.title, c.author].filter(Boolean).join(" — ")} (${c.license})${c.source ? ` ${c.source}` : ""}`)]
+        : []),
+      ...(music ? ["", `Música: "${music.title}"${music.author ? ` — ${music.author}` : ""} (${music.license})${music.source_page ? ` ${music.source_page}` : ""}`] : []),
+    ].join("\n").trim();
 
     // Capitulos con su tiempo (el plano que abre cada capitulo).
     const chapterRows = projectScenes
@@ -79,10 +88,6 @@ export async function getProjectDocumental(req: Request, res: Response) {
     if (chapterRows[0]) chapterRows[0].start = 0;
     const chaptersText = chapterRows.map((c) => `${clock(c.start)} ${c.title}`).join("\n");
 
-    const finalRender = (assets ?? [])
-      .filter((a) => !a.scene_id && (a.metadata as { kind?: string } | null)?.kind === "final_render")
-      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
-
     res.json({
       style: project?.video_style ?? null,
       plan: project?.documental_plan ?? null,
@@ -90,7 +95,8 @@ export async function getProjectDocumental(req: Request, res: Response) {
       credits_text: creditsText,
       chapters: chapterRows,
       chapters_text: chaptersText,
-      qc: (finalRender?.metadata as { qc?: unknown } | null)?.qc ?? null,
+      qc: finalRenderMeta?.qc ?? null,
+      music: music ?? null,
     });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });

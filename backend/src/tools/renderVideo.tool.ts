@@ -68,6 +68,8 @@ export interface RenderVideoOutput {
   duration_seconds: number;
   // Formato documental: control de calidad del MP4 (negro, congelado, LUFS).
   qc?: RenderQc;
+  // Pista de musica usada (creditos).
+  music?: MusicCredit;
 }
 
 const RENDER_BUCKET = "renders";
@@ -407,11 +409,19 @@ function runFfmpegCapture(args: string[]): Promise<string> {
 // Musica del formato documental: una pista al azar del animo pedido en la
 // tabla music_library (cargada con scripts/seed-music.ts). Sin pistas o sin
 // la tabla, el video sale sin musica (con efectos igual).
-async function downloadMusic(mood: string, workDir: string): Promise<string | null> {
-  const { data, error } = await supabase.from("music_library").select("url").eq("mood", mood).limit(50);
+export interface MusicCredit {
+  title: string;
+  author: string | null;
+  license: string;
+  source_page: string | null;
+}
+
+async function downloadMusic(mood: string, workDir: string): Promise<{ path: string; credit: MusicCredit } | null> {
+  const columns = "url, title, author, license, source_page";
+  const { data, error } = await supabase.from("music_library").select(columns).eq("mood", mood).limit(50);
   let rows = data ?? [];
   if (!error && rows.length === 0) {
-    const fallback = await supabase.from("music_library").select("url").eq("mood", "documental").limit(50);
+    const fallback = await supabase.from("music_library").select(columns).eq("mood", "documental").limit(50);
     rows = fallback.data ?? [];
   }
   if (error || rows.length === 0) return null;
@@ -419,7 +429,15 @@ async function downloadMusic(mood: string, workDir: string): Promise<string | nu
   const musicPath = path.join(workDir, `music${path.extname(new URL(pick.url as string).pathname) || ".mp3"}`);
   try {
     await downloadTo(pick.url as string, musicPath);
-    return musicPath;
+    return {
+      path: musicPath,
+      credit: {
+        title: pick.title as string,
+        author: (pick.author as string | null) ?? null,
+        license: pick.license as string,
+        source_page: (pick.source_page as string | null) ?? null,
+      },
+    };
   } catch (err) {
     console.warn("[render_video] no se pudo bajar la musica:", err);
     return null;
@@ -1068,12 +1086,15 @@ async function realRender(
   const workDir = await makeWorkDir("skaler-render-");
   try {
     let audioPath = path.join(workDir, "narration.mp3");
+    let musicCredit: MusicCredit | undefined;
     await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
     if (documentalStyle) {
       // Voz + musica con ducking + efectos en la entrada de cada grafico, a -14 LUFS.
       await progress(PROGRESS_BATCHES_START - 1, "Mezclando la voz con la música y los efectos...", true);
-      const musicPath = await downloadMusic(documentalStyle.sound.mood, workDir);
+      const music = await downloadMusic(documentalStyle.sound.mood, workDir);
+      musicCredit = music?.credit;
+      const musicPath = music?.path ?? null;
       const mixPath = path.join(workDir, "mix.flac");
       try {
         await runFfmpeg(
@@ -1402,7 +1423,12 @@ async function realRender(
     }
     console.log(`[render_video] listo: ${publicUrl}`);
 
-    return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration), ...(qc ? { qc } : {}) };
+    return {
+      storage_key: publicUrl,
+      duration_seconds: Math.round(totalDuration),
+      ...(qc ? { qc } : {}),
+      ...(musicCredit ? { music: musicCredit } : {}),
+    };
   } finally {
     // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
     // solto un archivo que uso ffmpeg (visto en produccion) -- si esto
