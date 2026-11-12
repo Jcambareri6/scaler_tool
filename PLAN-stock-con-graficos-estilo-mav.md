@@ -343,7 +343,7 @@ menos de 3 minutos de interacción.
 |---|---|
 | Motor (F1–F7) con el estilo Documental | 20–23 |
 | Rediseño de UX (F9), en paralelo desde la semana 3 | 7–9 |
-| Resto de los estilos (F8): 12 estilos | 18–22 |
+| Resto de los estilos (F8): 11 estilos más | 18–22 |
 | **Total** | **~45–54 días** (unas 10–11 semanas) |
 
 ---
