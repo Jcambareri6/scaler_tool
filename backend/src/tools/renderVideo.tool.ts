@@ -41,6 +41,19 @@ import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
+import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
+import {
+  audioMixArgs,
+  lookFilter,
+  motionFor,
+  parseQc,
+  QC_FILTER_ARGS,
+  sfxCues,
+  zoomCutFilter,
+  zoompanExpr,
+  type Motion,
+  type RenderQc,
+} from "../lib/documentalRender.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -53,6 +66,8 @@ export interface RenderVideoInput {
 export interface RenderVideoOutput {
   storage_key: string;
   duration_seconds: number;
+  // Formato documental: control de calidad del MP4 (negro, congelado, LUFS).
+  qc?: RenderQc;
 }
 
 const RENDER_BUCKET = "renders";
@@ -195,7 +210,7 @@ interface TimelineContent {
   segments?: CaptionCue[];
 }
 
-interface RenderSegment {
+export interface RenderSegment {
   storageKey: string;
   start: number;
   end: number;
@@ -365,6 +380,52 @@ function runFfmpeg(args: string[], onTime?: (seconds: number) => void): Promise<
   });
 }
 
+// Como runFfmpeg pero devuelve lo que importa del stderr para el QC: las
+// lineas de blackdetect/freezedetect (pueden ser muchas) y el resumen final.
+function runFfmpegCapture(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
+      return;
+    }
+    const proc = spawn(ffmpegPath, ["-hide_banner", ...args]);
+    const events: string[] = [];
+    let tail = "";
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      for (const line of text.split("\n")) if (/black_start|freeze_/.test(line)) events.push(line);
+      tail = (tail + text).slice(-STDERR_TAIL_CHARS);
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve(`${events.join("\n")}\n${tail}`);
+      else reject(new Error(`ffmpeg salio con codigo ${code}: ${tail.slice(-1000)}`));
+    });
+  });
+}
+
+// Musica del formato documental: una pista al azar del animo pedido en la
+// tabla music_library (cargada con scripts/seed-music.ts). Sin pistas o sin
+// la tabla, el video sale sin musica (con efectos igual).
+async function downloadMusic(mood: string, workDir: string): Promise<string | null> {
+  const { data, error } = await supabase.from("music_library").select("url").eq("mood", mood).limit(50);
+  let rows = data ?? [];
+  if (!error && rows.length === 0) {
+    const fallback = await supabase.from("music_library").select("url").eq("mood", "documental").limit(50);
+    rows = fallback.data ?? [];
+  }
+  if (error || rows.length === 0) return null;
+  const pick = rows[Math.floor(Math.random() * rows.length)]!;
+  const musicPath = path.join(workDir, `music${path.extname(new URL(pick.url as string).pathname) || ".mp3"}`);
+  try {
+    await downloadTo(pick.url as string, musicPath);
+    return musicPath;
+  } catch (err) {
+    console.warn("[render_video] no se pudo bajar la musica:", err);
+    return null;
+  }
+}
+
 // Borra archivos intermedios apenas dejan de hacer falta en vez de esperar
 // al cleanup final del workDir -- con 190+ escenas, tener los clips
 // descargados + las 60+ tandas codificadas + assembled.mp4 + final.mp4 todos
@@ -452,12 +513,17 @@ const TRANSITION_DURATION_SECONDS = 0.5;
 // total (los streams se superponen en vez de sumarse), asi que la tanda sale
 // un poco mas corta que la suma de sus segmentos; ver batchDuration() y
 // assignSegmentDurations, que estira cada segmento para compensarlo.
-function buildFfmpegArgsForBatch(
+export function buildFfmpegArgsForBatch(
   batchSegments: RenderSegment[],
   batchClipPaths: string[],
   transitionsEnabled: boolean,
-  { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT }: OutputSize
+  { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT }: OutputSize,
+  // Formato documental: look del estilo, movimientos sin repetir y cortes de
+  // zoom (lib/documentalRender.ts). `firstIndex` = posicion global del primer
+  // segmento de la tanda (destello cada N planos, movimiento anterior).
+  documental: { style: DocumentalStyle; firstIndex: number } | null = null
 ): { inputArgs: string[]; filterComplex: string } {
+  let previousMotion: Motion | null = documental && documental.firstIndex > 0 ? motionFor(documental.firstIndex - 1, null) : null;
   const inputArgs: string[] = [];
   const filterParts: string[] = [];
   const durations: number[] = [];
@@ -499,15 +565,22 @@ function buildFfmpegArgsForBatch(
       // (on = numero de frame de salida) y centrado (x/y fijan la esquina de
       // la ventana para que el centro quede siempre en el centro).
       const zoomStep = (KEN_BURNS_MAX_ZOOM - 1) / Math.max(1, totalFrames - 1);
+      let zoomExpr = { z: `1+${zoomStep.toFixed(8)}*on`, x: "iw/2-(iw/zoom/2)", y: "ih/2-(ih/zoom/2)" };
+      if (documental) {
+        const motion = motionFor(documental.firstIndex + i, previousMotion);
+        previousMotion = motion;
+        zoomExpr = zoompanExpr(motion, totalFrames);
+      }
+      const look = documental ? `,${lookFilter(documental.style.look, documental.firstIndex + i)}` : "";
       filterParts.push(
         `[${i}:v]split=2[kbsrc${i}][kbfit${i}];` +
           `[kbsrc${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=bilinear,` +
           `crop=${upscaledWidth}:${upscaledHeight},boxblur=24:2[kbbg${i}];` +
           `[kbfit${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=decrease:flags=lanczos[kbfg${i}];` +
           `[kbbg${i}][kbfg${i}]overlay=(W-w)/2:(H-h)/2,` +
-          `zoompan=z='1+${zoomStep.toFixed(8)}*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+          `zoompan=z='${zoomExpr.z}':x='${zoomExpr.x}':y='${zoomExpr.y}'` +
           `:d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
-          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v${i}]`
+          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1${look}[v${i}]`
       );
     } else {
       inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
@@ -517,9 +590,16 @@ function buildFfmpegArgsForBatch(
       // arriba -- confirmado como la causa de la inconsistencia de nitidez
       // entre escenas de un mismo video (algunas vienen de clips de menor
       // resolucion que otras).
+      let docChain = "";
+      if (documental) {
+        previousMotion = null;
+        const every = documental.style.look.zoomCutEvery;
+        const cuts = every > 0 && duration > every * 1.5 ? `,${zoomCutFilter(every, { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT })}` : "";
+        docChain = `${cuts},${lookFilter(documental.style.look, documental.firstIndex + i)}`;
+      }
       filterParts.push(
         `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
-          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}[v${i}]`
+          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${docChain}[v${i}]`
       );
     }
   });
@@ -869,7 +949,9 @@ async function realRender(
   timelineId: string,
   jobId: string | undefined,
   // Graficos animados: solo para admins mientras estan en prueba.
-  overlaysAllowed: boolean
+  overlaysAllowed: boolean,
+  // Formato documental: estilo del preset (look, subtitulos, sonido).
+  documentalStyle: DocumentalStyle | null = null
 ): Promise<RenderVideoOutput> {
   const progress = (value: number, message: string, force = false) =>
     reportJobProgress(jobId, value, message, { force });
@@ -916,7 +998,9 @@ async function realRender(
     // ningun error visible en la UI.
     console.warn(`[render_video] no se pudo leer transitions_enabled/subtitles_enabled (¿se corrieron las migraciones?): ${projectError.message}`);
   }
-  const transitionsEnabled = Boolean(project?.transitions_enabled) && segments.length > 1;
+  // Documental: corte seco como regla (MaV); el ritmo lo dan los destellos y
+  // los cortes de zoom.
+  const transitionsEnabled = !documentalStyle && Boolean(project?.transitions_enabled) && segments.length > 1;
   const subtitlesEnabled = Boolean(project?.subtitles_enabled) && (content.segments?.length ?? 0) > 0;
 
   // Consulta aparte: si la migracion de overlays no se corrio, falla solo
@@ -929,7 +1013,8 @@ async function realRender(
   if (overlayOptionsError) {
     console.warn(`[render_video] no se pudo leer overlays_enabled (¿se corrio la migracion 20261028000000_video_overlays.sql?): ${overlayOptionsError.message}`);
   }
-  const overlaysOn = overlaysAllowed && Boolean(overlayOptions?.overlays_enabled);
+  // En el documental los graficos son parte del formato: siempre prendidos.
+  const overlaysOn = documentalStyle ? true : overlaysAllowed && Boolean(overlayOptions?.overlays_enabled);
   if (overlaysOn && !motionCatalog()) {
     console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
   }
@@ -982,9 +1067,30 @@ async function realRender(
   console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos, ${renderQuality})`);
   const workDir = await makeWorkDir("skaler-render-");
   try {
-    const audioPath = path.join(workDir, "narration.mp3");
+    let audioPath = path.join(workDir, "narration.mp3");
     await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
+    if (documentalStyle) {
+      // Voz + musica con ducking + efectos en la entrada de cada grafico, a -14 LUFS.
+      await progress(PROGRESS_BATCHES_START - 1, "Mezclando la voz con la música y los efectos...", true);
+      const musicPath = await downloadMusic(documentalStyle.sound.mood, workDir);
+      const mixPath = path.join(workDir, "mix.flac");
+      try {
+        await runFfmpeg(
+          audioMixArgs({
+            voicePath: audioPath,
+            musicPath,
+            duration: totalDuration + 1,
+            sound: documentalStyle.sound,
+            sfx: sfxCues(placedOverlays.map((o) => ({ start: o.start, type: o.spec.type }))),
+            outPath: mixPath,
+          })
+        );
+        audioPath = mixPath;
+      } catch (mixError) {
+        console.warn("[render_video] no se pudo mezclar musica/efectos, sigo con la voz sola:", mixError);
+      }
+    }
 
     // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
     // de codificacion real (se vuelve a reencodear al unir con xfade y/o al
@@ -1032,7 +1138,13 @@ async function realRender(
       });
       if (downloadError) throw downloadError;
 
-      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled, outputSize);
+      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(
+        batchSegments,
+        batchClipPaths,
+        transitionsEnabled,
+        outputSize,
+        documentalStyle ? { style: documentalStyle, firstIndex: batchStart } : null
+      );
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 
       console.log(`[render_video] corriendo ffmpeg (tanda ${b + 1}/${totalBatches}, ${batchSegments.length} segmentos)...`);
@@ -1093,6 +1205,7 @@ async function realRender(
             width: outputSize.width,
             height: outputSize.height,
             accent: (await resolveProjectStyle(videoProjectId))?.theme.accent ?? "#E8B65A",
+            ...(documentalStyle ? { documental: documentalStyle.captions } : {}),
           })
         : buildSrt(content.segments!);
       await writeFile(srtPath, subtitles, "utf-8");
@@ -1258,6 +1371,17 @@ async function realRender(
       }
     }
 
+    let qc: RenderQc | undefined;
+    if (documentalStyle) {
+      await progress(PROGRESS_UPLOAD - 1, "Revisando el video final (negro, congelado, volumen)...", true);
+      try {
+        qc = parseQc(await runFfmpegCapture(["-i", finalOutputPath, ...QC_FILTER_ARGS]));
+        if (qc.warnings.length) console.warn(`[render_video] QC: ${qc.warnings.join("; ")}`);
+      } catch (qcError) {
+        console.warn("[render_video] no se pudo revisar el video final:", qcError);
+      }
+    }
+
     console.log(`[render_video] ffmpeg listo, subiendo...`);
     await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
@@ -1278,7 +1402,7 @@ async function realRender(
     }
     console.log(`[render_video] listo: ${publicUrl}`);
 
-    return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration) };
+    return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration), ...(qc ? { qc } : {}) };
   } finally {
     // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
     // solto un archivo que uso ffmpeg (visto en produccion) -- si esto
@@ -1387,6 +1511,11 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
       .maybeSingle();
     if (effectiveFormat(formatRow?.video_format, ctx.userId) === "animated") {
       return renderAnimated(video_project_id, timeline_id, ctx.jobId);
+    }
+    const format = effectiveFormat(formatRow?.video_format, ctx.userId);
+    if (format === "documental") {
+      const { data: styleRow } = await supabase.from("video_projects").select("video_style").eq("id", video_project_id).maybeSingle();
+      return realRender(video_project_id, timeline_id, ctx.jobId, true, getDocumentalStyle(styleRow?.video_style));
     }
     return realRender(video_project_id, timeline_id, ctx.jobId, isAdmin(ctx.userId));
   },

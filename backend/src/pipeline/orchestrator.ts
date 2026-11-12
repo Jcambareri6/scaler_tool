@@ -692,7 +692,7 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
     scene_id: null,
     type: "VIDEO",
     storage_key: render.storage_key,
-    metadata: { kind: "final_render", duration_seconds: render.duration_seconds },
+    metadata: { kind: "final_render", duration_seconds: render.duration_seconds, ...(render.qc ? { qc: render.qc } : {}) },
   });
   if (assetError) throw new Error(assetError.message);
 

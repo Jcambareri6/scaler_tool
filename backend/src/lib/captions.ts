@@ -106,9 +106,18 @@ function assText(text: string): string {
 // no parpadea entre palabras.
 export function buildWordAss(
   cues: CaptionCue[],
-  opts: { width: number; height: number; accent: string; text?: string }
+  opts: {
+    width: number;
+    height: number;
+    accent: string;
+    text?: string;
+    // Estilo documental (lib/documentalStyles.ts): fuente, tamano a 1080p,
+    // palabras por tramo y mayusculas; sin resaltar la palabra actual.
+    documental?: { font: string; size: number; words: number; uppercase: boolean };
+  }
 ): string {
-  const fontSize = Math.round(opts.height * 0.058);
+  const doc = opts.documental;
+  const fontSize = doc ? Math.round((doc.size * opts.height) / 1080) : Math.round(opts.height * 0.058);
   const marginV = Math.round(opts.height * 0.085);
   const outline = Math.max(2, Math.round(opts.height / 360));
   const accent = assColor(opts.accent);
@@ -122,13 +131,21 @@ export function buildWordAss(
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Word,Arial,${fontSize},${assColor(opts.text ?? "#FFFFFF")},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outline},1,2,${Math.round(opts.width * 0.08)},${Math.round(opts.width * 0.08)},${marginV},1`,
+    `Style: Word,${doc?.font ?? "Arial"},${fontSize},${assColor(opts.text ?? "#FFFFFF")},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outline},1,2,${Math.round(opts.width * 0.08)},${Math.round(opts.width * 0.08)},${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
   ];
   const events: string[] = [];
-  for (const chunk of captionChunks(cues)) {
+  const shown = (t: string) => assText(doc?.uppercase ? t.toUpperCase() : t);
+  for (const chunk of captionChunks(cues, doc?.words ?? WORDS_PER_CHUNK)) {
+    if (doc) {
+      // Documental: el tramo entero en blanco, sin palabra resaltada.
+      if (chunk.end > chunk.start) {
+        events.push(`Dialogue: 0,${assTime(chunk.start)},${assTime(chunk.end)},Word,,0,0,0,,${chunk.words.map((w) => shown(w.text)).join(" ")}`);
+      }
+      continue;
+    }
     chunk.words.forEach((word, i) => {
       const start = i === 0 ? chunk.start : word.start;
       const end = i === chunk.words.length - 1 ? chunk.end : chunk.words[i + 1]!.start;
