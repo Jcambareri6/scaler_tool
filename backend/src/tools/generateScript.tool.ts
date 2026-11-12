@@ -8,6 +8,8 @@ import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { supabase } from "../lib/supabase.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { MAX_SCRIPT_CHARS } from "../lib/scriptLimits.js";
+import { effectiveFormat } from "../lib/formats.js";
+import { getDocumentalStyle } from "../lib/documentalStyles.js";
 
 // Un guion completo (hasta MAX_OUTPUT_TOKENS) puede tardar bastante mas que
 // una llamada de chat corta -- 30s (el default de fetchWithTimeout) cortaria
@@ -87,6 +89,16 @@ El JSON debe tener esta forma exacta:
 // Va al final del system prompt para que pise tanto la regla generica
 // ("mismo idioma que la idea") como el idioma que asuma el Prompt Maestro
 // (que suele estar escrito en el idioma de los guiones de referencia).
+// Formato documental (solo admins): el guion sigue el esqueleto y el tono del
+// estilo elegido (lib/documentalStyles.ts), y nombra personas, lugares, fechas
+// y cifras concretas, porque el montajista busca material real de cada uno.
+async function documentalInstruction(projectId: string, userId: string): Promise<string> {
+  const { data } = await supabase.from("video_projects").select("video_format, video_style").eq("id", projectId).maybeSingle();
+  if (effectiveFormat(data?.video_format, userId) !== "documental") return "";
+  const style = getDocumentalStyle(data?.video_style);
+  return `\n\nFORMATO DOCUMENTAL (${style.name}): ${style.script.tone}\nEstructura: ${style.script.skeleton}\nNombra siempre a las personas, lugares, objetos, fechas y cifras concretas (el video muestra material real de cada uno). Frases claras de 8 a 25 palabras.`;
+}
+
 function buildLanguageInstruction(language?: string): string {
   const trimmed = language?.trim();
   if (!trimmed) return "";
@@ -469,6 +481,7 @@ export const generateScriptTool: ToolDefinition<
     const channel = await getChannelSettingsForProject(video_project_id);
     systemPrompt += buildNarrationStyleInstruction(channel.narration_style);
     systemPrompt += buildLanguageInstruction(input.language?.trim() || channel.channel_language || undefined);
+    systemPrompt += await documentalInstruction(video_project_id, ctx.userId);
 
     const generated =
       provider === "openai"

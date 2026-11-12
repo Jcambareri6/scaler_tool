@@ -43,7 +43,8 @@ export async function getProjectOverlays(req: Request, res: Response) {
     const animatedPlan = project?.animated_plan as { scenes: unknown[]; nav: unknown[]; durationSeconds: number } | null;
     // Graficos animados: solo para admins mientras estan en prueba.
     const format = effectiveFormat(project?.video_format, userId);
-    const enabled = (Boolean(project?.overlays_enabled) || format === "animated") && isAdmin(userId);
+    // En el documental los graficos son parte del formato.
+    const enabled = (Boolean(project?.overlays_enabled) || format === "animated" || format === "documental") && isAdmin(userId);
     const overlays = enabled ? placeOverlays(scenes) : [];
     const channelLanguage = (await getChannelSettingsForProject(access.id)).channel_language;
     const locale = numberLocale(channelLanguage);
