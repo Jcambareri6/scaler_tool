@@ -11,6 +11,7 @@ import { reportJobProgress } from "../lib/jobProgress.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
+import { mirrorTimelineVisuals } from "../lib/mirrorAssets.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
@@ -640,6 +641,19 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
   // (100 de la fase anterior) -- se resetea para que el polling del
   // frontend no muestre "100%" mientras FFmpeg todavia esta trabajando.
   await reportJobProgress(ctx.jobId, 10, "Preparando el render...", { force: true });
+
+  // Copia propia (R2) de los visuales que todavia viven en servidores ajenos,
+  // antes de renderizar: asi un re-render no depende de que la URL del
+  // proveedor siga viva. Un fallo de copia no frena el render.
+  await reportJobProgress(ctx.jobId, 10, "Guardando una copia de los clips...", { force: true });
+  try {
+    const mirror = await mirrorTimelineVisuals(projectId, timeline.id);
+    if (mirror.mirrored || mirror.failed) {
+      console.log(`[pipeline] ${projectId}: ${mirror.mirrored} visuales copiados a R2, ${mirror.failed} fallidos`);
+    }
+  } catch (mirrorError) {
+    console.warn(`[pipeline] ${projectId}: no se pudieron copiar los visuales, se renderiza con las URLs originales:`, mirrorError);
+  }
 
   const render = await runTool<RenderVideoInput, RenderVideoOutput>(
     "render_video",

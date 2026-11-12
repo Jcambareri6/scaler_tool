@@ -56,6 +56,17 @@ export interface RenderVideoOutput {
 }
 
 const RENDER_BUCKET = "renders";
+
+// Cada render se guarda como una version nueva (no pisa el anterior): asi se
+// puede volver a un render previo, y el front muestra el mas reciente (el
+// final_render de created_at mas nuevo). Timestamp ordenable, sin ":".
+export function renderVersion(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+export function renderKey(videoProjectId: string, version: string): string {
+  return `skaler-renders/${videoProjectId}/${version}.mp4`;
+}
 // 720p/30fps: suficiente calidad para revisar, mantiene los tiempos de
 // render razonables (el clip mas lento en esto es descargar+codificar, no
 // la resolucion).
@@ -266,7 +277,8 @@ async function uploadRenderToCloudinary(
   outputPath: string,
   cloudName: string,
   apiKey: string,
-  apiSecret: string
+  apiSecret: string,
+  version: string
 ): Promise<string> {
   cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
   // uploader.upload (sin _large) rechaza con 413 "Payload Too Large" para
@@ -286,7 +298,7 @@ async function uploadRenderToCloudinary(
       {
         resource_type: "video",
         folder: "skaler-renders",
-        public_id: videoProjectId,
+        public_id: `${videoProjectId}-${version}`,
         overwrite: true,
         timeout: CLOUDINARY_UPLOAD_TIMEOUT_MS,
       },
@@ -300,13 +312,13 @@ async function uploadRenderToCloudinary(
   return result.secure_url;
 }
 
-async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buffer): Promise<string> {
+async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buffer, version: string): Promise<string> {
   const { error: bucketError } = await supabase.storage.createBucket(RENDER_BUCKET, { public: true });
   if (bucketError && !/already exists/i.test(bucketError.message)) {
     throw new Error(bucketError.message);
   }
 
-  const renderPath = `${videoProjectId}.mp4`;
+  const renderPath = `${videoProjectId}/${version}.mp4`;
   const { error: uploadError } = await supabase.storage
     .from(RENDER_BUCKET)
     .upload(renderPath, outputBuffer, { contentType: "video/mp4", upsert: true });
@@ -1249,19 +1261,20 @@ async function realRender(
     console.log(`[render_video] ffmpeg listo, subiendo...`);
     await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
+    const version = renderVersion();
     if (r2) {
       publicUrl = await uploadFileToR2(
         finalOutputPath,
-        `skaler-renders/${videoProjectId}.mp4`,
+        renderKey(videoProjectId, version),
         "video/mp4",
         r2.config,
         r2.secretAccessKey
       );
     } else if (usingCloudinary && cloudName && cloudinaryApiKey && cloudinaryProvider?.api_key) {
-      publicUrl = await uploadRenderToCloudinary(videoProjectId, finalOutputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key);
+      publicUrl = await uploadRenderToCloudinary(videoProjectId, finalOutputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key, version);
     } else {
       const outputBuffer = await readFile(finalOutputPath);
-      publicUrl = await uploadRenderToSupabase(videoProjectId, outputBuffer);
+      publicUrl = await uploadRenderToSupabase(videoProjectId, outputBuffer, version);
     }
     console.log(`[render_video] listo: ${publicUrl}`);
 
@@ -1326,9 +1339,10 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
       }
     );
     if (jobId) await reportJobProgress(jobId, 92, "Subiendo el video...", { force: true });
+    const version = renderVersion();
     const publicUrl = r2
-      ? await uploadFileToR2(outPath, `skaler-renders/${videoProjectId}.mp4`, "video/mp4", r2.config, r2.secretAccessKey)
-      : await uploadRenderToSupabase(videoProjectId, await readFile(outPath));
+      ? await uploadFileToR2(outPath, renderKey(videoProjectId, version), "video/mp4", r2.config, r2.secretAccessKey)
+      : await uploadRenderToSupabase(videoProjectId, await readFile(outPath), version);
     return { storage_key: publicUrl, duration_seconds: Math.round(plan.durationSeconds) };
   } finally {
     try {
