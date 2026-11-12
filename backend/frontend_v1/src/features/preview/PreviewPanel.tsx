@@ -4,6 +4,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { mapJob } from "@/lib/mappers";
 import StockReviewPanel from "./StockReviewPanel";
 import AnimatedPreview from "./AnimatedPreview";
+import StyleGallery from "@/features/documental/StyleGallery";
+import DocumentalSummary from "@/features/documental/DocumentalSummary";
 import { useAccount } from "@/lib/accountContext";
 import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme, VideoFormat } from "@/types";
 
@@ -300,6 +302,10 @@ export default function PreviewPanel({ projectId }: Props) {
   const aiAllowed = !!account?.isAdmin;
   // Formatos nuevos: solo admins (el backend lo vuelve a chequear).
   const animatedFormat = aiAllowed && videoFormat === "animated";
+  // Documental con material real (solo admins): el montajista, los buscadores
+  // con licencia y el juez eligen cada plano; graficos siempre prendidos.
+  const documentalFormat = aiAllowed && videoFormat === "documental";
+  const [videoStyle, setVideoStyle] = useState<string>("documental");
   const [renderAsset, setRenderAsset] = useState<Asset | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
@@ -319,6 +325,7 @@ export default function PreviewPanel({ projectId }: Props) {
         setRenderQuality(p.renderQuality);
         setVisualSource(p.visualSource);
         setVideoFormat(p.videoFormat);
+        if (p.videoStyle) setVideoStyle(p.videoStyle);
       }
     });
   }, [projectId]);
@@ -421,6 +428,7 @@ export default function PreviewPanel({ projectId }: Props) {
       await projectsService.updateProject(projectId, {
         visualSource: source,
         videoFormat: aiAllowed ? videoFormat : "stock",
+        ...(documentalFormat ? { videoStyle } : {}),
         transitionsEnabled,
         subtitlesEnabled,
         overlaysEnabled,
@@ -468,7 +476,7 @@ export default function PreviewPanel({ projectId }: Props) {
           no usa stock: Remotion dibuja el video entero, asi que las
           opciones de visuales, transiciones y graficos no aplican. */}
       {aiAllowed && (
-        <div className="flex flex-col gap-1.5 w-full max-w-xs">
+        <div className={`flex flex-col gap-1.5 w-full ${documentalFormat ? "max-w-md" : "max-w-xs"}`}>
           <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
             Formato
           </span>
@@ -476,13 +484,14 @@ export default function PreviewPanel({ projectId }: Props) {
               (overlays_enabled): antes era solo el formato stock y habia que
               tildar aparte "Graficos animados", y se generaban videos sin
               ningun grafico creyendo que estaban activados. */}
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {(
               [
                 { value: "stock", label: "Solo stock" },
                 { value: "graficos", label: "Stock con gráficos" },
+                { value: "documental", label: "Documental" },
                 { value: "animated", label: "Todo animado" },
-              ] as { value: "stock" | "graficos" | "animated"; label: string }[]
+              ] as { value: "stock" | "graficos" | "documental" | "animated"; label: string }[]
             )
               // "Todo animado" todavia no esta listo: solo se ve donde
               // VITE_TODO_ANIMADO=on (local, para seguir probandolo).
@@ -491,12 +500,13 @@ export default function PreviewPanel({ projectId }: Props) {
               <button
                 key={opt.value}
                 onClick={() => {
-                  setVideoFormat(opt.value === "animated" ? "animated" : "stock");
-                  if (opt.value !== "animated") setOverlaysEnabled(opt.value === "graficos");
+                  setVideoFormat(opt.value === "animated" ? "animated" : opt.value === "documental" ? "documental" : "stock");
+                  if (opt.value !== "animated" && opt.value !== "documental") setOverlaysEnabled(opt.value === "graficos");
                 }}
+                aria-pressed={(animatedFormat ? "animated" : documentalFormat ? "documental" : overlaysEnabled ? "graficos" : "stock") === opt.value}
                 className="flex-1 text-xs font-medium py-2 rounded-lg transition-all duration-150"
                 style={
-                  (animatedFormat ? "animated" : overlaysEnabled ? "graficos" : "stock") === opt.value
+                  (animatedFormat ? "animated" : documentalFormat ? "documental" : overlaysEnabled ? "graficos" : "stock") === opt.value
                     ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.3)", color: "var(--foreground)" }
                     : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--muted-foreground)" }
                 }
@@ -505,6 +515,14 @@ export default function PreviewPanel({ projectId }: Props) {
               </button>
             ))}
           </div>
+          {documentalFormat && (
+            <div className="flex flex-col gap-2 mt-1">
+              <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
+                Material real con licencia (fotos de personas y lugares, archivo histórico y stock) elegido plano a plano, con tus gráficos animados encima, música y efectos. Elegí el estilo:
+              </p>
+              <StyleGallery value={videoStyle} onChange={setVideoStyle} compact />
+            </div>
+          )}
           {animatedFormat && (
             <p className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
               Sin stock: todo el video son gráficos animados. El render de este formato todavía está en construcción.
@@ -513,7 +531,7 @@ export default function PreviewPanel({ projectId }: Props) {
         </div>
       )}
 
-      {!animatedFormat && (
+      {!animatedFormat && !documentalFormat && (
       <div className="flex flex-col gap-1.5 w-full max-w-xs">
         <span className="text-[10px] font-medium uppercase tracking-widest" style={{ color: "var(--muted-foreground)" }}>
           Visuales
@@ -550,7 +568,7 @@ export default function PreviewPanel({ projectId }: Props) {
 
       {/* Fundido entre escenas en el render final -- ver
           render_video.tool.ts (video_projects.transitions_enabled). */}
-      {!animatedFormat && (
+      {!animatedFormat && !documentalFormat && (
       <label
         className="flex items-center justify-between gap-3 w-full max-w-xs px-3 py-2.5 rounded-lg cursor-pointer"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
@@ -591,7 +609,7 @@ export default function PreviewPanel({ projectId }: Props) {
           mientras estan en prueba; el backend lo vuelve a chequear. En el
           formato animado van siempre. */}
       {/* Se prenden con el modo "Stock con graficos" (arriba). */}
-      {aiAllowed && !animatedFormat && overlaysEnabled && (
+      {aiAllowed && !animatedFormat && !documentalFormat && overlaysEnabled && (
       <div
         className="flex flex-col gap-2 w-full max-w-xs px-3 py-2.5 rounded-lg"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
@@ -710,6 +728,7 @@ export default function PreviewPanel({ projectId }: Props) {
             </svg>
             <span className="text-sm font-medium">Video generado exitosamente</span>
           </div>
+          {documentalFormat && <DocumentalSummary projectId={projectId} refreshKey={renderAsset?.id} />}
           {renderSettings}
           <div className="flex gap-3">
             <button

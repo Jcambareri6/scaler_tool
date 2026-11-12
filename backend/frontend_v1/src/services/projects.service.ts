@@ -31,13 +31,16 @@ export const projectsService = {
     title: string,
     description?: string,
     scriptStyleId?: string | null,
-    workspaceId?: string
+    workspaceId?: string,
+    // Formato documental elegido al crear ("¿Qué video querés hacer?").
+    format?: { videoFormat: "stock" | "documental"; videoStyle?: string }
   ): Promise<VideoProject> {
     const row = await api.post<Parameters<typeof mapProject>[0]>("/projects", {
       title,
       description,
       ...(scriptStyleId !== undefined ? { script_style_id: scriptStyleId } : {}),
       ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      ...(format ? { video_format: format.videoFormat, ...(format.videoStyle ? { video_style: format.videoStyle } : {}) } : {}),
     });
     return mapProject(row);
   },
@@ -58,6 +61,7 @@ export const projectsService = {
     if (updates.voiceId !== undefined) body.voice_id = updates.voiceId || null;
     if (updates.visualSource !== undefined) body.visual_source = updates.visualSource;
     if (updates.videoFormat !== undefined) body.video_format = updates.videoFormat;
+    if (updates.videoStyle !== undefined) body.video_style = updates.videoStyle;
     if (updates.transitionsEnabled !== undefined) body.transitions_enabled = updates.transitionsEnabled;
     if (updates.subtitlesEnabled !== undefined) body.subtitles_enabled = updates.subtitlesEnabled;
     if (updates.overlaysEnabled !== undefined) body.overlays_enabled = updates.overlaysEnabled;
