@@ -206,8 +206,123 @@ Créditos en `assets.metadata` (`license`, `author`, `source_page`),
 - Copiar créditos y capítulos.
 - Informe de QC.
 
-**Total: ~20–23 días**, unos 7 menos que la v1, porque se reutilizan el hub,
-el verificador y el juez.
+**Motor (F1–F7): ~20–23 días**, unos 7 menos que la v1, porque se reutilizan
+el hub, el verificador y el juez.
+
+### F8 — Todos los estilos documentales de MaV, como datos · ~15–18 días
+Igual que en MaV, cada estilo es un **preset** (JSON validado con Zod, tabla
+`video_styles`), no un pipeline nuevo. El motor de F1–F7 lee el preset y ajusta
+cada paso.
+
+**Qué define un preset:**
+
+| Bloque | Qué define | Lo usa |
+|---|---|---|
+| `guion` | Esqueleto narrativo y % por bloque, tono, persona (1ª/2ª/3ª), marcas de capítulo | `generate_script` |
+| `plan` | Duración de plano por clase, clases preferidas, presupuesto de gráficos por minuto y % máximo | Montajista + verificador |
+| `fuentes` | Orden de la cadena por clase (por ejemplo, archivo antes que stock) y época | Spokes |
+| `graficos` | Componentes favoritos y prohibidos de `motion/`, paleta y tipografía | Montajista + render |
+| `look` | Gradación, viñeta, capa (old-movie, B/N), movimiento, cadencia de cortes de zoom | Render |
+| `transiciones` | Tipo y ritmo (seco, dissolve por capítulo, destello cada N) | Render |
+| `subtitulos` | Fuente, tamaño, palabras por línea, mayúsculas, posición | `captions.ts` |
+| `sonido` | Ánimo de la música, volumen, ducking, set de efectos | Mezcla |
+| `marco` | Capas fijas: banda, dossier, encabezado | Render (`motion/`) |
+
+**Los estilos y lo que necesita cada uno, además del motor:**
+
+| Estilo | Para qué temas | Qué tiene de propio | Pieza extra | Días |
+|---|---|---|---|---|
+| **Documental** | General, estilo plataforma | Metraje + personas + mapas + titulares, serif crema/dorado | — (es el de referencia del motor) | incluido |
+| **Clásico** | Archivo y biografías | Predominan las fotos reales, subtítulos tipo bold | — | 1 |
+| **Profundo** | Historia militar, espionaje, aviación, espacio | Archivo antes que stock, marco sobrio, mapas | archive.org con prioridad | 1–2 |
+| **Expediente** | Sucesos y misterios | Marco de informe, máquina de escribir, citas, fechas, titulares; transiciones de película | Componentes `expediente_marco` y `documento_maquina` en `motion/` | 2–3 |
+| **Nocturno** | Guerra y espías como tráiler | Archivo en B/N de época + escenas "dossier" | Capa B/N con grano + escenas dibujadas con tu **documental animado** (en vez del 3D de MaV) | 3 |
+| **Almanaque** | "Quién fue / qué fue" | Formato cromo, metraje sin texto, gradación por plantilla, pocos gráficos (1,2/min) | Componente `ficha_cromo` | 2 |
+| **Horizonte** | Demografía y economía | Series y pirámides con **datos reales**; gráficos hasta el 45 % | Tool `fetch_open_data` (Banco Mundial, ONU) + componente `piramide_poblacion` | 3 |
+| **Historia** | Imperios y dinastías | Óleos sepia generados con IA, "foto viva", mapas, fechas | Imagen IA con estilo fijo (SnapGen o Flow) + animación de imagen (SnapGen, según P2) | 2–3 |
+| **Leyenda** | Biografías de famosos | La voz de la persona en **citas reales** | Sin YouTube (P5): cita en pantalla sobre su foto + archive.org cuando haya. Con YouTube sería otra decisión legal | 2 |
+| **Mapa interactivo** | Geografía, rutas, guerras | El video entero es un mapa animado | Reusar `Ubicacion` / `map_*` de `motion/` como base continua, con el director de mapas en el Montajista | 3 |
+
+Orden recomendado después del Documental: **Clásico → Profundo → Expediente →
+Horizonte → Almanaque → Historia → Mapa interactivo → Nocturno → Leyenda**
+(primero los más baratos sobre el motor; al final los que necesitan piezas
+nuevas o decisiones legales).
+
+Cada estilo se da por listo cuando: preset validado, un video de prueba de
+3 minutos aprobado y una miniatura y un clip de muestra para la galería (F9).
+
+### F9 — UX: "¿Qué video querés hacer?" · ~7–9 días
+**Problema de hoy:**
+- El formato, las visuales, las transiciones, los subtítulos y la calidad se
+  eligen **al final**, en Preview, después del guion y la voz. Pero el estilo
+  cambia el guion, la voz, la música y las fuentes.
+- Las pestañas Guion / Escenas / Audio / Preview están todas abiertas a la vez,
+  sin un orden claro.
+- Con 10 estilos, un `<select>` no alcanza para elegir.
+
+**Flujo nuevo de creación (asistente de 4 pasos):**
+1. **Elegí el estilo:** galería de tarjetas agrupadas por intención
+   ("Historia y guerra", "Misterio y sucesos", "Biografías", "Datos y
+   economía", "Geografía"). Cada tarjeta muestra:
+   - un clip de muestra que se reproduce al pasar el mouse;
+   - "ideal para" y 3 temas de ejemplo;
+   - duración típica y costo estimado en créditos.
+
+   Se recomiendan 3 según el canal (nicho del workspace).
+2. **Contanos el tema:** campos adaptados al estilo. Leyenda pide la persona,
+   Horizonte el país y el indicador, Historia el imperio y la época. Se
+   mantienen las opciones de hoy: idea, tema, guion o transcripción.
+3. **Voz e idioma:** precargados del canal, con escucha previa.
+4. **Resumen y confirmación:** qué se va a generar, cuántos créditos cuesta,
+   tiempo estimado y botón "Crear video".
+
+**Espacio del proyecto:**
+- Las pestañas pasan a un **stepper** con estado:
+  Guion → Voz → Plan de planos → Revisión → Video final.
+- Cada paso muestra si está listo, en curso o bloqueado y por qué.
+- Las opciones técnicas (transiciones, calidad, subtítulos) quedan en
+  **"Avanzado"**, con los valores del estilo por defecto.
+- La revisión muestra los planos agrupados por capítulo, con el veredicto del
+  juez y acciones claras: aprobar, reemplazar, regenerar con indicación.
+
+**Fundamentos aplicados (para revisar cada pantalla):**
+
+| Principio | Cómo se aplica |
+|---|---|
+| Visibilidad del estado del sistema (Nielsen 1) | Stepper con estado, progreso por fase del job en lenguaje humano ("Buscando fotos de época, plano 34/120") |
+| Coincidencia con el mundo real (2) | Hablar de "estilo", "plano", "capítulo", "créditos"; nunca `visual_source`, `overlay`, `pre_render` |
+| Control y libertad (3) | Volver a cualquier paso, deshacer un reemplazo, cambiar de estilo antes de generar el plan |
+| Consistencia y estándares (4) | Mismo componente de tarjeta, botones y estados en todo el flujo; mismo vocabulario |
+| Prevención de errores (5) | Confirmar antes de gastar créditos; validar el largo del guion según el estilo; deshabilitar el render con planos rechazados, explicando por qué |
+| Reconocer antes que recordar (6) | Galería visual con muestras en vez de nombres; el estilo elegido siempre visible arriba |
+| Flexibilidad y eficiencia (7) | Estilo por defecto del canal, "repetir último estilo" y atajos para usuarios frecuentes; "Avanzado" para expertos |
+| Diseño estético y minimalista (8) | Divulgación progresiva: cada paso muestra solo lo que se decide en ese paso |
+| Ayudar a recuperarse de errores (9) | Mensajes con causa y acción ("La cuenta de voz no tiene saldo → Cargar saldo / Usar otra voz") |
+| Ayuda y documentación (10) | Ejemplos por estilo, tooltips cortos y un "¿Qué estilo me conviene?" |
+| Ley de Hick | Agrupar los 10 estilos en 5 categorías y destacar 3 recomendados |
+| Ley de Jakob | Asistente y galería como en las herramientas que el usuario ya conoce |
+| Umbral de Doherty | Respuesta visual en menos de 400 ms: esqueletos de carga y actualizaciones optimistas |
+| Gestalt (proximidad, región común) | Planos agrupados por capítulo; opciones relacionadas en un mismo bloque |
+| Accesibilidad (WCAG 2.2 AA) | Contraste ≥ 4,5:1, navegación por teclado en la galería y el stepper, foco visible, clips con alternativa estática |
+
+**Entregables:**
+- Wireframes de las 4 pantallas del asistente y del espacio del proyecto.
+- Prueba con 3–5 usuarios: ¿pueden crear un video sin ayuda?
+- Implementación sobre el diseño actual (tokens de `index.css`).
+
+**Listo cuando:** un usuario nuevo crea un video de un estilo sin ayuda en
+menos de 3 minutos de interacción.
+
+---
+
+## 4b. Calendario total
+
+| Bloque | Días |
+|---|---|
+| Motor (F1–F7) con el estilo Documental | 20–23 |
+| Rediseño de UX (F9), en paralelo desde la semana 3 | 7–9 |
+| Resto de los estilos (F8) | 15–18 |
+| **Total** | **~42–50 días** (unas 9–10 semanas) |
 
 ---
 
@@ -223,6 +338,10 @@ el verificador y el juez.
   cualquier caso.
 - **P4.** ¿Fotos **CC BY** con créditos en la descripción? (Recomendado: sí.)
 - **P5.** ¿Se confirma **no** usar metraje de YouTube? (Recomendado: no usarlo.)
+- **P7.** ¿Se confirma el orden de los estilos de F8, o hay alguno que tu
+  canal o tus clientes necesiten antes?
+- **P8.** ¿El formato **vertical 9:16** entra en cada estilo desde el
+  principio (como en MaV) o queda para después?
 - **P6.** ¿El Revisor de candidatos en **Sonnet** (calidad) o **Haiku**
   (costo)? Tu nota dice que con Sonnet el revisor del documental dejaba pasar
   escenas sin sentido; acá juzga fotos reales, que es más fácil.
