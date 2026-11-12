@@ -12,6 +12,7 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { mirrorTimelineVisuals } from "../lib/mirrorAssets.js";
+import { runDocumentalMontaje } from "./documentalPipeline.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
@@ -236,6 +237,31 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       })
       .eq("id", timelineAfterVoice.id);
     if (mergeError) throw new Error(mergeError.message);
+  }
+
+  // Formato documental (solo admins, lib/formats.ts): el montajista arma los
+  // planos y los buscadores + el juez eligen el material real. Reemplaza los
+  // pasos de escenas, keywords y stock en cascada de abajo.
+  if (effectiveFormat(project.video_format, ctx.userId) === "documental") {
+    await runDocumentalMontaje({
+      projectId,
+      userId: ctx.userId,
+      jobId: ctx.jobId,
+      scriptId: script.id,
+      scriptText,
+      words: transcription.words,
+      ...((project as { title?: string }).title ? { videoTopic: (project as { title?: string }).title! } : {}),
+      styleId: (project as { video_style?: string | null }).video_style ?? null,
+      ...(project.content_policy ? { contentPolicy: project.content_policy as ContentPolicy } : {}),
+      channelLanguage: (await getChannelSettingsForProject(projectId)).channel_language,
+    });
+    await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
+    await runTool<BuildTimelineInput, BuildTimelineOutput>("build_timeline", { video_project_id: projectId }, toolCtx);
+    await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
+      progress: 100,
+      progress_message: "Planos listos para revisar",
+    });
+    return;
   }
 
   // 4. Armar las escenas (LEEME seccion 5: recien ahora, con audio real +
