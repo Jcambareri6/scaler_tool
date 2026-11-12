@@ -209,7 +209,7 @@ Créditos en `assets.metadata` (`license`, `author`, `source_page`),
 **Motor (F1–F7): ~20–23 días**, unos 7 menos que la v1, porque se reutilizan
 el hub, el verificador y el juez.
 
-### F8 — Todos los estilos documentales de MaV, como datos · ~15–18 días
+### F8 — Todos los estilos documentales de MaV sin riesgo legal, como datos · ~18–22 días
 Igual que en MaV, cada estilo es un **preset** (JSON validado con Zod, tabla
 `video_styles`), no un pipeline nuevo. El motor de F1–F7 lee el preset y ajusta
 cada paso.
@@ -240,13 +240,35 @@ cada paso.
 | **Almanaque** | "Quién fue / qué fue" | Formato cromo, metraje sin texto, gradación por plantilla, pocos gráficos (1,2/min) | Componente `ficha_cromo` | 2 |
 | **Horizonte** | Demografía y economía | Series y pirámides con **datos reales**; gráficos hasta el 45 % | Tool `fetch_open_data` (Banco Mundial, ONU) + componente `piramide_poblacion` | 3 |
 | **Historia** | Imperios y dinastías | Óleos sepia generados con IA, "foto viva", mapas, fechas | Imagen IA con estilo fijo (SnapGen o Flow) + animación de imagen (SnapGen, según P2) | 2–3 |
-| **Leyenda** | Biografías de famosos | La voz de la persona en **citas reales** | Sin YouTube (P5): cita en pantalla sobre su foto + archive.org cuando haya. Con YouTube sería otra decisión legal | 2 |
 | **Mapa interactivo** | Geografía, rutas, guerras | El video entero es un mapa animado | Reusar `Ubicacion` / `map_*` de `motion/` como base continua, con el director de mapas en el Montajista | 3 |
+| **Locomotoras** (temático: trenes y máquinas) | Ingeniería, transporte, rutas | Plan + plantillas de trenes + mapas de rutas | Componentes `ruta_tren` y `ficha_maquina`; sirve de modelo para estilos temáticos por nicho | 2 |
+| **Collage** | Historia y cultura con estética de papel | Recortes de papel, hilo rojo, golpes y desgarros de papel como transición | Capa de textura de papel, transición `golpe_papel` y escenas collage en `motion/` (recortan las fotos con licencia) | 3 |
+| **Noticiero** | Actualidad contada como un parte de noticias | Banda de noticias, cronologías y titulares | Componente `banda_noticias`; **sin presentador IA** (avatar, fuera de alcance) y sin capturas de prensa (ver filtro legal) | 2 |
+
+#### Filtro legal: qué entra y qué no
+En MaV, varios estilos usan metraje y entrevistas descargados de YouTube. En
+Scaler, **todos los estilos usan solo fuentes con licencia**: stock (Pexels,
+Pixabay, Coverr), Commons/Openverse (PD, CC0, CC BY, CC BY-SA con crédito),
+Wikidata, archive.org (dominio público), datos abiertos e imagen o video IA
+propios. Con eso, la mayoría de los estilos de MaV se pueden replicar sin
+riesgo. Quedan **afuera**:
+
+| Estilo de MaV | Por qué queda afuera |
+|---|---|
+| **Leyenda** | Su esencia es la voz real de la persona famosa en **fragmentos de entrevistas de YouTube**: no hay versión con licencia que conserve lo que lo hace distinto |
+| **Cancha** | Biografías deportivas armadas con **entrevistas y jugadas** descargadas de YouTube; las imágenes de partidos tienen derechos de ligas y televisión |
+| Clases de plano **"metraje de YouTube"** y **"capturas de prensa"** (dentro de cualquier estilo) | Copyright del video y de las fotos de los medios. La clase `pagina` queda limitada a **Wikipedia** (CC BY-SA, con crédito) y sitios oficiales de dominio público |
+
+Otras reglas legales para todos los estilos:
+- Créditos automáticos obligatorios para CC BY / CC BY-SA.
+- Música solo de la biblioteca con licencia (o IA propia).
+- Fotos de personas solo de Commons o Wikidata con licencia libre.
+- Licencia comercial de Remotion si el equipo supera las 3 personas.
 
 Orden recomendado después del Documental: **Clásico → Profundo → Expediente →
-Horizonte → Almanaque → Historia → Mapa interactivo → Nocturno → Leyenda**
-(primero los más baratos sobre el motor; al final los que necesitan piezas
-nuevas o decisiones legales).
+Horizonte → Locomotoras → Almanaque → Noticiero → Historia → Mapa interactivo
+→ Collage → Nocturno** (primero los más baratos sobre el motor; al final los
+que necesitan piezas nuevas).
 
 Cada estilo se da por listo cuando: preset validado, un video de prueba de
 3 minutos aprobado y una miniatura y un clip de muestra para la galería (F9).
@@ -321,8 +343,8 @@ menos de 3 minutos de interacción.
 |---|---|
 | Motor (F1–F7) con el estilo Documental | 20–23 |
 | Rediseño de UX (F9), en paralelo desde la semana 3 | 7–9 |
-| Resto de los estilos (F8) | 15–18 |
-| **Total** | **~42–50 días** (unas 9–10 semanas) |
+| Resto de los estilos (F8): 12 estilos | 18–22 |
+| **Total** | **~45–54 días** (unas 10–11 semanas) |
 
 ---
 
