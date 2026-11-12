@@ -266,7 +266,10 @@ interface ArchiveFile {
 export async function searchArchiveVideos(query: string, year?: number): Promise<VisualCandidate[]> {
   // Solo dominio publico: la coleccion Prelinger (todo PD) o licencia PD/CC0 declarada.
   const yearFilter = year ? ` AND year:[${year - 8} TO ${year + 8}]` : "";
-  const q = `(${query}) AND mediatype:movies AND (collection:prelinger OR licenseurl:*publicdomain*)${yearFilter}`;
+  // Relevancia: la busqueda tiene que estar en el titulo o en los temas, no
+  // en cualquier parte de la descripcion (traia peliculas que solo la nombraban).
+  const terms = query.replace(/[()"]/g, " ").trim();
+  const q = `(title:(${terms}) OR subject:(${terms})) AND mediatype:movies AND (collection:prelinger OR licenseurl:*publicdomain*)${yearFilter}`;
   const params = new URLSearchParams({ q, rows: "8", output: "json" });
   params.append("fl[]", "identifier");
   params.append("fl[]", "title");

@@ -383,7 +383,9 @@ export function verifyPlan(
       if (shot.clase === "grafico") shot.clase = "ambiente";
       return;
     }
-    shot.clase = "grafico";
+    // El grafico va ENCIMA del plano: el plano conserva su clase (que se busca
+    // debajo). Solo si el montajista no dio ninguna, va sobre un ambiente.
+    if (shot.clase === "grafico") shot.clase = "ambiente";
     accepted.push({ start, end });
     graphicTime += end - start;
   });

@@ -23,12 +23,13 @@ RUN cd motion && npm run build && npm run ensure-browser
 FROM node:20-bookworm-slim
 # Fuentes para los subtitulos quemados (filtro `subtitles` de ffmpeg/libass,
 # ver renderVideo.tool.ts): el estilo pide Arial y fontconfig la resuelve a
-# Liberation Sans (misma metrica). Sin fuentes instaladas los subtitulos
+# Liberation Sans (misma metrica); el formato documental usa Roboto Condensed
+# (fonts-roboto). Sin fuentes instaladas los subtitulos
 # salen vacios o ffmpeg falla.
 # Las librerias lib* son las que necesita el Chrome Headless Shell de
 # Remotion (motion/); las fuentes de los graficos vienen en su bundle.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends fontconfig fonts-liberation ca-certificates \
+  && apt-get install -y --no-install-recommends fontconfig fonts-liberation fonts-roboto ca-certificates \
      libnss3 libdbus-1-3 libatk1.0-0 libgbm1 libasound2 libxrandr2 libxkbcommon0 libxfixes3 \
      libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 \
   && rm -rf /var/lib/apt/lists/*
