@@ -6,9 +6,12 @@ import { isAdmin } from "./accounts.js";
 // - "stock": stock o video con IA de base, con graficos animados opcionales
 //   encima (overlays_enabled).
 // - "animated": todo animado, sin stock: Remotion dibuja el video entero.
+// - "documental": material real con licencia elegido plano a plano por el
+//   montajista y el juez visual, con los graficos animados encima y el look
+//   del estilo (lib/documentalStyles.ts).
 // Para sumar un formato: agregarlo aca, al check de la migracion y al
 // selector del front (PreviewPanel).
-export const VIDEO_FORMATS = ["stock", "animated"] as const;
+export const VIDEO_FORMATS = ["stock", "animated", "documental"] as const;
 export type VideoFormat = (typeof VIDEO_FORMATS)[number];
 
 export function isVideoFormat(value: unknown): value is VideoFormat {

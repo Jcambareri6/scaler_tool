@@ -4,6 +4,8 @@ import { projectsService } from "@/services/projects.service";
 import { scriptStylesService } from "@/services/scriptStyles.service";
 import { workspacesService, type ChannelSettings } from "@/services/workspaces.service";
 import type { ScriptStyle, Workspace } from "@/types";
+import { useAccount } from "@/lib/accountContext";
+import StyleGallery from "@/features/documental/StyleGallery";
 
 const starters = [
   { label: "Una idea", icon: "💡", placeholder: "Quiero crear un video sobre..." },
@@ -27,6 +29,13 @@ export default function NewProjectPage() {
   // Plantilla del canal del workspace elegido: preselecciona su estilo de
   // narracion (la voz y el idioma los aplica el backend / el panel de guion).
   const [channel, setChannel] = useState<ChannelSettings | null>(null);
+  // "¿Que video queres hacer?": el formato se elige primero porque cambia el
+  // guion, las fuentes, la musica y el look. Documental: solo admins.
+  const { account } = useAccount();
+  const isAdmin = !!account?.isAdmin;
+  // Mientras el cliente prueba, el unico formato que se ofrece es Documental.
+  const [kind, setKind] = useState<"estandar" | "documental">("documental");
+  const [documentalStyle, setDocumentalStyle] = useState("documental");
 
   useEffect(() => {
     scriptStylesService.list().then(setStyles).catch(() => setStyles([]));
@@ -73,7 +82,8 @@ export default function NewProjectPage() {
         content.trim() || undefined,
         // null = "Sin estilo" elegido a proposito (no se pisa con el del canal).
         scriptStyleId || null,
-        workspaceId || undefined
+        workspaceId || undefined,
+        isAdmin && kind === "documental" ? { videoFormat: "documental", videoStyle: documentalStyle } : undefined
       );
       navigate(`/projects/${project.id}`);
     } catch (err) {
@@ -93,6 +103,39 @@ export default function NewProjectPage() {
             Contale a la IA de qué se trata tu video y empezamos juntos.
           </p>
         </div>
+
+        {isAdmin && (
+          <fieldset className="mb-6">
+            <legend className="text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
+              ¿Qué video querés hacer?
+            </legend>
+            <div className="grid grid-cols-1 gap-2 mb-3" role="radiogroup" aria-label="Tipo de video">
+              {(
+                [
+                  { value: "documental", title: "Documental", text: "Material real con licencia, plano a plano, con gráficos, música y efectos." },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={kind === opt.value}
+                  onClick={() => setKind(opt.value)}
+                  className="text-left rounded-xl px-3 py-2.5 transition-all duration-150 outline-none focus-visible:ring-2 focus-visible:ring-[#FF8A8D]"
+                  style={
+                    kind === opt.value
+                      ? { background: "rgba(227,11,16,0.15)", border: "1px solid rgba(227,11,16,0.45)" }
+                      : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)" }
+                  }
+                >
+                  <span className="block text-sm font-medium" style={{ color: "var(--foreground)" }}>{opt.title}</span>
+                  <span className="block text-[11px] mt-0.5" style={{ color: "var(--muted-foreground)" }}>{opt.text}</span>
+                </button>
+              ))}
+            </div>
+            {kind === "documental" && <StyleGallery value={documentalStyle} onChange={setDocumentalStyle} />}
+          </fieldset>
+        )}
 
         {/* Starter pills */}
         <div className="flex gap-2 mb-5 overflow-x-auto pb-1">

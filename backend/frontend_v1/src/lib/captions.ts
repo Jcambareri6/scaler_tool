@@ -62,7 +62,8 @@ export function captionChunks(cues: CaptionCue[], maxWords = WORDS_PER_CHUNK): C
     const cut =
       !next ||
       /[.!?…]["»”)]*$/.test(word.text) ||
-      (current.length >= 2 && /[,;:]["»”)]*$/.test(word.text)) ||
+      // Igual que el backend (src/lib/captions.ts): pausa recien con 3+ palabras.
+      (current.length >= 3 && /[,;:—]["»”)]*$/.test(word.text)) ||
       next.start - word.end > PAUSE_SECONDS;
     if (cut) {
       phrases.push(current);

@@ -16,6 +16,10 @@ import { normalizeToken, tokenizeScript, type TokenTiming } from "./wordAlignmen
 const LEAD_IN_SECONDS = 0.2;
 const MIN_ON_SCREEN_SECONDS = 1.5;
 const GAP_BETWEEN_SECONDS = 0.2;
+// Rotulos (nombre, fecha, dato en la esquina): tiempos de MaV.
+const ROTULO_TYPES: string[] = ["lower_third", "person_card", "milestone", "badge"];
+const ROTULO_MIN_SECONDS = 2.2;
+const ROTULOS_PER_MINUTE = 4;
 
 // Default de segundos en pantalla por tipo (el planificador puede pisarlo
 // con spec.duration).
@@ -119,9 +123,66 @@ export interface PlacedOverlay {
   end: number;
 }
 
+// Densidad del documental (en la prueba del Titanic entraban 3-6 graficos
+// pegados, a 0,2 s): separacion minima entre dos animaciones cualquiera y
+// tope por ventana. Si chocan, gana la de mayor prioridad.
+export interface DensityRules {
+  minGapSeconds: number;
+  maxPerWindow: number;
+  windowSeconds: number;
+}
+export const DOCUMENTAL_DENSITY: DensityRules = { minGapSeconds: 4.5, maxPerWindow: 3, windowSeconds: 20 };
+
+const PRIORITY: Record<string, number> = {
+  title_card: 5,
+  lower_third: 4,
+  person_card: 4,
+  big_number: 3,
+  number_phrase: 3,
+  map_marker: 3,
+  map_globe: 3,
+  versus: 3,
+  milestone: 3,
+  line_chart: 3,
+  timeline: 3,
+  badge: 2,
+  list: 2,
+  kinetic_quote: 1,
+  phrase_swap: 1,
+  pivot_question: 1,
+};
+
+function normText(s: string | undefined): string {
+  return (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function applyDensity(placed: PlacedOverlay[], rules: DensityRules): PlacedOverlay[] {
+  const out: PlacedOverlay[] = [];
+  for (const c of placed) {
+    const mine = normText(c.spec.text);
+    // Mismo texto (o uno contenido en otro) en el ultimo minuto: se saltea.
+    if (mine && out.some((p) => c.start - p.start < 60 && (normText(p.spec.text).includes(mine) || mine.includes(normText(p.spec.text))))) continue;
+    const prev = out[out.length - 1];
+    const tooClose = prev && c.start - prev.end < rules.minGapSeconds;
+    const windowCount = out.filter((p) => c.start - p.start < rules.windowSeconds).length;
+    if (!tooClose && windowCount < rules.maxPerWindow) {
+      out.push(c);
+      continue;
+    }
+    // Choque: queda la de mayor prioridad (a igual prioridad, la primera).
+    const prio = PRIORITY[c.spec.type] ?? 2;
+    if (tooClose && prev && prio > (PRIORITY[prev.spec.type] ?? 2) && prev.spec.type !== "title_card") {
+      out.pop();
+      const before = out[out.length - 1];
+      if (!before || c.start - before.end >= rules.minGapSeconds) out.push(c);
+    }
+  }
+  return out;
+}
+
 // Timelines de antes de anchorSceneOverlays no traen start_seconds: se usa
 // el anchor relativo (0-1) dentro de la escena.
-export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: readonly string[]): PlacedOverlay[] {
+export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: readonly string[], density?: DensityRules): PlacedOverlay[] {
   const candidates: PlacedOverlay[] = [];
   for (const scene of scenes) {
     const sceneStart = scene.start_seconds;
@@ -132,9 +193,18 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
       if (!spec || spec.type === "ninguno" || !spec.text?.trim()) continue;
       if (supportedTypes && !supportedTypes.includes(spec.type)) continue;
       const narrated = spec.start_seconds ?? sceneStart + (spec.anchor ?? 0) * (sceneEnd - sceneStart);
+      const { start_seconds: _s, anchor: _a, ...clean } = spec as TimedOverlay;
+      if (ROTULO_TYPES.includes(spec.type)) {
+        // Rotulos (MaV): entran con su palabra, sin adelanto; salen 300 ms
+        // despues de su frase (un nombre, 1,2 s); al menos 2,2 s en pantalla.
+        const start = Math.max(0, narrated);
+        const extra = spec.type === "lower_third" || spec.type === "person_card" ? 1.2 : 0.3;
+        const end = Math.max(start + ROTULO_MIN_SECONDS, sceneEnd + extra);
+        candidates.push({ spec: clean, start, end: Math.min(end, start + (DEFAULT_DURATIONS[spec.type] ?? 5) + 2) });
+        continue;
+      }
       const start = Math.max(0, narrated - LEAD_IN_SECONDS);
       const wanted = spec.duration ?? DEFAULT_DURATIONS[spec.type] ?? 4;
-      const { start_seconds: _s, anchor: _a, ...clean } = spec as TimedOverlay;
       candidates.push({ spec: clean, start, end: start + wanted });
     }
   }
@@ -152,7 +222,15 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
     }
     placed.push(c);
   }
-  const result = placed.filter((p) => p.end - p.start >= MIN_ON_SCREEN_SECONDS);
+  // Como mucho ROTULOS_PER_MINUTE rotulos en cualquier minuto (MaV).
+  const rotuloStarts: number[] = [];
+  const result = (density ? applyDensity(placed, density) : placed).filter((p) => {
+    if (p.end - p.start < MIN_ON_SCREEN_SECONDS) return false;
+    if (!ROTULO_TYPES.includes(p.spec.type)) return true;
+    if (rotuloStarts.filter((s) => p.start - s < 60).length >= ROTULOS_PER_MINUTE) return false;
+    rotuloStarts.push(p.start);
+    return true;
+  });
 
   // Capitulos: numero en orden y en que parte del video caen (barra de
   // progreso del title_card). Se calcula aca, que ve el video entero, para

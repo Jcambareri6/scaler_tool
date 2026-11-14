@@ -11,6 +11,8 @@ import { reportJobProgress } from "../lib/jobProgress.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
+import { mirrorTimelineVisuals } from "../lib/mirrorAssets.js";
+import { runDocumentalMontaje } from "./documentalPipeline.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
@@ -36,7 +38,7 @@ import type {
 import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/generateOverlay.tool.js";
 import type { PlanOverlaysInput, PlanOverlaysOutput } from "../tools/planOverlays.tool.js";
 import type { OverlaySpec } from "../types/shared/typeShared.js";
-import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
+import { buildPreviewMix, type RenderVideoInput, type RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
 import { buildSceneImagePrompts, buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
@@ -235,6 +237,35 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
       })
       .eq("id", timelineAfterVoice.id);
     if (mergeError) throw new Error(mergeError.message);
+  }
+
+  // Formato documental (solo admins, lib/formats.ts): el montajista arma los
+  // planos y los buscadores + el juez eligen el material real. Reemplaza los
+  // pasos de escenas, keywords y stock en cascada de abajo.
+  if (effectiveFormat(project.video_format, ctx.userId) === "documental") {
+    await runDocumentalMontaje({
+      projectId,
+      userId: ctx.userId,
+      jobId: ctx.jobId,
+      scriptId: script.id,
+      scriptText,
+      words: transcription.words,
+      ...((project as { title?: string }).title ? { videoTopic: (project as { title?: string }).title! } : {}),
+      styleId: (project as { video_style?: string | null }).video_style ?? null,
+      ...(project.content_policy ? { contentPolicy: project.content_policy as ContentPolicy } : {}),
+      channelLanguage: (await getChannelSettingsForProject(projectId)).channel_language,
+    });
+    await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
+    await runTool<BuildTimelineInput, BuildTimelineOutput>("build_timeline", { video_project_id: projectId }, toolCtx);
+    // Audio de la preview con musica y efectos (la misma mezcla del render).
+    // Si falla, la revision sigue con la voz sola.
+    await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 95, progress_message: "Mezclando la música para la vista previa..." });
+    await buildPreviewMix(projectId).catch((err) => console.warn(`[documental] no se pudo armar el audio de la preview: ${(err as Error).message}`));
+    await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
+      progress: 100,
+      progress_message: "Planos listos para revisar",
+    });
+    return;
   }
 
   // 4. Armar las escenas (LEEME seccion 5: recien ahora, con audio real +
@@ -641,6 +672,19 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
   // frontend no muestre "100%" mientras FFmpeg todavia esta trabajando.
   await reportJobProgress(ctx.jobId, 10, "Preparando el render...", { force: true });
 
+  // Copia propia (R2) de los visuales que todavia viven en servidores ajenos,
+  // antes de renderizar: asi un re-render no depende de que la URL del
+  // proveedor siga viva. Un fallo de copia no frena el render.
+  await reportJobProgress(ctx.jobId, 10, "Guardando una copia de los clips...", { force: true });
+  try {
+    const mirror = await mirrorTimelineVisuals(projectId, timeline.id);
+    if (mirror.mirrored || mirror.failed) {
+      console.log(`[pipeline] ${projectId}: ${mirror.mirrored} visuales copiados a R2, ${mirror.failed} fallidos`);
+    }
+  } catch (mirrorError) {
+    console.warn(`[pipeline] ${projectId}: no se pudieron copiar los visuales, se renderiza con las URLs originales:`, mirrorError);
+  }
+
   const render = await runTool<RenderVideoInput, RenderVideoOutput>(
     "render_video",
     { video_project_id: projectId, timeline_id: timeline.id },
@@ -652,7 +696,7 @@ export async function runRenderPipeline(projectId: string, ctx: PipelineContext)
     scene_id: null,
     type: "VIDEO",
     storage_key: render.storage_key,
-    metadata: { kind: "final_render", duration_seconds: render.duration_seconds },
+    metadata: { kind: "final_render", duration_seconds: render.duration_seconds, ...(render.qc ? { qc: render.qc } : {}), ...(render.music ? { music: render.music } : {}) },
   });
   if (assetError) throw new Error(assetError.message);
 

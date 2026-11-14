@@ -305,6 +305,40 @@ async function cleanLeftoverWorkDirs() {
   if (leftovers.length > 0) log(`borrados ${leftovers.length} directorio(s) temporales de renders anteriores`);
 }
 
+// tool_executions es un log que nadie lee: se conservan 14 dias para
+// diagnosticar y el resto se borra (al arrancar y una vez por dia) para que
+// no vuelva a pasar la cuota de la base. Se borra en tandas chicas: un
+// DELETE gigante llena el disco de WAL y tira Postgres (paso el 13/11/2026).
+const TOOL_EXECUTIONS_RETENTION_DAYS = 14;
+const PRUNE_BATCH = 500;
+const PRUNE_MAX_BATCHES = 200;
+
+async function pruneToolExecutions() {
+  const cutoff = new Date(Date.now() - TOOL_EXECUTIONS_RETENTION_DAYS * 86_400_000).toISOString();
+  let total = 0;
+  for (let batch = 0; batch < PRUNE_MAX_BATCHES; batch++) {
+    const { data: rows, error: selectError } = await supabase
+      .from("tool_executions")
+      .select("id")
+      .lt("created_at", cutoff)
+      .limit(PRUNE_BATCH);
+    if (selectError) {
+      log("no se pudo limpiar tool_executions:", selectError.message);
+      break;
+    }
+    if (!rows?.length) break;
+    const { error } = await supabase.from("tool_executions").delete().in("id", rows.map((r) => r.id));
+    if (error) {
+      log("no se pudo limpiar tool_executions:", error.message);
+      break;
+    }
+    total += rows.length;
+    if (rows.length < PRUNE_BATCH) break;
+    await sleep(200);
+  }
+  if (total) log(`tool_executions: borradas ${total} fila(s) de mas de ${TOOL_EXECUTIONS_RETENTION_DAYS} dias`);
+}
+
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -334,6 +368,8 @@ async function main() {
   process.on("unhandledRejection", (reason) => log("unhandledRejection:", reason));
 
   await cleanLeftoverWorkDirs();
+  await pruneToolExecutions();
+  setInterval(() => void pruneToolExecutions(), 86_400_000).unref();
   await recoverOwnJobs();
   await Promise.all([pollQueue("render"), pollQueue("pre_render"), staleLoop()]);
 }

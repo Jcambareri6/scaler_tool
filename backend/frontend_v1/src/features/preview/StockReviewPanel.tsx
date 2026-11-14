@@ -154,7 +154,7 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
     Promise.all([
       projectsService.getScenes(projectId),
       projectsService.getSceneVideoAssets(projectId),
-      projectsService.getAudioAsset(projectId),
+      projectsService.getPreviewAudioAsset(projectId),
       projectsService.getTimelineSegments(projectId),
     ]).then(([sceneRows, stockRows, audio, segments]) => {
       setScenes(sceneRows.sort((a, b) => a.order - b.order));

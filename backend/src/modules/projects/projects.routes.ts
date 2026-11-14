@@ -3,6 +3,7 @@ import { createProject, deleteProject, getProjects, getProjectById,updateProject
 
  } from "./project.service.js";
 import { getProjectOverlays, setProjectOverlayPalette } from "./projectOverlays.service.js";
+import { getProjectDocumental } from "./documental.service.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 const Projectrouter = Router();
@@ -18,4 +19,5 @@ Projectrouter.get("/:project_id/details", authMiddleware, getProjectDetail);
 Projectrouter.get("/:project_id/channel-settings", authMiddleware, getProjectChannelSettings);
 Projectrouter.get("/:project_id/overlays", authMiddleware, getProjectOverlays);
 Projectrouter.post("/:project_id/overlay-palette", authMiddleware, setProjectOverlayPalette);
+Projectrouter.get("/:project_id/documental", authMiddleware, getProjectDocumental);
 export default Projectrouter;

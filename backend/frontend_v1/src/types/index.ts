@@ -3,7 +3,7 @@ export type ProjectStatus = "DRAFT" | "IN_PROGRESS" | "GENERATING" | "DONE" | "E
 export type VisualSource = "stock" | "ai" | "mixed" | "flow";
 // Formato del video (backend lib/formats.ts): "animated" = todo animado,
 // sin stock. Solo admins mientras se prueba.
-export type VideoFormat = "stock" | "animated";
+export type VideoFormat = "stock" | "animated" | "documental";
 
 // Paleta de las metricas animadas segun el genero del video (ver
 // backend motion/src/theme.ts).
@@ -78,6 +78,8 @@ export interface VideoProject {
   voiceId?: string;
   visualSource: VisualSource;
   videoFormat: VideoFormat;
+  // Formato documental: id del estilo (documental, clasico, profundo...).
+  videoStyle?: string;
   transitionsEnabled: boolean;
   subtitlesEnabled: boolean;
   // Metricas animadas (contadores, barras, versus...) quemadas en el render.

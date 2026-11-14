@@ -20,12 +20,12 @@ import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { uploadFileToR2 } from "../lib/r2.js";
-import { resolveR2Target } from "../lib/storage.js";
+import { resolveR2Target, uploadPublicFile } from "../lib/storage.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
-import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
+import { DOCUMENTAL_DENSITY, placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
 import {
   motionCatalog,
   motionOverlayGraph,
@@ -41,6 +41,22 @@ import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
+import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
+import {
+  audioMixArgs,
+  isSeriousTopic,
+  lookFilter,
+  motionFor,
+  musicStops,
+  parseQc,
+  QC_FILTER_ARGS,
+  sfxCues,
+  zoomCutFilter,
+  zoompanExpr,
+  type Motion,
+  type MusicSegment,
+  type RenderQc,
+} from "../lib/documentalRender.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -53,9 +69,24 @@ export interface RenderVideoInput {
 export interface RenderVideoOutput {
   storage_key: string;
   duration_seconds: number;
+  // Formato documental: control de calidad del MP4 (negro, congelado, LUFS).
+  qc?: RenderQc;
+  // Pista de musica usada (creditos).
+  music?: MusicCredit;
 }
 
 const RENDER_BUCKET = "renders";
+
+// Cada render se guarda como una version nueva (no pisa el anterior): asi se
+// puede volver a un render previo, y el front muestra el mas reciente (el
+// final_render de created_at mas nuevo). Timestamp ordenable, sin ":".
+export function renderVersion(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+export function renderKey(videoProjectId: string, version: string): string {
+  return `skaler-renders/${videoProjectId}/${version}.mp4`;
+}
 // 720p/30fps: suficiente calidad para revisar, mantiene los tiempos de
 // render razonables (el clip mas lento en esto es descargar+codificar, no
 // la resolucion).
@@ -184,7 +215,7 @@ interface TimelineContent {
   segments?: CaptionCue[];
 }
 
-interface RenderSegment {
+export interface RenderSegment {
   storageKey: string;
   start: number;
   end: number;
@@ -266,7 +297,8 @@ async function uploadRenderToCloudinary(
   outputPath: string,
   cloudName: string,
   apiKey: string,
-  apiSecret: string
+  apiSecret: string,
+  version: string
 ): Promise<string> {
   cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
   // uploader.upload (sin _large) rechaza con 413 "Payload Too Large" para
@@ -286,7 +318,7 @@ async function uploadRenderToCloudinary(
       {
         resource_type: "video",
         folder: "skaler-renders",
-        public_id: videoProjectId,
+        public_id: `${videoProjectId}-${version}`,
         overwrite: true,
         timeout: CLOUDINARY_UPLOAD_TIMEOUT_MS,
       },
@@ -300,13 +332,13 @@ async function uploadRenderToCloudinary(
   return result.secure_url;
 }
 
-async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buffer): Promise<string> {
+async function uploadRenderToSupabase(videoProjectId: string, outputBuffer: Buffer, version: string): Promise<string> {
   const { error: bucketError } = await supabase.storage.createBucket(RENDER_BUCKET, { public: true });
   if (bucketError && !/already exists/i.test(bucketError.message)) {
     throw new Error(bucketError.message);
   }
 
-  const renderPath = `${videoProjectId}.mp4`;
+  const renderPath = `${videoProjectId}/${version}.mp4`;
   const { error: uploadError } = await supabase.storage
     .from(RENDER_BUCKET)
     .upload(renderPath, outputBuffer, { contentType: "video/mp4", upsert: true });
@@ -351,6 +383,114 @@ function runFfmpeg(args: string[], onTime?: (seconds: number) => void): Promise<
       else reject(new Error(`ffmpeg salio con codigo ${code}: ${stderr.slice(-2000)}`));
     });
   });
+}
+
+// Como runFfmpeg pero devuelve lo que importa del stderr para el QC: las
+// lineas de blackdetect/freezedetect (pueden ser muchas) y el resumen final.
+function runFfmpegCapture(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      reject(new Error("ffmpeg-static no resolvio el binario de ffmpeg"));
+      return;
+    }
+    const proc = spawn(ffmpegPath, ["-hide_banner", ...args]);
+    const events: string[] = [];
+    let tail = "";
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      for (const line of text.split("\n")) if (/black_start|freeze_/.test(line)) events.push(line);
+      tail = (tail + text).slice(-STDERR_TAIL_CHARS);
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve(`${events.join("\n")}\n${tail}`);
+      else reject(new Error(`ffmpeg salio con codigo ${code}: ${tail.slice(-1000)}`));
+    });
+  });
+}
+
+// Musica del formato documental: una pista al azar del animo pedido en la
+// tabla music_library (cargada con scripts/seed-music.ts). Sin pistas o sin
+// la tabla, el video sale sin musica (con efectos igual).
+export interface MusicCredit {
+  title: string;
+  author: string | null;
+  license: string;
+  source_page: string | null;
+}
+
+// Pista estable por proyecto y animo (MaV: "un mismo proyecto siempre recibe
+// la misma pista"), sin repetir una pista ya usada para otro animo.
+function stableIndex(seed: string, n: number): number {
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return n ? h % n : 0;
+}
+
+async function downloadMusic(mood: string, workDir: string, seed = "", exclude: Set<string> = new Set()): Promise<{ path: string; credit: MusicCredit } | null> {
+  const columns = "url, title, author, license, source_page";
+  const { data, error } = await supabase.from("music_library").select(columns).eq("mood", mood).order("title").limit(50);
+  let rows = (data ?? []).filter((r) => !exclude.has(r.url as string));
+  if (!error && rows.length === 0) {
+    const fallback = await supabase.from("music_library").select(columns).eq("mood", "documental").order("title").limit(50);
+    rows = (fallback.data ?? []).filter((r) => !exclude.has(r.url as string));
+  }
+  if (error || rows.length === 0) return null;
+  const pick = rows[seed ? stableIndex(`${seed}:${mood}`, rows.length) : Math.floor(Math.random() * rows.length)]!;
+  exclude.add(pick.url as string);
+  const musicPath = path.join(workDir, `music-${mood}-${exclude.size}${path.extname(new URL(pick.url as string).pathname) || ".mp3"}`);
+  try {
+    await downloadTo(pick.url as string, musicPath);
+    return {
+      path: musicPath,
+      credit: {
+        title: pick.title as string,
+        author: (pick.author as string | null) ?? null,
+        license: pick.license as string,
+        source_page: (pick.source_page as string | null) ?? null,
+      },
+    };
+  } catch (err) {
+    console.warn("[render_video] no se pudo bajar la musica:", err);
+    return null;
+  }
+}
+
+// Tramos de musica por capitulo (MaV): cada capitulo del plan del montajista
+// tiene un animo; tramos de menos de 20 s no cambian la musica y los
+// capitulos seguidos con el mismo animo comparten pista.
+const MUSIC_MOODS = ["documental", "tension", "triste", "epico", "misterio", "esperanza"];
+// Graficos que ya escriben la frase en pantalla: ahi no van subtitulos (MaV, SILENCIAN).
+const CAPTION_HIDING_TYPES = ["kinetic_quote", "phrase_swap", "pivot_question", "title_card", "list", "myth_fact"];
+async function chapterMusicPlan(projectId: string, total: number, fallbackMood: string): Promise<{ mood: string; start: number; end: number }[]> {
+  try {
+    const [{ data: project }, { data: script }] = await Promise.all([
+      supabase.from("video_projects").select("documental_plan").eq("id", projectId).single(),
+      supabase.from("scripts").select("id").eq("video_project_id", projectId).single(),
+    ]);
+    const chapters = (project?.documental_plan as { chapters?: { animo?: string }[] } | null)?.chapters ?? [];
+    const { data: scenes } = script ? await supabase.from("scenes").select("content").eq("script_id", script.id) : { data: [] };
+    const starts = (scenes ?? [])
+      .map((s) => s.content as { shot?: { capitulo?: number }; startSeconds?: number })
+      .filter((c) => c.shot?.capitulo)
+      .map((c) => ({ mood: chapters[c.shot!.capitulo! - 1]?.animo ?? fallbackMood, start: c.startSeconds ?? 0 }))
+      .sort((a, b) => a.start - b.start);
+    const plan: { mood: string; start: number; end: number }[] = [];
+    for (const s of starts) {
+      const mood = MUSIC_MOODS.includes(s.mood) ? s.mood : fallbackMood;
+      const last = plan[plan.length - 1];
+      if (!last) {
+        plan.push({ mood, start: 0, end: total });
+        continue;
+      }
+      if (last.mood === mood || s.start - last.start < 20 || total - s.start < 20) continue;
+      last.end = s.start;
+      plan.push({ mood, start: s.start, end: total });
+    }
+    return plan.length ? plan : [{ mood: fallbackMood, start: 0, end: total }];
+  } catch {
+    return [{ mood: fallbackMood, start: 0, end: total }];
+  }
 }
 
 // Borra archivos intermedios apenas dejan de hacer falta en vez de esperar
@@ -440,12 +580,17 @@ const TRANSITION_DURATION_SECONDS = 0.5;
 // total (los streams se superponen en vez de sumarse), asi que la tanda sale
 // un poco mas corta que la suma de sus segmentos; ver batchDuration() y
 // assignSegmentDurations, que estira cada segmento para compensarlo.
-function buildFfmpegArgsForBatch(
+export function buildFfmpegArgsForBatch(
   batchSegments: RenderSegment[],
   batchClipPaths: string[],
   transitionsEnabled: boolean,
-  { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT }: OutputSize
+  { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT }: OutputSize,
+  // Formato documental: look del estilo, movimientos sin repetir y cortes de
+  // zoom (lib/documentalRender.ts). `firstIndex` = posicion global del primer
+  // segmento de la tanda (destello cada N planos, movimiento anterior).
+  documental: { style: DocumentalStyle; firstIndex: number } | null = null
 ): { inputArgs: string[]; filterComplex: string } {
+  let previousMotion: Motion | null = documental && documental.firstIndex > 0 ? motionFor(documental.firstIndex - 1, null) : null;
   const inputArgs: string[] = [];
   const filterParts: string[] = [];
   const durations: number[] = [];
@@ -487,15 +632,22 @@ function buildFfmpegArgsForBatch(
       // (on = numero de frame de salida) y centrado (x/y fijan la esquina de
       // la ventana para que el centro quede siempre en el centro).
       const zoomStep = (KEN_BURNS_MAX_ZOOM - 1) / Math.max(1, totalFrames - 1);
+      let zoomExpr = { z: `1+${zoomStep.toFixed(8)}*on`, x: "iw/2-(iw/zoom/2)", y: "ih/2-(ih/zoom/2)" };
+      if (documental) {
+        const motion = motionFor(documental.firstIndex + i, previousMotion);
+        previousMotion = motion;
+        zoomExpr = zoompanExpr(motion, totalFrames);
+      }
+      const look = documental ? `,${lookFilter(documental.style.look, documental.firstIndex + i)}` : "";
       filterParts.push(
         `[${i}:v]split=2[kbsrc${i}][kbfit${i}];` +
           `[kbsrc${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=bilinear,` +
           `crop=${upscaledWidth}:${upscaledHeight},boxblur=24:2[kbbg${i}];` +
           `[kbfit${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=decrease:flags=lanczos[kbfg${i}];` +
           `[kbbg${i}][kbfg${i}]overlay=(W-w)/2:(H-h)/2,` +
-          `zoompan=z='1+${zoomStep.toFixed(8)}*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` +
+          `zoompan=z='${zoomExpr.z}':x='${zoomExpr.x}':y='${zoomExpr.y}'` +
           `:d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
-          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v${i}]`
+          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1${look}[v${i}]`
       );
     } else {
       inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
@@ -505,9 +657,16 @@ function buildFfmpegArgsForBatch(
       // arriba -- confirmado como la causa de la inconsistencia de nitidez
       // entre escenas de un mismo video (algunas vienen de clips de menor
       // resolucion que otras).
+      let docChain = "";
+      if (documental) {
+        previousMotion = null;
+        const every = documental.style.look.zoomCutEvery;
+        const cuts = every > 0 && duration > every * 1.5 ? `,${zoomCutFilter(every, { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT })}` : "";
+        docChain = `${cuts},${lookFilter(documental.style.look, documental.firstIndex + i)}`;
+      }
       filterParts.push(
         `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
-          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}[v${i}]`
+          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${docChain}[v${i}]`
       );
     }
   });
@@ -857,7 +1016,9 @@ async function realRender(
   timelineId: string,
   jobId: string | undefined,
   // Graficos animados: solo para admins mientras estan en prueba.
-  overlaysAllowed: boolean
+  overlaysAllowed: boolean,
+  // Formato documental: estilo del preset (look, subtitulos, sonido).
+  documentalStyle: DocumentalStyle | null = null
 ): Promise<RenderVideoOutput> {
   const progress = (value: number, message: string, force = false) =>
     reportJobProgress(jobId, value, message, { force });
@@ -904,7 +1065,9 @@ async function realRender(
     // ningun error visible en la UI.
     console.warn(`[render_video] no se pudo leer transitions_enabled/subtitles_enabled (¿se corrieron las migraciones?): ${projectError.message}`);
   }
-  const transitionsEnabled = Boolean(project?.transitions_enabled) && segments.length > 1;
+  // Documental: corte seco como regla (MaV); el ritmo lo dan los destellos y
+  // los cortes de zoom.
+  const transitionsEnabled = !documentalStyle && Boolean(project?.transitions_enabled) && segments.length > 1;
   const subtitlesEnabled = Boolean(project?.subtitles_enabled) && (content.segments?.length ?? 0) > 0;
 
   // Consulta aparte: si la migracion de overlays no se corrio, falla solo
@@ -917,22 +1080,26 @@ async function realRender(
   if (overlayOptionsError) {
     console.warn(`[render_video] no se pudo leer overlays_enabled (¿se corrio la migracion 20261028000000_video_overlays.sql?): ${overlayOptionsError.message}`);
   }
-  const overlaysOn = overlaysAllowed && Boolean(overlayOptions?.overlays_enabled);
+  // En el documental los graficos son parte del formato: siempre prendidos.
+  const overlaysOn = documentalStyle ? true : overlaysAllowed && Boolean(overlayOptions?.overlays_enabled);
   if (overlaysOn && !motionCatalog()) {
     console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
   }
   const contentOverlays =
-    overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
+    overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes(), documentalStyle ? DOCUMENTAL_DENSITY : undefined) : [];
   // La capa fija de arriba va despues, para que quede encima de los demas.
+  // Documental: sin capa fija (igual que la preview).
   const placedOverlays =
     overlaysOn && motionCatalog()
-      ? [
-          ...contentOverlays,
-          ...placeNavHeaders(contentOverlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
-            ...(await navHeaderContext(videoProjectId)),
-            locale: (await getChannelSettingsForProject(videoProjectId)).channel_language,
-          }),
-        ]
+      ? documentalStyle
+        ? contentOverlays
+        : [
+            ...contentOverlays,
+            ...placeNavHeaders(contentOverlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
+              ...(await navHeaderContext(videoProjectId)),
+              locale: (await getChannelSettingsForProject(videoProjectId)).channel_language,
+            }),
+          ]
       : [];
   // Planificado: si despues falla el render de los graficos, el video sale
   // igual sin ellos (ver motionClips).
@@ -970,9 +1137,47 @@ async function realRender(
   console.log(`[render_video] starting render for project ${videoProjectId} (${segments.length} segmentos, ${renderQuality})`);
   const workDir = await makeWorkDir("skaler-render-");
   try {
-    const audioPath = path.join(workDir, "narration.mp3");
+    let audioPath = path.join(workDir, "narration.mp3");
+    let musicCredit: MusicCredit | undefined;
+    let musicCredits: MusicCredit[] = [];
     await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
+    if (documentalStyle) {
+      // Voz + musica con ducking + efectos en la entrada de cada grafico, a -14 LUFS.
+      await progress(PROGRESS_BATCHES_START - 1, "Mezclando la voz con la música y los efectos...", true);
+      // Una pista por capitulo segun su animo (la misma para el mismo proyecto).
+      const plan = await chapterMusicPlan(videoProjectId, totalDuration + 1, documentalStyle.sound.mood);
+      const usedTracks = new Set<string>();
+      const trackByMood = new Map<string, { path: string; credit: MusicCredit } | null>();
+      const musicSegments: MusicSegment[] = [];
+      for (const seg of plan) {
+        if (!trackByMood.has(seg.mood)) trackByMood.set(seg.mood, await downloadMusic(seg.mood, workDir, videoProjectId, usedTracks));
+        const track = trackByMood.get(seg.mood);
+        if (track) musicSegments.push({ path: track.path, start: seg.start, end: seg.end });
+      }
+      musicCredits = [...trackByMood.values()].filter((t): t is { path: string; credit: MusicCredit } => !!t).map((t) => t.credit);
+      musicCredit = musicCredits[0];
+      const overlayMarks = placedOverlays.map((o) => ({ start: o.start, type: o.spec.type }));
+      const serious = isSeriousTopic(content.segments?.map((s) => s.text).join(" ") ?? "");
+      const mixPath = path.join(workDir, "mix.flac");
+      try {
+        await runFfmpeg(
+          audioMixArgs({
+            voicePath: audioPath,
+            music: musicSegments,
+            duration: totalDuration + 1,
+            sound: documentalStyle.sound,
+            sfx: sfxCues(overlayMarks, { serious }),
+            stops: musicStops(overlayMarks),
+            serious,
+            outPath: mixPath,
+          })
+        );
+        audioPath = mixPath;
+      } catch (mixError) {
+        console.warn("[render_video] no se pudo mezclar musica/efectos, sigo con la voz sola:", mixError);
+      }
+    }
 
     // Si hay transiciones y/o subtitulos, esta tanda NO es la ultima pasada
     // de codificacion real (se vuelve a reencodear al unir con xfade y/o al
@@ -1020,7 +1225,13 @@ async function realRender(
       });
       if (downloadError) throw downloadError;
 
-      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(batchSegments, batchClipPaths, transitionsEnabled, outputSize);
+      const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(
+        batchSegments,
+        batchClipPaths,
+        transitionsEnabled,
+        outputSize,
+        documentalStyle ? { style: documentalStyle, firstIndex: batchStart } : null
+      );
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 
       console.log(`[render_video] corriendo ffmpeg (tanda ${b + 1}/${totalBatches}, ${batchSegments.length} segmentos)...`);
@@ -1081,6 +1292,9 @@ async function realRender(
             width: outputSize.width,
             height: outputSize.height,
             accent: (await resolveProjectStyle(videoProjectId))?.theme.accent ?? "#E8B65A",
+            ...(documentalStyle ? { documental: documentalStyle.captions } : {}),
+            // Bajo graficos que ya escriben la frase no van subtitulos (MaV).
+            hideRanges: placedOverlays.filter((o) => CAPTION_HIDING_TYPES.includes(o.spec.type)).map((o) => ({ start: o.start, end: o.end })),
           })
         : buildSrt(content.segments!);
       await writeFile(srtPath, subtitles, "utf-8");
@@ -1246,26 +1460,44 @@ async function realRender(
       }
     }
 
+    let qc: RenderQc | undefined;
+    if (documentalStyle) {
+      await progress(PROGRESS_UPLOAD - 1, "Revisando el video final (negro, congelado, volumen)...", true);
+      try {
+        qc = parseQc(await runFfmpegCapture(["-i", finalOutputPath, ...QC_FILTER_ARGS]));
+        if (qc.warnings.length) console.warn(`[render_video] QC: ${qc.warnings.join("; ")}`);
+      } catch (qcError) {
+        console.warn("[render_video] no se pudo revisar el video final:", qcError);
+      }
+    }
+
     console.log(`[render_video] ffmpeg listo, subiendo...`);
     await progress(PROGRESS_UPLOAD, "Subiendo el video...", true);
     let publicUrl: string;
+    const version = renderVersion();
     if (r2) {
       publicUrl = await uploadFileToR2(
         finalOutputPath,
-        `skaler-renders/${videoProjectId}.mp4`,
+        renderKey(videoProjectId, version),
         "video/mp4",
         r2.config,
         r2.secretAccessKey
       );
     } else if (usingCloudinary && cloudName && cloudinaryApiKey && cloudinaryProvider?.api_key) {
-      publicUrl = await uploadRenderToCloudinary(videoProjectId, finalOutputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key);
+      publicUrl = await uploadRenderToCloudinary(videoProjectId, finalOutputPath, cloudName, cloudinaryApiKey, cloudinaryProvider.api_key, version);
     } else {
       const outputBuffer = await readFile(finalOutputPath);
-      publicUrl = await uploadRenderToSupabase(videoProjectId, outputBuffer);
+      publicUrl = await uploadRenderToSupabase(videoProjectId, outputBuffer, version);
     }
     console.log(`[render_video] listo: ${publicUrl}`);
 
-    return { storage_key: publicUrl, duration_seconds: Math.round(totalDuration) };
+    return {
+      storage_key: publicUrl,
+      duration_seconds: Math.round(totalDuration),
+      ...(qc ? { qc } : {}),
+      ...(musicCredit ? { music: musicCredit } : {}),
+      ...(musicCredits.length > 1 ? { music_tracks: musicCredits } : {}),
+    };
   } finally {
     // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
     // solto un archivo que uso ffmpeg (visto en produccion) -- si esto
@@ -1326,9 +1558,10 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
       }
     );
     if (jobId) await reportJobProgress(jobId, 92, "Subiendo el video...", { force: true });
+    const version = renderVersion();
     const publicUrl = r2
-      ? await uploadFileToR2(outPath, `skaler-renders/${videoProjectId}.mp4`, "video/mp4", r2.config, r2.secretAccessKey)
-      : await uploadRenderToSupabase(videoProjectId, await readFile(outPath));
+      ? await uploadFileToR2(outPath, renderKey(videoProjectId, version), "video/mp4", r2.config, r2.secretAccessKey)
+      : await uploadRenderToSupabase(videoProjectId, await readFile(outPath), version);
     return { storage_key: publicUrl, duration_seconds: Math.round(plan.durationSeconds) };
   } finally {
     try {
@@ -1341,6 +1574,58 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
 
 // Composicion final (FFmpeg): une clips + audio + overlays ya renderizados
 // segun el Timeline. Es el ultimo paso del pipeline (Etapa 12).
+// Audio de la PREVIEW del documental: la misma mezcla que el render (voz +
+// musica por capitulo con ducking + efectos + silencios en cifras), sin la
+// imagen. Se guarda como asset AUDIO kind "preview_mix" y el reproductor de
+// la revision lo pasa en vez de la voz sola. No toca el timeline ni el audio
+// narrado (el render sigue mezclando desde la narracion).
+export async function buildPreviewMix(videoProjectId: string): Promise<string | null> {
+  const [{ data: project }, { data: timeline }] = await Promise.all([
+    supabase.from("video_projects").select("video_style").eq("id", videoProjectId).single(),
+    supabase.from("timelines").select("content").eq("video_project_id", videoProjectId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const content = timeline?.content as TimelineContent | undefined;
+  if (!content?.audio?.storage_key) return null;
+  const style = getDocumentalStyle((project as { video_style?: string | null } | null)?.video_style ?? null);
+  const scenes = (content.scenes ?? []).sort((a, b) => a.order - b.order);
+  const total = Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0));
+  if (!total) return null;
+  const placed = placeOverlays(scenes, undefined, DOCUMENTAL_DENSITY);
+  const marks = placed.map((o) => ({ start: o.start, type: o.spec.type }));
+  const workDir = await makeWorkDir("skaler-preview-mix-");
+  try {
+    const voicePath = path.join(workDir, "narration.mp3");
+    await downloadTo(content.audio.storage_key, voicePath);
+    const plan = await chapterMusicPlan(videoProjectId, total + 1, style.sound.mood);
+    const usedTracks = new Set<string>();
+    const trackByMood = new Map<string, { path: string; credit: MusicCredit } | null>();
+    const music: MusicSegment[] = [];
+    for (const seg of plan) {
+      if (!trackByMood.has(seg.mood)) trackByMood.set(seg.mood, await downloadMusic(seg.mood, workDir, videoProjectId, usedTracks));
+      const track = trackByMood.get(seg.mood);
+      if (track) music.push({ path: track.path, start: seg.start, end: seg.end });
+    }
+    const serious = isSeriousTopic(content.segments?.map((s) => s.text).join(" ") ?? "");
+    const flac = path.join(workDir, "mix.flac");
+    await runFfmpeg(audioMixArgs({ voicePath, music, duration: total + 1, sound: style.sound, sfx: sfxCues(marks, { serious }), stops: musicStops(marks), serious, outPath: flac }));
+    const mp3 = path.join(workDir, "preview-mix.mp3");
+    await runFfmpeg(["-y", "-i", flac, "-c:a", "libmp3lame", "-b:a", "160k", mp3]);
+    const url = await uploadPublicFile({ bucket: "scene-uploads", r2Prefix: "skaler-media", path: `${videoProjectId}/preview-mix-${Date.now()}.mp3`, contentType: "audio/mpeg", body: mp3 });
+    await supabase.from("assets").delete().eq("video_project_id", videoProjectId).eq("type", "AUDIO").contains("metadata", { kind: "preview_mix" });
+    const { error } = await supabase.from("assets").insert({
+      video_project_id: videoProjectId,
+      scene_id: null,
+      type: "AUDIO",
+      storage_key: url,
+      metadata: { kind: "preview_mix", duration_seconds: total, music: [...trackByMood.values()].filter(Boolean).map((t) => t!.credit) },
+    });
+    if (error) throw new Error(error.message);
+    return url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput> = {
   name: "render_video",
   description:
@@ -1373,6 +1658,11 @@ export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput
       .maybeSingle();
     if (effectiveFormat(formatRow?.video_format, ctx.userId) === "animated") {
       return renderAnimated(video_project_id, timeline_id, ctx.jobId);
+    }
+    const format = effectiveFormat(formatRow?.video_format, ctx.userId);
+    if (format === "documental") {
+      const { data: styleRow } = await supabase.from("video_projects").select("video_style").eq("id", video_project_id).maybeSingle();
+      return realRender(video_project_id, timeline_id, ctx.jobId, true, getDocumentalStyle(styleRow?.video_style));
     }
     return realRender(video_project_id, timeline_id, ctx.jobId, isAdmin(ctx.userId));
   },

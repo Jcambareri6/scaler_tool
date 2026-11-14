@@ -1,13 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { supabase } from "./supabase.js";
 import { getActiveProvider } from "./providers.js";
 import { r2ConfigFromEnv, resolveR2Config, uploadFileToR2, type R2Config } from "./r2.js";
 
 // Destino de todo archivo publico que genera o recibe la app (audio, visuales
-// de escenas, renders, imagenes de IA): Cloudflare R2 si esta configurado --
-// no cobra egreso, y el egreso de Supabase Storage (cada reproduccion en el
-// navegador y cada descarga del render) es lo que agota su plan --, y si no,
-// Supabase Storage como siempre.
+// de escenas, renders, imagenes de IA): Cloudflare R2, siempre. No cobra
+// egreso y no tiene la cuota de 1GB de Supabase Storage.
 
 export interface R2Target {
   config: R2Config;
@@ -23,15 +19,6 @@ export async function resolveR2Target(): Promise<R2Target | null> {
   return r2ConfigFromEnv();
 }
 
-const ensuredBuckets = new Set<string>();
-
-async function ensureSupabaseBucket(bucket: string): Promise<void> {
-  if (ensuredBuckets.has(bucket)) return;
-  const { error } = await supabase.storage.createBucket(bucket, { public: true });
-  if (error && !/already exists/i.test(error.message)) throw new Error(error.message);
-  ensuredBuckets.add(bucket);
-}
-
 // `body`: un Buffer o la ruta de un archivo local (en R2 se sube en
 // streaming). En R2 la clave es `${r2Prefix ?? bucket}/${path}`. Devuelve la
 // URL publica.
@@ -44,13 +31,13 @@ export async function uploadPublicFile(params: {
 }): Promise<string> {
   const { bucket, path, contentType, body } = params;
   const r2 = await resolveR2Target();
-  if (r2) {
-    return uploadFileToR2(body, `${params.r2Prefix ?? bucket}/${path}`, contentType, r2.config, r2.secretAccessKey);
+  if (!r2) {
+    // Sin fallback a Supabase Storage: su cuota (1GB en Free) se lleno con
+    // visuales de escenas y audio y restringio el proyecto entero (DB
+    // incluida). Mejor fallar claro que volver a llenarlo en silencio.
+    throw new Error(
+      "R2 no esta configurado (Settings > Providers 'r2' o variables R2_*): no se puede subir el archivo"
+    );
   }
-
-  await ensureSupabaseBucket(bucket);
-  const buffer = typeof body === "string" ? await readFile(body) : body;
-  const { error } = await supabase.storage.from(bucket).upload(path, buffer, { contentType, upsert: true });
-  if (error) throw new Error(error.message);
-  return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  return uploadFileToR2(body, `${params.r2Prefix ?? bucket}/${path}`, contentType, r2.config, r2.secretAccessKey);
 }
