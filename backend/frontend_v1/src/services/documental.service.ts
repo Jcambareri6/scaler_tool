@@ -51,6 +51,8 @@ export interface DocumentalSummary {
     chapters: { titulo: string; desde: number; animo: string }[];
     issues: string[];
     shots: DocumentalShotOutcome[];
+    // QA final (como MaV): hoja de contactos con un cuadro por plano.
+    qa?: { hoja?: string | null; oscuros?: number; vacios?: number } | null;
   } | null;
   credits: DocumentalCredit[];
   creditsText: string;
@@ -78,9 +80,19 @@ export const CATEGORY_LABELS: Record<DocumentalCategory, string> = {
   geografia: "Geografía e ingeniería",
 };
 
+// Estilos que se ofrecen en la galeria mientras el cliente prueba: el
+// general y el de mapas. El backend sigue teniendo los 11; para volver a
+// mostrarlos alcanza con sacar este filtro.
+export const ENABLED_STYLE_IDS = ["documental", "mapa"];
+export const DEFAULT_STYLE_ID = "documental";
+
+export function enabledStyleId(id: string | null | undefined): string {
+  return id && ENABLED_STYLE_IDS.includes(id) ? id : DEFAULT_STYLE_ID;
+}
+
 export const documentalService = {
   async listStyles(): Promise<DocumentalStyle[]> {
-    const rows = await api.get<StyleRow[]>("/documental/styles");
+    const rows = (await api.get<StyleRow[]>("/documental/styles")).filter((r) => ENABLED_STYLE_IDS.includes(r.id));
     return rows.map((r) => ({
       id: r.id,
       name: r.name,

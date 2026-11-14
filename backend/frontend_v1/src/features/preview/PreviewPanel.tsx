@@ -6,6 +6,7 @@ import StockReviewPanel from "./StockReviewPanel";
 import AnimatedPreview from "./AnimatedPreview";
 import StyleGallery from "@/features/documental/StyleGallery";
 import DocumentalSummary from "@/features/documental/DocumentalSummary";
+import { enabledStyleId } from "@/services/documental.service";
 import { useAccount } from "@/lib/accountContext";
 import type { Job, Asset, RenderQuality, VisualSource, OverlayTheme, VideoFormat } from "@/types";
 
@@ -295,7 +296,8 @@ export default function PreviewPanel({ projectId }: Props) {
   const [overlayTheme, setOverlayTheme] = useState<OverlayTheme>("documental");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
-  const [videoFormat, setVideoFormat] = useState<VideoFormat>("stock");
+  // Mientras el cliente prueba, los admins solo ven el formato Documental.
+  const [videoFormat, setVideoFormat] = useState<VideoFormat>("documental");
   // "Solo IA"/"Mixto" (video con SnapGen) solo para admins; el backend lo
   // vuelve a chequear (orchestrator.ts) y para el resto busca stock.
   const { account } = useAccount();
@@ -324,8 +326,8 @@ export default function PreviewPanel({ projectId }: Props) {
         setOverlayTheme(p.overlayTheme);
         setRenderQuality(p.renderQuality);
         setVisualSource(p.visualSource);
-        setVideoFormat(p.videoFormat);
-        if (p.videoStyle) setVideoStyle(p.videoStyle);
+        setVideoFormat("documental");
+        setVideoStyle(enabledStyleId(p.videoStyle));
       }
     });
   }, [projectId]);
@@ -495,7 +497,8 @@ export default function PreviewPanel({ projectId }: Props) {
             )
               // "Todo animado" todavia no esta listo: solo se ve donde
               // VITE_TODO_ANIMADO=on (local, para seguir probandolo).
-              .filter((opt) => opt.value !== "animated" || import.meta.env.VITE_TODO_ANIMADO === "on")
+              // Mientras el cliente prueba: solo Documental.
+              .filter((opt) => opt.value === "documental")
               .map((opt) => (
               <button
                 key={opt.value}

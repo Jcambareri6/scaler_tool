@@ -33,7 +33,8 @@ export default function NewProjectPage() {
   // guion, las fuentes, la musica y el look. Documental: solo admins.
   const { account } = useAccount();
   const isAdmin = !!account?.isAdmin;
-  const [kind, setKind] = useState<"estandar" | "documental">("estandar");
+  // Mientras el cliente prueba, el unico formato que se ofrece es Documental.
+  const [kind, setKind] = useState<"estandar" | "documental">("documental");
   const [documentalStyle, setDocumentalStyle] = useState("documental");
 
   useEffect(() => {
@@ -108,10 +109,9 @@ export default function NewProjectPage() {
             <legend className="text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: "var(--muted-foreground)" }}>
               ¿Qué video querés hacer?
             </legend>
-            <div className="grid grid-cols-2 gap-2 mb-3" role="radiogroup" aria-label="Tipo de video">
+            <div className="grid grid-cols-1 gap-2 mb-3" role="radiogroup" aria-label="Tipo de video">
               {(
                 [
-                  { value: "estandar", title: "Video estándar", text: "Stock, IA o Flow, con gráficos opcionales." },
                   { value: "documental", title: "Documental", text: "Material real con licencia, plano a plano, con gráficos, música y efectos." },
                 ] as const
               ).map((opt) => (
