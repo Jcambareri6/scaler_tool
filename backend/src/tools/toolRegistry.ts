@@ -27,6 +27,24 @@ export function listTools(): {
   }));
 }
 
+// tool_executions es solo un log (nada lo lee): input/output grandes -- el
+// timeline entero de build_timeline, los prompts de image_prompt_sequence --
+// llegaron a ocupar 1GB y a pasar la cuota de la base. Arriba de este tamano
+// se guarda un resumen en vez del payload.
+const MAX_LOGGED_PAYLOAD_CHARS = 8_000;
+
+function compactPayload(value: unknown): Record<string, unknown> | null {
+  if (value === undefined || value === null) return null;
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return { truncated: true, reason: "no serializable" };
+  }
+  if (json.length <= MAX_LOGGED_PAYLOAD_CHARS) return value as Record<string, unknown>;
+  return { truncated: true, chars: json.length, preview: json.slice(0, 1_000) };
+}
+
 // Cada invocacion queda trazada en tool_executions (job_id/provider_id
 // nullable a proposito: todavia no hay Agent que dispare tools dentro de un
 // Job real, ni Providers que resolver — ver Etapa 9/10 del roadmap).
@@ -47,7 +65,7 @@ export async function runTool<TInput, TOutput>(
       provider_id: null,
       tool_name: name,
       status: "RUNNING",
-      input: (input ?? {}) as Record<string, unknown>,
+      input: compactPayload(input) ?? {},
       started_at: new Date().toISOString(),
     })
     .select()
@@ -64,7 +82,7 @@ export async function runTool<TInput, TOutput>(
       .from("tool_executions")
       .update({
         status: "SUCCEEDED",
-        output: output as Record<string, unknown>,
+        output: compactPayload(output),
         finished_at: new Date().toISOString(),
       })
       .eq("id", execution.id);
