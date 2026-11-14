@@ -104,8 +104,11 @@ function style(overrides: Partial<DocumentalStyle> & Pick<DocumentalStyle, "id" 
       forbid: ["subscribe_cta", "strike_word"],
     },
     look: { contrast: 1.04, saturation: 0.94, brightness: -0.01, vignette: true, flashEvery: 9, zoomCutEvery: 4 },
-    captions: { font: "Roboto Condensed", size: 54, words: 7, uppercase: false },
-    sound: { mood: "documental", musicVolume: 0.2, duckTo: 0.35, sfxVolume: 0.38 },
+    // 5 palabras como MaV (con 7 la linea era muy larga).
+    captions: { font: "Roboto Condensed", size: 54, words: 5, uppercase: false },
+    // Valores de MaV: musica al 22% sin voz, al 35% de eso bajo la voz,
+    // efectos ~11 dB por debajo de la voz.
+    sound: { mood: "documental", musicVolume: 0.22, duckTo: 0.35, sfxVolume: 0.28 },
   };
   return {
     ...base,
@@ -128,6 +131,8 @@ export const DOCUMENTAL_STYLES: DocumentalStyle[] = [
     idealFor: "Cualquier tema contado con rigor",
     examples: ["El hundimiento del Titanic", "Cómo se construyó el Canal de Panamá", "La carrera espacial"],
     category: "general",
+    // Mas metricas animadas que el valor de MaV (3/min salia con ~2/min reales).
+    plan: { ...BASE_PLAN(), graphicsPerMinute: 5, graphicsPerMinuteHook: 8, maxGraphicShare: 0.4, minGraphicGapSeconds: 3 },
   }),
   style({
     id: "clasico",
@@ -203,7 +208,8 @@ export const DOCUMENTAL_STYLES: DocumentalStyle[] = [
     plan: { ...BASE_PLAN(), graphicsPerMinute: 3.5, graphicsPerMinuteHook: 6 },
     graphics: { favor: ["milestone", "big_number", "map_marker", "timeline", "lower_third", "versus"], forbid: ["subscribe_cta"] },
     look: { contrast: 1.03, saturation: 1, brightness: 0, vignette: false, flashEvery: 0, zoomCutEvery: 4 },
-    captions: { font: "Roboto Condensed", size: 54, words: 7, uppercase: false },
+    // 5 palabras como MaV (con 7 la linea era muy larga).
+    captions: { font: "Roboto Condensed", size: 54, words: 5, uppercase: false },
   }),
   style({
     id: "historia",

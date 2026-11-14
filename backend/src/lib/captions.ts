@@ -65,7 +65,9 @@ export function captionChunks(cues: CaptionCue[], maxWords = WORDS_PER_CHUNK): C
     const cut =
       !next ||
       /[.!?…]["»”)]*$/.test(word.text) ||
-      (current.length >= 2 && /[,;:]["»”)]*$/.test(word.text)) ||
+      // En una pausa (coma, punto y coma, dos puntos, raya) recien con 3
+      // palabras o mas (MaV): con 2 quedaban tramos sueltos.
+      (current.length >= 3 && /[,;:—]["»”)]*$/.test(word.text)) ||
       next.start - word.end > PAUSE_SECONDS;
     if (cut) {
       phrases.push(current);
@@ -114,6 +116,9 @@ export function buildWordAss(
     // Estilo documental (lib/documentalStyles.ts): fuente, tamano a 1080p,
     // palabras por tramo y mayusculas; sin resaltar la palabra actual.
     documental?: { font: string; size: number; words: number; uppercase: boolean };
+    // Tramos donde un grafico ya escribe la frase (cita, cambio de frase,
+    // pregunta, tarjeta de capitulo): el subtitulo se oculta ahi (MaV).
+    hideRanges?: { start: number; end: number }[];
   }
 ): string {
   const doc = opts.documental;
@@ -139,6 +144,8 @@ export function buildWordAss(
   const events: string[] = [];
   const shown = (t: string) => assText(doc?.uppercase ? t.toUpperCase() : t);
   for (const chunk of captionChunks(cues, doc?.words ?? WORDS_PER_CHUNK)) {
+    const mid = (chunk.start + chunk.end) / 2;
+    if (opts.hideRanges?.some((r) => mid >= r.start && mid <= r.end)) continue;
     if (doc) {
       // Documental: el tramo entero en blanco, sin palabra resaltada.
       if (chunk.end > chunk.start) {

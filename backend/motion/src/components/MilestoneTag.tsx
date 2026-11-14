@@ -22,7 +22,7 @@ export function MilestoneTag({ spec, theme, exit: withExit }: { spec: OverlaySpe
           alignItems: "center",
           gap: 16 * s,
           padding: `${12 * s}px ${22 * s}px`,
-          background: "rgba(0,0,0,0.55)",
+          background: "rgba(0,0,0,0.8)",
           borderLeft: `${5 * s}px solid ${theme.accent}`,
           opacity: t,
           clipPath: `inset(0 ${(1 - draw(0, 14)) * 100}% 0 0)`,

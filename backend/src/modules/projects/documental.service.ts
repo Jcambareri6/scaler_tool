@@ -64,14 +64,22 @@ export async function getProjectDocumental(req: Request, res: Response) {
     const finalRenderMeta = (assets ?? [])
       .filter((a) => !a.scene_id && (a.metadata as { kind?: string } | null)?.kind === "final_render")
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]?.metadata as
-      | { qc?: unknown; music?: { title: string; author: string | null; license: string; source_page: string | null } }
+      | {
+          qc?: unknown;
+          music?: { title: string; author: string | null; license: string; source_page: string | null };
+          music_tracks?: { title: string; author: string | null; license: string; source_page: string | null }[];
+        }
       | undefined;
     const music = finalRenderMeta?.music;
+    // Musica por capitulo: una pista por animo, todas acreditadas.
+    const musicTracks = finalRenderMeta?.music_tracks ?? (music ? [music] : []);
     const creditsText = [
       ...(needsAttribution.length
         ? ["Material de archivo:", ...needsAttribution.map((c) => `- ${[c.title, c.author].filter(Boolean).join(" — ")} (${c.license})${c.source ? ` ${c.source}` : ""}`)]
         : []),
-      ...(music ? ["", `Música: "${music.title}"${music.author ? ` — ${music.author}` : ""} (${music.license})${music.source_page ? ` ${music.source_page}` : ""}`] : []),
+      ...(musicTracks.length
+        ? ["", "Música:", ...musicTracks.map((m) => `- "${m.title}"${m.author ? ` — ${m.author}` : ""} (${m.license})${m.source_page ? ` ${m.source_page}` : ""}`)]
+        : []),
     ].join("\n").trim();
 
     // Capitulos con su tiempo (el plano que abre cada capitulo).

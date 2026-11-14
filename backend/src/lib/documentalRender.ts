@@ -86,7 +86,7 @@ export function zoomCutFilter(every: number, out: { width: number; height: numbe
 
 export interface SfxCue {
   at: number; // segundos
-  kind: "whoosh" | "hit" | "tick";
+  kind: "whoosh" | "hit" | "tick" | "paper";
 }
 
 // Efectos sintetizados con ffmpeg (sin archivos externos ni licencias).
@@ -97,8 +97,12 @@ export const SFX_SOURCES: Record<SfxCue["kind"], string> = {
   hit: "sine=f=60:d=0.5,volume=2.5,afade=t=out:st=0.05:d=0.45",
   // Tic de reloj, 0.08 s.
   tick: "sine=f=2200:d=0.08,afade=t=out:st=0.01:d=0.07",
+  // Papel (citas, titulares, documentos): rafaga corta de ruido agudo, 0.3 s.
+  paper: "anoisesrc=d=0.3:c=white:a=0.35,highpass=f=2500,lowpass=f=9000,afade=t=in:d=0.04,afade=t=out:st=0.08:d=0.22",
 };
 
+// Como MaV (SONIDO_DE): cifra/fecha -> golpe, capitulo -> whoosh, cita/
+// titular/documento -> papel, lista/rotulo -> tic.
 const SFX_BY_OVERLAY: Record<string, SfxCue["kind"]> = {
   title_card: "whoosh",
   chapter_index: "whoosh",
@@ -110,57 +114,117 @@ const SFX_BY_OVERLAY: Record<string, SfxCue["kind"]> = {
   versus: "hit",
   data_viz_single: "hit",
   line_chart: "hit",
+  milestone: "hit",
+  kinetic_quote: "paper",
+  phrase_swap: "paper",
+  pivot_question: "paper",
   timeline: "tick",
-  milestone: "tick",
+  list: "tick",
 };
 
-// Un efecto por grafico, con separacion minima (MaV: "nunca encima").
-export function sfxCues(overlays: { start: number; type: string }[], minGap = 3): SfxCue[] {
+// Tema serio (muerte, guerra, desastre): sin efectos "de juego" (el tic) y
+// los demas mas bajos (MaV).
+export function isSeriousTopic(text: string): boolean {
+  return /\b(muri[oó]|murieron|muerte|muertos|v[ií]ctimas|guerra|desastre|tragedia|hundi[oó]|naufragio|genocidio|masacre|atentado|asesin\w*|died|death|war|disaster|tragedy)\b/i.test(text);
+}
+
+// Un efecto por grafico (MaV): 6,5 s entre efectos y nunca en dos graficos
+// seguidos.
+export function sfxCues(overlays: { start: number; type: string }[], opts: { minGap?: number; serious?: boolean } = {}): SfxCue[] {
+  const minGap = opts.minGap ?? 6.5;
   const cues: SfxCue[] = [];
+  let previousHadSfx = false;
   for (const o of [...overlays].sort((a, b) => a.start - b.start)) {
     const kind = SFX_BY_OVERLAY[o.type];
-    if (!kind) continue;
+    if (!kind || (opts.serious && kind === "tick")) {
+      previousHadSfx = false;
+      continue;
+    }
     const last = cues[cues.length - 1];
-    if (last && o.start - last.at < minGap) continue;
+    if (previousHadSfx || (last && o.start - last.at < minGap)) {
+      previousHadSfx = false;
+      continue;
+    }
     cues.push({ at: Math.max(0, o.start), kind });
+    previousHadSfx = true;
   }
   return cues;
 }
 
-// Mezcla final: voz + musica (en loop, con ducking por sidechain bajo la voz)
-// + efectos, normalizada a -14 LUFS (lo que normaliza YouTube).
-// Inputs: 0 = voz; 1 = musica (si hay). Los efectos van por lavfi.
+// Silencios de la musica (MaV, momentosDeMusica): en hasta 2 cifras grandes,
+// separadas 30 s o mas y nunca antes de los 8 s, la musica se calla ~1,2 s.
+export function musicStops(overlays: { start: number; type: string }[]): number[] {
+  const stops: number[] = [];
+  for (const o of [...overlays].sort((a, b) => a.start - b.start)) {
+    if (o.type !== "big_number" && o.type !== "number_phrase") continue;
+    if (o.start < 8 || stops.some((s) => Math.abs(s - o.start) < 30)) continue;
+    stops.push(o.start);
+    if (stops.length === 2) break;
+  }
+  return stops;
+}
+
+// Tramo de musica: una pista por capitulo segun su animo (MaV: cambio con
+// fundido cruzado de 2,5 s; tramos de menos de 20 s no cambian la musica).
+export interface MusicSegment {
+  path: string;
+  start: number;
+  end: number;
+}
+
+const MUSIC_CROSSFADE = 2.5;
+
+// Mezcla final: voz + musica por capitulo (ducking bajo la voz) + efectos,
+// normalizada a -14 LUFS (lo que normaliza YouTube).
+// Inputs: 0 = voz; 1..n = un tramo de musica cada uno. Efectos por lavfi.
 export function audioMixArgs(opts: {
   voicePath: string;
-  musicPath: string | null;
+  music: MusicSegment[];
   duration: number;
   sound: DocumentalStyle["sound"];
   sfx: SfxCue[];
+  stops?: number[];
+  serious?: boolean;
   outPath: string;
 }): string[] {
   const { sound, duration } = opts;
   const args = ["-y", "-i", opts.voicePath];
-  if (opts.musicPath) args.push("-stream_loop", "-1", "-i", opts.musicPath);
+  for (const seg of opts.music) args.push("-stream_loop", "-1", "-i", seg.path);
   const parts: string[] = [];
   const mixInputs: string[] = [];
   parts.push(`[0:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[voice][voicekey]`);
   mixInputs.push("[voice]");
-  if (opts.musicPath) {
-    const fadeOut = Math.max(0, duration - 3);
+  if (opts.music.length) {
+    opts.music.forEach((seg, k) => {
+      const isLast = k === opts.music.length - 1;
+      const end = isLast ? duration : Math.min(duration, seg.end + MUSIC_CROSSFADE);
+      const len = Math.max(1, end - seg.start);
+      const fadeIn = k === 0 ? 1.5 : MUSIC_CROSSFADE;
+      const fadeOut = isLast ? 2.5 : MUSIC_CROSSFADE;
+      const ms = Math.round(seg.start * 1000);
+      parts.push(
+        `[${k + 1}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:${len.toFixed(2)},asetpts=PTS-STARTPTS,` +
+          `volume=${sound.musicVolume},afade=t=in:d=${fadeIn},afade=t=out:st=${Math.max(0, len - fadeOut).toFixed(2)}:d=${fadeOut},` +
+          `adelay=${ms}|${ms}[m${k}]`
+      );
+    });
+    const stops = (opts.stops ?? []).map((s) => `volume=enable='between(t,${(s - 0.2).toFixed(2)},${(s + 1.0).toFixed(2)})':volume=0.05`);
     parts.push(
-      `[1:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:${duration.toFixed(2)},volume=${sound.musicVolume},` +
-        `afade=t=in:d=2,afade=t=out:st=${fadeOut.toFixed(2)}:d=3[music]`
+      `${opts.music.map((_, k) => `[m${k}]`).join("")}amix=inputs=${opts.music.length}:duration=longest:normalize=0` +
+        `${stops.length ? `,${stops.join(",")}` : ""}[music]`
     );
-    // Ducking: cuando habla la voz la musica baja a ~duckTo de su nivel.
+    // Ducking (MaV): bajo la voz la musica queda al ~duckTo de su nivel, con
+    // rampas cortas (~250 ms) para que no "respire".
     const ratio = Math.min(20, Math.max(2, 1 / Math.max(0.05, sound.duckTo)));
-    parts.push(`[music][voicekey]sidechaincompress=threshold=0.02:ratio=${ratio.toFixed(1)}:attack=30:release=500[ducked]`);
+    parts.push(`[music][voicekey]sidechaincompress=threshold=0.02:ratio=${ratio.toFixed(1)}:attack=120:release=250[ducked]`);
     mixInputs.push("[ducked]");
   } else {
     parts.push("[voicekey]anullsink");
   }
+  const sfxVolume = opts.serious ? sound.sfxVolume * 0.7 : sound.sfxVolume;
   opts.sfx.forEach((cue, i) => {
     const ms = Math.round(cue.at * 1000);
-    parts.push(`${SFX_SOURCES[cue.kind]},aformat=sample_rates=48000:channel_layouts=stereo,volume=${sound.sfxVolume},adelay=${ms}|${ms}[sfx${i}]`);
+    parts.push(`${SFX_SOURCES[cue.kind]},aformat=sample_rates=48000:channel_layouts=stereo,volume=${sfxVolume.toFixed(3)},adelay=${ms}|${ms}[sfx${i}]`);
     mixInputs.push(`[sfx${i}]`);
   });
   parts.push(

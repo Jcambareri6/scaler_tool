@@ -147,7 +147,9 @@ export const projectsService = {
         (asset) =>
           asset.metadata?.kind === "stock_preview" ||
           asset.metadata?.kind === "ai_generated" ||
-          asset.metadata?.kind === "user_upload"
+          asset.metadata?.kind === "user_upload" ||
+          // Formato documental: foto o clip elegido por el juez (documentalPipeline).
+          asset.metadata?.kind === "documental"
       );
   },
 
@@ -157,8 +159,17 @@ export const projectsService = {
   // ordena por created_at desc).
   async getAudioAsset(projectId: string): Promise<Asset | null> {
     const rows = await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`);
-    const audio = rows.map(mapAsset).find((asset) => asset.type === "AUDIO" && asset.sceneId === null);
+    const audio = rows.map(mapAsset).find((asset) => asset.type === "AUDIO" && asset.sceneId === null && asset.metadata?.kind !== "preview_mix");
     return audio ?? null;
+  },
+
+  // Audio para el reproductor de la revision: en el documental, la mezcla con
+  // musica y efectos (metadata.kind "preview_mix", ver buildPreviewMix); si
+  // no existe, la voz sola.
+  async getPreviewAudioAsset(projectId: string): Promise<Asset | null> {
+    const rows = (await api.get<Parameters<typeof mapAsset>[0][]>(`/projects/${projectId}/assets`)).map(mapAsset);
+    const mix = rows.find((asset) => asset.type === "AUDIO" && asset.sceneId === null && asset.metadata?.kind === "preview_mix");
+    return mix ?? rows.find((asset) => asset.type === "AUDIO" && asset.sceneId === null) ?? null;
   },
 
   // Video final ya compuesto (type=VIDEO, sceneId=null, metadata.kind=

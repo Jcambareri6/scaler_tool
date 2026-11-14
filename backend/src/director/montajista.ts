@@ -23,6 +23,10 @@ const DEFAULT_MODEL = "claude-opus-5-5";
 // ~120 planos en un video de 10 min: el plan es largo (streaming).
 const MAX_TOKENS = 48000;
 const ROTULO_TYPES = ["lower_third", "person_card", "milestone", "badge"];
+// Grafico que no entra en el presupuesto -> rotulo con el mismo dato.
+const ROTULO_FROM_GRAPHIC: Record<string, string> = { big_number: "milestone", number_phrase: "milestone", timeline: "milestone" };
+const MAP_TYPES = ["map_marker", "map_globe", "map_route"];
+const MAP_MIN_GAP = 35;
 const MUSIC_MOODS: MusicMood[] = ["documental", "tension", "triste", "epico", "misterio", "esperanza"];
 
 export interface ShotGraphic {
@@ -94,7 +98,8 @@ function systemPrompt(style: DocumentalStyle): string {
 ${style.description}
 - Duraciones (segundos): persona ${d.persona.join("-")}, lugar ${d.lugar.join("-")}, cosa ${d.cosa.join("-")}, metraje ${d.metraje.join("-")}, ambiente ${d.ambiente.join("-")}, mapa ${d.mapa.join("-")}, grafico ${d.grafico.join("-")}.
 - Clases preferidas, en orden: ${style.plan.prefer.join(", ")}.
-- Graficos: como mucho ${style.plan.graphicsPerMinute} por minuto (${style.plan.graphicsPerMinuteHook} en el primer minuto), nunca mas del ${Math.round(style.plan.maxGraphicShare * 100)}% del tiempo, separados al menos ${style.plan.minGraphicGapSeconds} s.
+- "ambiente" como mucho en el ${Math.round(MAX_AMBIENT_SHARE * 100)}% de los planos: es el ultimo recurso (va a stock generico). Si la frase habla de algo que se puede mostrar, es persona, cosa, lugar o metraje.
+- Graficos: como mucho ${style.plan.graphicsPerMinute} por minuto (${style.plan.graphicsPerMinuteHook} en el primer minuto), nunca mas del ${Math.round(style.plan.maxGraphicShare * 100)}% del tiempo, separados al menos ${style.plan.minGraphicGapSeconds} s. Apunta a acercarte a ese limite: cada cifra, fecha, nombre propio, lugar o comparacion del guion es candidata a grafico (big_number, milestone, map_marker, person_card, versus...).
 - Graficos favoritos de este estilo: ${style.graphics.favor.join(", ")}.
 ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.epochHint ? ` (${style.sources.epochHint})` : ""}: pon siempre \`anio\` cuando sea historico.\n` : ""}
 ## Graficos disponibles (campo grafico.type)
@@ -355,6 +360,7 @@ export function verifyPlan(
   const totalTime = phrases[total - 1]!.end - phrases[0]!.start || 1;
   const accepted: { start: number; end: number }[] = [];
   let graphicTime = 0;
+  let lastMapAt = -Infinity;
   shots.forEach((shot, i) => {
     if (!shot.grafico) {
       if (shot.clase === "grafico") shot.clase = "ambiente";
@@ -378,10 +384,28 @@ export function verifyPlan(
               ? "supera el % de graficos"
               : null;
     if (reason) {
-      issues.push(`grafico ${shot.grafico.type} en p${shot.from + 1} descartado: ${reason}`);
+      // MaV (rotuloDeGrafico): el dato que no entra en el presupuesto no se
+      // pierde, pasa a rotulo sobre el plano si el plano no tiene uno.
+      const asRotulo = !shot.rotulo && ROTULO_FROM_GRAPHIC[shot.grafico.type];
+      if (asRotulo && reason !== `tipo ${shot.grafico.type} no permitido`) {
+        shot.rotulo = { ...shot.grafico, type: asRotulo } as typeof shot.grafico;
+        issues.push(`grafico ${shot.grafico.type} en p${shot.from + 1} pasa a rotulo ${asRotulo}: ${reason}`);
+      } else {
+        issues.push(`grafico ${shot.grafico.type} en p${shot.from + 1} descartado: ${reason}`);
+      }
       delete shot.grafico;
       if (shot.clase === "grafico") shot.clase = "ambiente";
       return;
+    }
+    // Mapas: como mucho uno cada 35 s (MaV).
+    if (MAP_TYPES.includes(shot.grafico.type)) {
+      if (start - lastMapAt < MAP_MIN_GAP) {
+        issues.push(`grafico ${shot.grafico.type} en p${shot.from + 1} descartado: otro mapa hace menos de ${MAP_MIN_GAP} s`);
+        delete shot.grafico;
+        if (shot.clase === "grafico") shot.clase = "ambiente";
+        return;
+      }
+      lastMapAt = start;
     }
     // El grafico va ENCIMA del plano: el plano conserva su clase (que se busca
     // debajo). Solo si el montajista no dio ninguna, va sobre un ambiente.
@@ -428,6 +452,14 @@ export function heuristicPlan(phrases: Phrase[], topic: string): { shots: Planne
   return { shots, chapters: phrases.length ? [{ titulo: topic, desde: 0, animo: "documental" }] : [] };
 }
 
+// Tope de planos "ambiente" (stock generico). En la prueba del Titanic el
+// montajista llego a 49% y casi todo el video salio de Pexels.
+const MAX_AMBIENT_SHARE = 0.2;
+
+function ambientShare(shots: { clase: string }[]): number {
+  return shots.length ? shots.filter((s) => s.clase === "ambiente").length / shots.length : 0;
+}
+
 export async function directMontaje(input: {
   phrases: Phrase[];
   style: DocumentalStyle;
@@ -451,7 +483,22 @@ ${phrases.map((p) => `${p.id} [${p.start.toFixed(1)}-${p.end.toFixed(1)}] ${p.te
     const raw = await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, user, usage);
     const parsed = parsePlan(raw, phrases);
     if (parsed.shots.length === 0) throw new Error("el montajista no devolvio planos");
-    const verified = verifyPlan(parsed, phrases, style);
+    let verified = verifyPlan(parsed, phrases, style);
+    // Demasiado "ambiente" = demasiado stock generico: UNA correccion.
+    const share = ambientShare(verified.shots);
+    if (share > MAX_AMBIENT_SHARE) {
+      const fix = `${user}\n\nTu plan anterior puso el ${Math.round(share * 100)}% de los planos como "ambiente" (maximo ${Math.round(MAX_AMBIENT_SHARE * 100)}%). Rehacelo: todo lo que nombra o describe algo mostrable (el barco, la gente, un lugar, un hecho filmado) va como persona, cosa, lugar o metraje. Ambiente solo para transiciones e ideas abstractas.`;
+      try {
+        const retry = parsePlan(await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, fix, usage), phrases);
+        if (retry.shots.length > 0) {
+          const second = verifyPlan(retry, phrases, style);
+          if (ambientShare(second.shots) < share) verified = second;
+        }
+      } catch (err) {
+        console.warn("[montajista] la correccion de ambiente fallo, sigo con el primer plan:", err);
+      }
+      verified.issues.push(`ambiente ${Math.round(share * 100)}% en el primer plan -> ${Math.round(ambientShare(verified.shots) * 100)}% tras la correccion`);
+    }
     return { ...verified, source: "montajista", usage };
   } catch (err) {
     console.warn("[montajista] fallo, sigo con el plan heuristico:", err);

@@ -38,7 +38,7 @@ import type {
 import type { GenerateOverlayInput, GenerateOverlayOutput } from "../tools/generateOverlay.tool.js";
 import type { PlanOverlaysInput, PlanOverlaysOutput } from "../tools/planOverlays.tool.js";
 import type { OverlaySpec } from "../types/shared/typeShared.js";
-import type { RenderVideoInput, RenderVideoOutput } from "../tools/renderVideo.tool.js";
+import { buildPreviewMix, type RenderVideoInput, type RenderVideoOutput } from "../tools/renderVideo.tool.js";
 import type { BuildTimelineInput, BuildTimelineOutput } from "../tools/buildTimeline.tool.js";
 import type { BuildScenesInput, BuildScenesOutput } from "../tools/buildScenes.tool.js";
 import { buildSceneImagePrompts, buildSceneVideoPrompts } from "../modules/scenes/sceneBatch.service.js";
@@ -257,6 +257,10 @@ export async function runPreRenderPipeline(projectId: string, ctx: PipelineConte
     });
     await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 90, progress_message: "Armando el timeline..." });
     await runTool<BuildTimelineInput, BuildTimelineOutput>("build_timeline", { video_project_id: projectId }, toolCtx);
+    // Audio de la preview con musica y efectos (la misma mezcla del render).
+    // Si falla, la revision sigue con la voz sola.
+    await setJobStatus(ctx.jobId, projectId, "VISUALS_DONE", { progress: 95, progress_message: "Mezclando la música para la vista previa..." });
+    await buildPreviewMix(projectId).catch((err) => console.warn(`[documental] no se pudo armar el audio de la preview: ${(err as Error).message}`));
     await setJobStatus(ctx.jobId, projectId, "AWAITING_STOCK_REVIEW", {
       progress: 100,
       progress_message: "Planos listos para revisar",

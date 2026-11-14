@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import assert from "node:assert/strict";
-import { audioMixArgs, lookFilter, motionFor, parseQc, QC_FILTER_ARGS, sfxCues, zoomCutFilter, zoompanExpr, type Motion } from "../../src/lib/documentalRender.js";
+import { audioMixArgs, lookFilter, motionFor, musicStops, parseQc, QC_FILTER_ARGS, sfxCues, zoomCutFilter, zoompanExpr, type Motion } from "../../src/lib/documentalRender.js";
 import { getDocumentalStyle } from "../../src/lib/documentalStyles.js";
 
 const ffmpeg = createRequire(import.meta.url)("ffmpeg-static") as string;
@@ -42,10 +42,20 @@ for (let i = 0; i < 6; i++) {
 // Audio: voz con pausas + musica + efectos -> -14 LUFS.
 run(["-y", "-f", "lavfi", "-i", "sine=f=220:d=3,apad=pad_dur=2,volume=0.3", "-f", "lavfi", "-i", "sine=f=300:d=3", "-filter_complex", "[0][1]concat=n=2:v=0:a=1", path.join(dir, "voz.wav")]);
 run(["-y", "-f", "lavfi", "-i", "sine=f=440:d=2,volume=0.5", path.join(dir, "musica.mp3")]);
-const sfx = sfxCues([{ start: 1, type: "big_number" }, { start: 2, type: "title_card" }, { start: 4.5, type: "timeline" }, { start: 5, type: "kinetic_quote" }]);
-assert.equal(sfx.length, 2, "separacion minima y tipos sin efecto");
-run(audioMixArgs({ voicePath: path.join(dir, "voz.wav"), musicPath: path.join(dir, "musica.mp3"), duration: 8, sound: getDocumentalStyle("documental").sound, sfx, outPath: path.join(dir, "mix.flac") }));
-run(audioMixArgs({ voicePath: path.join(dir, "voz.wav"), musicPath: null, duration: 8, sound: getDocumentalStyle("documental").sound, sfx: [], outPath: path.join(dir, "mix-solo.flac") }));
+run(["-y", "-f", "lavfi", "-i", "sine=f=330:d=2,volume=0.5", path.join(dir, "musica2.mp3")]);
+// 6,5 s entre efectos y nunca en dos graficos seguidos.
+const marks = [{ start: 1, type: "big_number" }, { start: 2, type: "title_card" }, { start: 4.5, type: "timeline" }, { start: 8, type: "kinetic_quote" }, { start: 9, type: "big_number" }];
+const sfx = sfxCues(marks);
+assert.deepEqual(sfx.map((c) => c.kind), ["hit", "paper"], "separacion de 6,5 s y sin graficos seguidos");
+assert.equal(sfxCues([{ start: 1, type: "timeline" }], { serious: true }).length, 0, "tema serio: sin tic");
+assert.deepEqual(musicStops([{ start: 5, type: "big_number" }, { start: 12, type: "big_number" }, { start: 30, type: "big_number" }, { start: 50, type: "big_number" }]), [12, 50], "silencios: no antes de 8 s, 30 s entre si, maximo 2");
+// Dos tramos de musica (cambio de capitulo con fundido cruzado) + silencio en una cifra.
+run(audioMixArgs({
+  voicePath: path.join(dir, "voz.wav"),
+  music: [{ path: path.join(dir, "musica.mp3"), start: 0, end: 4 }, { path: path.join(dir, "musica2.mp3"), start: 4, end: 8 }],
+  duration: 8, sound: getDocumentalStyle("documental").sound, sfx, stops: [3], serious: true, outPath: path.join(dir, "mix.flac"),
+}));
+run(audioMixArgs({ voicePath: path.join(dir, "voz.wav"), music: [], duration: 8, sound: getDocumentalStyle("documental").sound, sfx: [], outPath: path.join(dir, "mix-solo.flac") }));
 console.log("mezcla OK");
 
 // QC: video con 1 s negro y 3 s congelado + el audio mezclado.

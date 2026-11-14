@@ -37,10 +37,27 @@ export interface PaletteTheme {
   titleFont: "serif" | "sans";
 }
 
+// Contraste minimo para TODAS las paletas: los graficos van encima de fotos y
+// clips reales (cielos blancos, sepia de archivo, nieve) y con velos de
+// 0,55-0,66 y texto secundario al 78% no se leian. Piso: velo al 0,80 y texto
+// secundario al 0,94 (mismo color de la paleta, solo mas opaco).
+const MIN_SCRIM_ALPHA = 0.8;
+const MIN_MUTED_ALPHA = 0.94;
+
+function withMinAlpha(color: string, min: number): string {
+  const m = color.match(/^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i);
+  if (!m) return color;
+  return `rgba(${m[1]},${m[2]},${m[3]},${Math.max(Number(m[4]), min)})`;
+}
+
+function withContrast(theme: Theme): Theme {
+  return { ...theme, scrim: withMinAlpha(theme.scrim, MIN_SCRIM_ALPHA), textMuted: withMinAlpha(theme.textMuted, MIN_MUTED_ALPHA) };
+}
+
 export function resolveTheme(theme: string | PaletteTheme | undefined): Theme {
   if (theme && typeof theme === "object") {
     const { titleFont, ...colors } = theme;
-    return { ...colors, fontSans: SANS, fontSerif: titleFont === "sans" ? SANS : SERIF };
+    return withContrast({ ...colors, fontSans: SANS, fontSerif: titleFont === "sans" ? SANS : SERIF });
   }
-  return THEMES[(theme as ThemeName) in THEMES ? (theme as ThemeName) : "documental"];
+  return withContrast(THEMES[(theme as ThemeName) in THEMES ? (theme as ThemeName) : "documental"]);
 }

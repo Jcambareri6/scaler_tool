@@ -40,6 +40,14 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/motion ./motion
-RUN mkdir -p /data/work && chown -R node:node /data
+# Skills de los agentes (el montajista del documental lee
+# skills/montaje-documental/SKILL.md en runtime, ver montajista.ts::skillText).
+COPY skills ./skills
+# yt-dlp para el metraje de YouTube del documental (youtubeSource.ts, solo
+# con DOCUMENTAL_YOUTUBE=on). Binario oficial autonomo, version fijada: el
+# paquete de Debian es viejo y YouTube lo bloquea. Usa el ffmpeg de
+# ffmpeg-static (--ffmpeg-location).
+ADD https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux /usr/local/bin/yt-dlp
+RUN chmod 755 /usr/local/bin/yt-dlp && mkdir -p /data/work && chown -R node:node /data
 USER node
 CMD ["node", "dist/worker.js"]

@@ -21,7 +21,7 @@ export function CornerBadge({ spec, theme, exit: withExit }: { spec: OverlaySpec
           gap: 20 * s,
           alignItems: "stretch",
           padding: `${18 * s}px ${26 * s}px`,
-          background: "linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.45) 35%)",
+          background: "linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.8) 30%)",
           opacity: t,
           transform: `translateX(${(1 - t) * 40 * s}px)`,
         }}

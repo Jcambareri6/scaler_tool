@@ -68,6 +68,14 @@ const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_
 // Graficos que dibujan el valor de cada item: sin cifra no hay que dibujar.
 const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 
+// Tipos cuyo texto principal puede ser una etiqueta corta sin numeros que no
+// esta literal en el guion (nombre de lugar, nombre del hito).
+// title_card: el titulo del capitulo es el nombre de la parte ("Las
+// advertencias"), no un pedazo de frase.
+const RELAXED_LABEL_TYPES: OverlayType[] = ["map_marker", "milestone", "title_card"];
+
+const MILESTONE_DATE = /\b(\d{3,4}|\d{1,2} de \w+|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|siglo)\b/i;
+
 // "1. 600" == "1.600": las escenas armadas antes del arreglo de
 // build_scenes (que cortaba en el punto de miles) quedaron con ese espacio,
 // y se conservan tal cual al regenerar con imagenes cargadas.
@@ -99,7 +107,8 @@ export function appearsIn(haystack: string, needle: string | undefined): boolean
 // preguntas ("llegar a América 500 años antes que Colón") o listas de pedazos.
 const CONECTORES = new Set(["que", "y", "e", "o", "u", "el", "la", "los", "las", "lo", "un", "una", "de", "del", "a", "al", "en", "con", "por", "para", "su", "sus", "se", "ni", "pero", "como", "mas", "más", "muy"]);
 const CONECTOR_INICIAL = /^(peor|además|ademas|pero|y|o|entonces|mientras|tambi[eé]n|incluso|encima|sin embargo)\b/i;
-const MIN_PALABRAS_CITA = 4;
+// 3: citas cortas y fuertes ("cállate, estoy ocupado") tambien se leen solas.
+const MIN_PALABRAS_CITA = 3;
 const MAX_PALABRAS_CITA = 8;
 const MAX_CARACTERES_CITA = 45;
 const MAX_PALABRAS_TITULO = 8;
@@ -195,7 +204,19 @@ export const generateOverlayTool: ToolDefinition<
     const normalizedScript = normalize(script_text);
     const normalizedFull = full_text ? normalize(full_text) : normalizedScript;
 
-    if (!appearsIn(normalizedScript, text)) {
+    // Mapas e hitos: el nombre del lugar o una etiqueta corta ("Se hunde")
+    // casi nunca esta tal cual en el guion. Se permite si es corta y sin
+    // numeros -- las cifras y los anios siguen teniendo que ser literales.
+    const shortLabelOk =
+      RELAXED_LABEL_TYPES.includes(overlay.type) && !/\d/.test(text) && text.split(/\s+/).length <= 5;
+
+    // Hito = fecha (MaV, date-corner): tiene que tener un anio, un mes o un
+    // dia. "El Titanic" o "El hundimiento" no son hitos.
+    if (overlay.type === "milestone" && !MILESTONE_DATE.test(text) && !MILESTONE_DATE.test(overlay.label ?? "")) {
+      throw new Error(`milestone sin fecha ("${text}"): un hito necesita un anio, un mes o un dia`);
+    }
+
+    if (!shortLabelOk && !appearsIn(normalizedScript, text)) {
       throw new Error(
         `overlay.text ("${text}") no aparece literalmente en el guion — modo estricto lo prohibe`
       );

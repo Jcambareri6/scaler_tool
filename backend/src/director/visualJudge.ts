@@ -20,13 +20,19 @@ const ffmpegPath = require("ffmpeg-static") as string | null;
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
 
-export type QaCode = "ok" | "generico" | "equivocado" | "persona" | "epoca" | "texto" | "oscuro" | "marca_agua" | "sin_ver";
+export type QaCode = "ok" | "generico" | "equivocado" | "persona" | "epoca" | "texto" | "oscuro" | "marca_agua" | "ficcion" | "sin_ver";
 
 export interface JudgeShot {
   frase: string;
   clase: ShotClass;
   sujeto: string;
   anio?: number;
+  // Para las transiciones: sirve una imagen del tema de la frase anterior.
+  fraseAnterior?: string;
+  // "tema": rescate (como MaV): acepta material del tema del video si el
+  // lugar, el pais y la epoca son los de la historia; no rechaza por generico.
+  modo?: "tema";
+  tema?: string;
 }
 
 export interface CandidateVerdict {
@@ -40,7 +46,7 @@ export interface JudgeResult {
   verdicts: CandidateVerdict[];
 }
 
-const CODES: QaCode[] = ["ok", "generico", "equivocado", "persona", "epoca", "texto", "oscuro", "marca_agua"];
+const CODES: QaCode[] = ["ok", "generico", "equivocado", "persona", "epoca", "texto", "oscuro", "marca_agua", "ficcion"];
 
 const SYSTEM = `Sos el JUEZ VISUAL de un documental hecho con material real. Te paso candidatos (fotos o cuadros de video) para UN plano y lo que dice la voz en ese momento. Elegis el que mejor muestra el sujeto, o los rechazas.
 
@@ -48,25 +54,46 @@ Codigos por candidato:
 - ok: muestra el sujeto de la frase y sirve en un documental serio.
 - generico: es material de relleno que podria ir en cualquier video; no muestra el sujeto concreto.
 - equivocado: muestra otra cosa, otro lugar u otro objeto.
-- persona: es otra persona (o no se reconoce que sea la persona nombrada).
-- epoca: el plano es historico y se ven cosas modernas (o al reves).
+- persona: es otra persona, o no es un RETRATO donde se vea a la persona nombrada (una placa, una tumba, un monumento o una foto grupal donde no se distingue quien es, no sirven para clase persona).
+- epoca: el plano es historico y se ven cosas modernas (o al reves): colores y fotos actuales, edificios, gruas, barcos o pantallas de hoy en una historia de 1912.
 - texto: tiene texto, subtitulos o graficos quemados que molestan.
 - oscuro: muy oscuro, borroso o de muy baja calidad.
 - marca_agua: tiene marca de agua o logo grande.
+- ficcion: es una escena de pelicula o serie (actores, decorados), una dramatizacion, una animacion o CGI, un videojuego o simulacion, un remix o video de fans. En un documental solo va material real.
+Metaforas: si la frase usa una comparacion ("funcionaban como cubeteras de hielo"), la imagen del objeto de la comparacion NO sirve (equivocado): tiene que mostrarse el sujeto real.
 
+La pregunta de fondo: el espectador escucha esta frase mientras ve la imagen. ¿La imagen muestra lo que se esta diciendo: la misma cosa, accion o lugar, no solo un clima parecido?
+Se estricto con generico/equivocado (el espectador no tiene que sentir que la imagen es al azar), PERO una imagen del lugar, la gente o los objetos de la propia historia sirve aunque no muestre la accion exacta (una foto del barco mientras se habla de su velocidad, ok).
 Para clase "ambiente" alcanza con que el ambiente sea coherente con la frase, la epoca y el lugar (no hace falta un sujeto exacto).
+En videos (cuadros de un clip o miniatura de YouTube): rechaza (codigo generico) un presentador hablando a camara, una reaccion, una recopilacion o una animacion; y (codigo equivocado) un sujeto solo "parecido" al que se pide.
+Si la frase es una transicion sin nada concreto que mostrar ("pero eso no fue todo", "y entonces"), sirve una imagen del tema de la frase anterior. Una imagen de algo sin relacion, no.
 No apruebes por cortesia: si ninguno sirve, "elegido": null.
 
 Responde SOLO con JSON: {"elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto"}]}`;
 
+// Tope por ffmpeg: leyendo un clip remoto, si el CDN deja de responder
+// (paso con cdn.pixabay.com) ffmpeg espera para siempre y traba el plano.
+const FFMPEG_TIMEOUT_MS = 45_000;
+
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) return reject(new Error("ffmpeg-static no resolvio el binario"));
-    const proc = spawn(ffmpegPath, args);
+    const proc = spawn(ffmpegPath, args, { windowsHide: true });
     let stderr = "";
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      reject(new Error(`ffmpeg tardo mas de ${FFMPEG_TIMEOUT_MS / 1000} s`));
+    }, FFMPEG_TIMEOUT_MS);
     proc.stderr.on("data", (c) => (stderr += c.toString()));
-    proc.on("error", reject);
-    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg ${code}: ${stderr.slice(-400)}`))));
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg ${code}: ${stderr.slice(-400)}`));
+    });
   });
 }
 
@@ -75,16 +102,20 @@ function runFfmpeg(args: string[]): Promise<void> {
 export async function candidateThumbnail(candidate: VisualCandidate, workDir: string, key: string): Promise<string | null> {
   const out = path.join(workDir, `${key}.jpg`);
   try {
-    const source = candidate.thumb_url ?? (candidate.type === "IMAGE" ? candidate.url : null);
-    if (source) {
-      const body = await withRetry(
-        async () => {
-          const res = await fetchWithTimeout(source, { headers: { "User-Agent": WIKIMEDIA_UA } }, 20_000);
-          if (!res.ok) throw new Error(`miniatura (${res.status})`);
-          return Buffer.from(await res.arrayBuffer());
-        },
-        { retries: 3, baseDelayMs: 2000 }
-      );
+    const primary = candidate.thumb_url ?? (candidate.type === "IMAGE" ? candidate.url : null);
+    if (primary) {
+      const download = (src: string) =>
+        withRetry(
+          async () => {
+            const res = await fetchWithTimeout(src, { headers: { "User-Agent": WIKIMEDIA_UA } }, 20_000);
+            if (!res.ok) throw new Error(`miniatura (${res.status})`);
+            return Buffer.from(await res.arrayBuffer());
+          },
+          { retries: 3, baseDelayMs: 2000 }
+        );
+      // Si la miniatura del proveedor falla (p. ej. Openverse 424), la imagen original.
+      const fallback = candidate.type === "IMAGE" && candidate.url !== primary ? candidate.url : null;
+      const body = await download(primary).catch((err) => (fallback ? download(fallback) : Promise.reject(err)));
       const raw = path.join(workDir, `${key}.src`);
       await writeFile(raw, body);
       await runFfmpeg(["-y", "-i", raw, "-vf", "scale=480:-2", "-frames:v", "1", "-q:v", "4", out]);
@@ -93,8 +124,11 @@ export async function candidateThumbnail(candidate: VisualCandidate, workDir: st
     }
     // Video sin miniatura: cuadros a 1, 3 y 6 s (o repartidos en la duracion).
     const span = Math.min(candidate.duration_seconds ?? 8, 8);
+    const remote = /^https?:\/\//.test(candidate.url);
     await runFfmpeg([
       "-y",
+      // Corta la lectura si el servidor no manda nada en 15 s (microsegundos).
+      ...(remote ? ["-rw_timeout", "15000000"] : []),
       "-t",
       String(span),
       "-i",
@@ -114,11 +148,23 @@ export async function candidateThumbnail(candidate: VisualCandidate, workDir: st
   }
 }
 
+// El primer objeto JSON balanceado: a veces el juez manda dos bloques
+// ("Unexpected non-whitespace character after JSON").
 function parseJson(text: string): Record<string, unknown> {
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("el juez no devolvio JSON");
-  return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+  if (start < 0) throw new Error("el juez no devolvio JSON");
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+  }
+  throw new Error("el juez no devolvio JSON completo");
 }
 
 export function parseVerdict(raw: Record<string, unknown>, count: number, seen: Set<number>): JudgeResult {
@@ -159,7 +205,11 @@ export async function judgeCandidates(
   }
   content.push({
     type: "text",
-    text: `Plano: clase ${shot.clase}. Sujeto: ${shot.sujeto || "(sin sujeto)"}${shot.anio ? `. Ano: ${shot.anio}` : ""}.\nLa voz dice: "${shot.frase}"`,
+    text: `Plano: clase ${shot.clase}. Sujeto: ${shot.sujeto || "(sin sujeto)"}${shot.anio ? `. Ano: ${shot.anio}` : ""}.${shot.fraseAnterior ? `\nFrase anterior: "${shot.fraseAnterior}"` : ""}\nLa voz dice: "${shot.frase}"${
+      shot.modo === "tema"
+        ? `\nMODO RESCATE: ninguna fuente dio el sujeto exacto. Acepta (ok) material del tema del video${shot.tema ? ` ("${shot.tema}")` : ""} si el lugar, el pais y la epoca son los de la historia; no lo rechaces por "generico". Si rechaza (equivocado/epoca/texto/marca_agua) otro lugar, otro pais, otra epoca, texto o marca de agua.`
+        : ""
+    }`,
   });
   try {
     const message = await client.messages.stream({ model, max_tokens: 1500, system: SYSTEM, messages: [{ role: "user", content }] }).finalMessage();

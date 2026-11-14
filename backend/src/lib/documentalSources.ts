@@ -2,6 +2,14 @@ import { fetchWithTimeout } from "./http.js";
 import { envInt } from "./env.js";
 import { withRetry } from "./retry.js";
 import type { ShotClass } from "./documentalStyles.js";
+import { BLOCKED_TITLE } from "./youtubeSource.js";
+
+// Colecciones de archive.org con dominio publico curado (noticieros
+// Universal y la coleccion Prelinger). Configurable con ARCHIVE_COLLECTIONS.
+const ARCHIVE_COLLECTIONS = (process.env.ARCHIVE_COLLECTIONS ?? "universal_newsreels,prelinger").split(",").map((c) => c.trim()).filter(Boolean);
+
+// Fotos que no son un retrato de la persona (como NO_ES_FOTO de MaV).
+export const NOT_A_PORTRAIT = /\b(signature|firma|logo|coat of arms|escudo|map|mapa|grave|tomb|tumba|plaque|placa|memorial|stamp|sello|statue|estatua|monument|monumento|family|familia|group|grupo)\b/i;
 
 // SPOKES de busqueda del formato documental: cada clase de plano tiene una
 // cadena de fuentes CON LICENCIA para uso comercial (ver filtro legal en
@@ -21,6 +29,8 @@ export interface VisualCandidate {
   // Imagen chica para el juez (si no hay, el juez saca cuadros del video).
   thumb_url?: string;
   duration_seconds?: number;
+  // YouTube: duracion del video original (el rescate baja otros momentos).
+  video_seconds?: number;
   width?: number;
   height?: number;
   title?: string;
@@ -132,7 +142,8 @@ function commonsCandidate(page: CommonsPage, query: string): VisualCandidate | n
     type: "IMAGE",
     // Miniatura de 1920 de ancho: alcanza para 1080p y pesa mucho menos que el original.
     url: info.thumburl ?? info.url,
-    thumb_url: info.thumburl ? info.thumburl.replace(/\/\d+px-/, "/480px-") : info.url,
+    // Wikimedia solo sirve anchos estandar (500 si, 480 da 400).
+    thumb_url: info.thumburl ? info.thumburl.replace(/\/\d+px-/, "/500px-") : info.url,
     width: info.width,
     height: info.height,
     title: page.title.replace(/^File:/, "").replace(/\.[a-z]+$/i, ""),
@@ -263,13 +274,42 @@ interface ArchiveFile {
   width?: string;
 }
 
-export async function searchArchiveVideos(query: string, year?: number): Promise<VisualCandidate[]> {
-  // Solo dominio publico: la coleccion Prelinger (todo PD) o licencia PD/CC0 declarada.
+// Palabras que el Montajista agrega a la query pero que casi nunca estan en
+// el titulo de un item de archive.org.
+const ARCHIVE_FILLER = /^(footage|film|video|clip|archive|archival|newsreel|historic|historical|old|vintage|black|white|close|up|the|a|an|of|in|on|at|and|with)$/i;
+
+// archive.org exige TODAS las palabras en el titulo o los temas: "Titanic
+// dock passengers 1912 footage" da 0 y "Titanic" (1912) trae el metraje real.
+// Se prueba la query completa y, si no hay nada, versiones mas cortas.
+export async function searchArchiveVideos(query: string, year?: number, entidad?: string): Promise<VisualCandidate[]> {
+  const clean = (s: string) => s.replace(/[()"]/g, " ").replace(/\s+/g, " ").trim();
+  const significant = clean(query)
+    .split(" ")
+    .filter((w) => w && !/^\d+s?$/.test(w) && !ARCHIVE_FILLER.test(w));
+  // Ultimo intento: la primera palabra (suele ser el sujeto); el juez descarta lo que no sirva.
+  const first = significant[0] && significant[0].length > 3 ? significant[0] : "";
+  const attempts = [clean(query), significant.join(" "), entidad ? clean(entidad) : "", significant.slice(0, 2).join(" "), first];
+  const tried = new Set<string>();
+  for (const terms of attempts) {
+    if (!terms || tried.has(terms.toLowerCase())) continue;
+    tried.add(terms.toLowerCase());
+    // Primero las colecciones curadas (como MaV); si no hay nada, el resto
+    // con licencia de dominio publico (filtro de titulos + juez sobre los
+    // cuadros reales). Solo con curadas se perdia el metraje real de 1912.
+    const curated = await searchArchiveOnce(terms, query, year, true);
+    if (curated.length > 0) return curated;
+    const found = await searchArchiveOnce(terms, query, year, false);
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
+async function searchArchiveOnce(terms: string, query: string, year: number | undefined, curated: boolean): Promise<VisualCandidate[]> {
   const yearFilter = year ? ` AND year:[${year - 8} TO ${year + 8}]` : "";
   // Relevancia: la busqueda tiene que estar en el titulo o en los temas, no
   // en cualquier parte de la descripcion (traia peliculas que solo la nombraban).
-  const terms = query.replace(/[()"]/g, " ").trim();
-  const q = `(title:(${terms}) OR subject:(${terms})) AND mediatype:movies AND (collection:prelinger OR licenseurl:*publicdomain*)${yearFilter}`;
+  const scope = curated ? `collection:(${ARCHIVE_COLLECTIONS.join(" OR ")})` : "licenseurl:*publicdomain*";
+  const q = `(title:(${terms}) OR subject:(${terms})) AND mediatype:movies AND ${scope}${yearFilter}`;
   const params = new URLSearchParams({ q, rows: "8", output: "json" });
   params.append("fl[]", "identifier");
   params.append("fl[]", "title");
@@ -280,18 +320,22 @@ export async function searchArchiveVideos(query: string, year?: number): Promise
   );
   const results: VisualCandidate[] = [];
   for (const doc of search.response?.docs ?? []) {
+    // Remixes, peliculas y videos de fans subidos como "dominio publico" (en
+    // la prueba entro el logo de un DJ).
+    if (BLOCKED_TITLE.test(`${doc.title ?? ""} ${doc.identifier}`)) continue;
     const meta = await getJson<{ files?: ArchiveFile[]; metadata?: { creator?: string } }>(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
     const mp4 = (meta.files ?? [])
       .filter((f) => /\.mp4$/i.test(f.name) && Number(f.size ?? 0) > 0 && Number(f.size) < ARCHIVE_MAX_BYTES)
       .sort((a, b) => Number(b.width ?? 0) - Number(a.width ?? 0))[0];
     if (!mp4) continue;
-    const thumb = (meta.files ?? []).find((f) => /__ia_thumb\.jpg$/i.test(f.name) || /\.thumbs\/.+\.jpg$/i.test(f.name));
+    // Sin thumb_url a proposito: el juez saca cuadros de los primeros
+    // segundos del mp4, que es lo que muestra el render (la miniatura de
+    // archive.org puede ser de otra parte del video).
     results.push({
       provider: "archive_org",
       external_id: doc.identifier,
       type: "VIDEO",
       url: `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(mp4.name)}`,
-      ...(thumb ? { thumb_url: `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${thumb.name.split("/").map(encodeURIComponent).join("/")}` } : {}),
       ...(Number(mp4.length) > 0 ? { duration_seconds: Number(mp4.length) } : {}),
       ...(doc.title ? { title: doc.title } : {}),
       ...(meta.metadata?.creator ? { author: String(meta.metadata.creator).slice(0, 120) } : {}),
@@ -307,7 +351,7 @@ export async function searchArchiveVideos(query: string, year?: number): Promise
 
 // ---------- Cadena de fuentes por clase ----------
 
-export type SourceName = "wikidata" | "commons" | "openverse" | "archive" | "stock" | "ai_image";
+export type SourceName = "wikidata" | "commons" | "openverse" | "archive" | "youtube" | "stock" | "ai_image";
 
 export interface ShotSearch {
   clase: ShotClass;
@@ -316,24 +360,28 @@ export interface ShotSearch {
   anio?: number;
 }
 
-// Orden de fuentes para cada clase. "stock" = search_stock (Pexels, Pixabay,
-// Coverr, Wikimedia video); "ai_image" = imagen IA (SnapGen) como ultimo
-// recurso cuando no hay material.
-export function sourceChain(search: ShotSearch, archiveFirst: boolean): SourceName[] {
+// Orden de fuentes para cada clase, SIN stock: el stock (Pexels) es el
+// ultimo recurso y solo entra al final del rescate (rescueGaps), con juez.
+// youtube (solo con DOCUMENTAL_YOUTUBE=on, ver youtubeSource.ts): como en
+// MaV, es la fuente del metraje real y del lugar filmado.
+export function sourceChain(search: ShotSearch, archiveFirst: boolean, youtube = false): SourceName[] {
   const historic = search.anio !== undefined && search.anio < 1990;
+  const yt: SourceName[] = youtube ? ["youtube"] : [];
   switch (search.clase) {
     case "persona":
-      return ["wikidata", "commons", "openverse", "stock"];
+      return ["wikidata", "commons", "openverse"];
     case "lugar":
-      return historic ? ["commons", "archive", "openverse", "stock"] : ["commons", "openverse", "stock"];
+      return historic ? ["commons", "archive", ...yt, "openverse"] : [...yt, "commons", "openverse"];
     case "cosa":
-      return search.entidad ? ["wikidata", "commons", "openverse", "stock"] : ["commons", "openverse", "stock"];
+      return search.entidad ? ["wikidata", "commons", ...yt, "openverse"] : ["commons", ...yt, "openverse"];
     case "metraje":
-      return archiveFirst || historic ? ["archive", "stock", "commons"] : ["stock", "archive", "commons"];
+      return archiveFirst || historic ? ["archive", ...yt, "commons"] : [...yt, "archive", "commons"];
+    // Mapa: no se busca nada (como MaV). Lleva el mapa animado (map_marker).
     case "mapa":
+      return [];
     case "grafico":
     case "ambiente":
     default:
-      return historic && archiveFirst ? ["archive", "stock", "openverse"] : ["stock", "openverse"];
+      return historic ? ["archive", "openverse", "commons"] : ["openverse", "commons", ...yt];
   }
 }

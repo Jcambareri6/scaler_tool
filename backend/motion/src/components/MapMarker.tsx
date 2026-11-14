@@ -123,7 +123,7 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
           borderLeft: cardLeft ? `${4 * s}px solid ${theme.accent}` : undefined,
           borderRight: cardLeft ? undefined : `${4 * s}px solid ${theme.accent}`,
           textAlign: cardLeft ? "left" : "right",
-          background: "rgba(0,0,0,0.55)",
+          background: "rgba(0,0,0,0.8)",
           opacity: card,
           transform: `translateX(${(1 - card) * (cardLeft ? -24 : 24) * s}px)`,
         }}

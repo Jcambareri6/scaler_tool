@@ -14,7 +14,7 @@ export function PersonCard({ spec, theme, exit: withExit }: { spec: OverlaySpec;
 
   return (
     <AbsoluteFill style={{ opacity: exit }}>
-      <AbsoluteFill style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0) 50%)", opacity: t }} />
+      <AbsoluteFill style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 55%)", opacity: t }} />
       <div style={{ position: "absolute", left: 110 * s, bottom: 150 * s, display: "flex", alignItems: "center", gap: 30 * s }}>
         <div
           style={{

@@ -20,12 +20,12 @@ import { withRetry } from "../lib/retry.js";
 import { fetchWithTimeout } from "../lib/http.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { uploadFileToR2 } from "../lib/r2.js";
-import { resolveR2Target } from "../lib/storage.js";
+import { resolveR2Target, uploadPublicFile } from "../lib/storage.js";
 import { getOwnedProject } from "../lib/ownership.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { reportJobProgress } from "../lib/jobProgress.js";
-import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
+import { DOCUMENTAL_DENSITY, placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../lib/overlayTiming.js";
 import {
   motionCatalog,
   motionOverlayGraph,
@@ -44,14 +44,17 @@ import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
 import {
   audioMixArgs,
+  isSeriousTopic,
   lookFilter,
   motionFor,
+  musicStops,
   parseQc,
   QC_FILTER_ARGS,
   sfxCues,
   zoomCutFilter,
   zoompanExpr,
   type Motion,
+  type MusicSegment,
   type RenderQc,
 } from "../lib/documentalRender.js";
 
@@ -416,17 +419,26 @@ export interface MusicCredit {
   source_page: string | null;
 }
 
-async function downloadMusic(mood: string, workDir: string): Promise<{ path: string; credit: MusicCredit } | null> {
+// Pista estable por proyecto y animo (MaV: "un mismo proyecto siempre recibe
+// la misma pista"), sin repetir una pista ya usada para otro animo.
+function stableIndex(seed: string, n: number): number {
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return n ? h % n : 0;
+}
+
+async function downloadMusic(mood: string, workDir: string, seed = "", exclude: Set<string> = new Set()): Promise<{ path: string; credit: MusicCredit } | null> {
   const columns = "url, title, author, license, source_page";
-  const { data, error } = await supabase.from("music_library").select(columns).eq("mood", mood).limit(50);
-  let rows = data ?? [];
+  const { data, error } = await supabase.from("music_library").select(columns).eq("mood", mood).order("title").limit(50);
+  let rows = (data ?? []).filter((r) => !exclude.has(r.url as string));
   if (!error && rows.length === 0) {
-    const fallback = await supabase.from("music_library").select(columns).eq("mood", "documental").limit(50);
-    rows = fallback.data ?? [];
+    const fallback = await supabase.from("music_library").select(columns).eq("mood", "documental").order("title").limit(50);
+    rows = (fallback.data ?? []).filter((r) => !exclude.has(r.url as string));
   }
   if (error || rows.length === 0) return null;
-  const pick = rows[Math.floor(Math.random() * rows.length)]!;
-  const musicPath = path.join(workDir, `music${path.extname(new URL(pick.url as string).pathname) || ".mp3"}`);
+  const pick = rows[seed ? stableIndex(`${seed}:${mood}`, rows.length) : Math.floor(Math.random() * rows.length)]!;
+  exclude.add(pick.url as string);
+  const musicPath = path.join(workDir, `music-${mood}-${exclude.size}${path.extname(new URL(pick.url as string).pathname) || ".mp3"}`);
   try {
     await downloadTo(pick.url as string, musicPath);
     return {
@@ -441,6 +453,43 @@ async function downloadMusic(mood: string, workDir: string): Promise<{ path: str
   } catch (err) {
     console.warn("[render_video] no se pudo bajar la musica:", err);
     return null;
+  }
+}
+
+// Tramos de musica por capitulo (MaV): cada capitulo del plan del montajista
+// tiene un animo; tramos de menos de 20 s no cambian la musica y los
+// capitulos seguidos con el mismo animo comparten pista.
+const MUSIC_MOODS = ["documental", "tension", "triste", "epico", "misterio", "esperanza"];
+// Graficos que ya escriben la frase en pantalla: ahi no van subtitulos (MaV, SILENCIAN).
+const CAPTION_HIDING_TYPES = ["kinetic_quote", "phrase_swap", "pivot_question", "title_card", "list", "myth_fact"];
+async function chapterMusicPlan(projectId: string, total: number, fallbackMood: string): Promise<{ mood: string; start: number; end: number }[]> {
+  try {
+    const [{ data: project }, { data: script }] = await Promise.all([
+      supabase.from("video_projects").select("documental_plan").eq("id", projectId).single(),
+      supabase.from("scripts").select("id").eq("video_project_id", projectId).single(),
+    ]);
+    const chapters = (project?.documental_plan as { chapters?: { animo?: string }[] } | null)?.chapters ?? [];
+    const { data: scenes } = script ? await supabase.from("scenes").select("content").eq("script_id", script.id) : { data: [] };
+    const starts = (scenes ?? [])
+      .map((s) => s.content as { shot?: { capitulo?: number }; startSeconds?: number })
+      .filter((c) => c.shot?.capitulo)
+      .map((c) => ({ mood: chapters[c.shot!.capitulo! - 1]?.animo ?? fallbackMood, start: c.startSeconds ?? 0 }))
+      .sort((a, b) => a.start - b.start);
+    const plan: { mood: string; start: number; end: number }[] = [];
+    for (const s of starts) {
+      const mood = MUSIC_MOODS.includes(s.mood) ? s.mood : fallbackMood;
+      const last = plan[plan.length - 1];
+      if (!last) {
+        plan.push({ mood, start: 0, end: total });
+        continue;
+      }
+      if (last.mood === mood || s.start - last.start < 20 || total - s.start < 20) continue;
+      last.end = s.start;
+      plan.push({ mood, start: s.start, end: total });
+    }
+    return plan.length ? plan : [{ mood: fallbackMood, start: 0, end: total }];
+  } catch {
+    return [{ mood: fallbackMood, start: 0, end: total }];
   }
 }
 
@@ -1037,17 +1086,20 @@ async function realRender(
     console.warn("[render_video] overlays_enabled pero el paquete motion/ no esta instalado -- el video sale sin graficos");
   }
   const contentOverlays =
-    overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes()) : [];
+    overlaysOn && motionCatalog() ? placeOverlays(scenes, supportedOverlayTypes(), documentalStyle ? DOCUMENTAL_DENSITY : undefined) : [];
   // La capa fija de arriba va despues, para que quede encima de los demas.
+  // Documental: sin capa fija (igual que la preview).
   const placedOverlays =
     overlaysOn && motionCatalog()
-      ? [
-          ...contentOverlays,
-          ...placeNavHeaders(contentOverlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
-            ...(await navHeaderContext(videoProjectId)),
-            locale: (await getChannelSettingsForProject(videoProjectId)).channel_language,
-          }),
-        ]
+      ? documentalStyle
+        ? contentOverlays
+        : [
+            ...contentOverlays,
+            ...placeNavHeaders(contentOverlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
+              ...(await navHeaderContext(videoProjectId)),
+              locale: (await getChannelSettingsForProject(videoProjectId)).channel_language,
+            }),
+          ]
       : [];
   // Planificado: si despues falla el render de los graficos, el video sale
   // igual sin ellos (ver motionClips).
@@ -1087,23 +1139,37 @@ async function realRender(
   try {
     let audioPath = path.join(workDir, "narration.mp3");
     let musicCredit: MusicCredit | undefined;
+    let musicCredits: MusicCredit[] = [];
     await progress(PROGRESS_BATCHES_START - 1, "Descargando el audio narrado...", true);
     await downloadTo(content.audio.storage_key, audioPath);
     if (documentalStyle) {
       // Voz + musica con ducking + efectos en la entrada de cada grafico, a -14 LUFS.
       await progress(PROGRESS_BATCHES_START - 1, "Mezclando la voz con la música y los efectos...", true);
-      const music = await downloadMusic(documentalStyle.sound.mood, workDir);
-      musicCredit = music?.credit;
-      const musicPath = music?.path ?? null;
+      // Una pista por capitulo segun su animo (la misma para el mismo proyecto).
+      const plan = await chapterMusicPlan(videoProjectId, totalDuration + 1, documentalStyle.sound.mood);
+      const usedTracks = new Set<string>();
+      const trackByMood = new Map<string, { path: string; credit: MusicCredit } | null>();
+      const musicSegments: MusicSegment[] = [];
+      for (const seg of plan) {
+        if (!trackByMood.has(seg.mood)) trackByMood.set(seg.mood, await downloadMusic(seg.mood, workDir, videoProjectId, usedTracks));
+        const track = trackByMood.get(seg.mood);
+        if (track) musicSegments.push({ path: track.path, start: seg.start, end: seg.end });
+      }
+      musicCredits = [...trackByMood.values()].filter((t): t is { path: string; credit: MusicCredit } => !!t).map((t) => t.credit);
+      musicCredit = musicCredits[0];
+      const overlayMarks = placedOverlays.map((o) => ({ start: o.start, type: o.spec.type }));
+      const serious = isSeriousTopic(content.segments?.map((s) => s.text).join(" ") ?? "");
       const mixPath = path.join(workDir, "mix.flac");
       try {
         await runFfmpeg(
           audioMixArgs({
             voicePath: audioPath,
-            musicPath,
+            music: musicSegments,
             duration: totalDuration + 1,
             sound: documentalStyle.sound,
-            sfx: sfxCues(placedOverlays.map((o) => ({ start: o.start, type: o.spec.type }))),
+            sfx: sfxCues(overlayMarks, { serious }),
+            stops: musicStops(overlayMarks),
+            serious,
             outPath: mixPath,
           })
         );
@@ -1227,6 +1293,8 @@ async function realRender(
             height: outputSize.height,
             accent: (await resolveProjectStyle(videoProjectId))?.theme.accent ?? "#E8B65A",
             ...(documentalStyle ? { documental: documentalStyle.captions } : {}),
+            // Bajo graficos que ya escriben la frase no van subtitulos (MaV).
+            hideRanges: placedOverlays.filter((o) => CAPTION_HIDING_TYPES.includes(o.spec.type)).map((o) => ({ start: o.start, end: o.end })),
           })
         : buildSrt(content.segments!);
       await writeFile(srtPath, subtitles, "utf-8");
@@ -1428,6 +1496,7 @@ async function realRender(
       duration_seconds: Math.round(totalDuration),
       ...(qc ? { qc } : {}),
       ...(musicCredit ? { music: musicCredit } : {}),
+      ...(musicCredits.length > 1 ? { music_tracks: musicCredits } : {}),
     };
   } finally {
     // En Windows, rm() a veces tira ENOTEMPTY porque el OS todavia no
@@ -1505,6 +1574,58 @@ async function renderAnimated(videoProjectId: string, timelineId: string, jobId:
 
 // Composicion final (FFmpeg): une clips + audio + overlays ya renderizados
 // segun el Timeline. Es el ultimo paso del pipeline (Etapa 12).
+// Audio de la PREVIEW del documental: la misma mezcla que el render (voz +
+// musica por capitulo con ducking + efectos + silencios en cifras), sin la
+// imagen. Se guarda como asset AUDIO kind "preview_mix" y el reproductor de
+// la revision lo pasa en vez de la voz sola. No toca el timeline ni el audio
+// narrado (el render sigue mezclando desde la narracion).
+export async function buildPreviewMix(videoProjectId: string): Promise<string | null> {
+  const [{ data: project }, { data: timeline }] = await Promise.all([
+    supabase.from("video_projects").select("video_style").eq("id", videoProjectId).single(),
+    supabase.from("timelines").select("content").eq("video_project_id", videoProjectId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const content = timeline?.content as TimelineContent | undefined;
+  if (!content?.audio?.storage_key) return null;
+  const style = getDocumentalStyle((project as { video_style?: string | null } | null)?.video_style ?? null);
+  const scenes = (content.scenes ?? []).sort((a, b) => a.order - b.order);
+  const total = Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0));
+  if (!total) return null;
+  const placed = placeOverlays(scenes, undefined, DOCUMENTAL_DENSITY);
+  const marks = placed.map((o) => ({ start: o.start, type: o.spec.type }));
+  const workDir = await makeWorkDir("skaler-preview-mix-");
+  try {
+    const voicePath = path.join(workDir, "narration.mp3");
+    await downloadTo(content.audio.storage_key, voicePath);
+    const plan = await chapterMusicPlan(videoProjectId, total + 1, style.sound.mood);
+    const usedTracks = new Set<string>();
+    const trackByMood = new Map<string, { path: string; credit: MusicCredit } | null>();
+    const music: MusicSegment[] = [];
+    for (const seg of plan) {
+      if (!trackByMood.has(seg.mood)) trackByMood.set(seg.mood, await downloadMusic(seg.mood, workDir, videoProjectId, usedTracks));
+      const track = trackByMood.get(seg.mood);
+      if (track) music.push({ path: track.path, start: seg.start, end: seg.end });
+    }
+    const serious = isSeriousTopic(content.segments?.map((s) => s.text).join(" ") ?? "");
+    const flac = path.join(workDir, "mix.flac");
+    await runFfmpeg(audioMixArgs({ voicePath, music, duration: total + 1, sound: style.sound, sfx: sfxCues(marks, { serious }), stops: musicStops(marks), serious, outPath: flac }));
+    const mp3 = path.join(workDir, "preview-mix.mp3");
+    await runFfmpeg(["-y", "-i", flac, "-c:a", "libmp3lame", "-b:a", "160k", mp3]);
+    const url = await uploadPublicFile({ bucket: "scene-uploads", r2Prefix: "skaler-media", path: `${videoProjectId}/preview-mix-${Date.now()}.mp3`, contentType: "audio/mpeg", body: mp3 });
+    await supabase.from("assets").delete().eq("video_project_id", videoProjectId).eq("type", "AUDIO").contains("metadata", { kind: "preview_mix" });
+    const { error } = await supabase.from("assets").insert({
+      video_project_id: videoProjectId,
+      scene_id: null,
+      type: "AUDIO",
+      storage_key: url,
+      metadata: { kind: "preview_mix", duration_seconds: total, music: [...trackByMood.values()].filter(Boolean).map((t) => t!.credit) },
+    });
+    if (error) throw new Error(error.message);
+    return url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export const renderVideoTool: ToolDefinition<RenderVideoInput, RenderVideoOutput> = {
   name: "render_video",
   description:

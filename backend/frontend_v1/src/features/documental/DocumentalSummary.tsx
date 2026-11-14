@@ -88,6 +88,13 @@ export default function DocumentalSummary({ projectId, refreshKey }: Props) {
         </div>
       )}
 
+      {summary.plan?.qa?.hoja && (
+        <a href={summary.plan.qa.hoja} target="_blank" rel="noreferrer" className="flex flex-col gap-2 text-[11px] underline" style={{ color: "#E8B65A" }}>
+          Hoja de contactos: un cuadro por plano (en rojo, los que conviene revisar)
+          <img src={summary.plan.qa.hoja} alt="Hoja de contactos del documental" className="w-full rounded-lg" loading="lazy" />
+        </a>
+      )}
+
       {summary.qc && summary.qc.warnings.length > 0 && (
         <div role="status" className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.2)", color: "#fbbf24" }}>
           <strong>Revisá el video final:</strong> {summary.qc.warnings.join(" · ")}. Si hay negro o imagen congelada, reemplazá ese plano y volvé a renderizar.

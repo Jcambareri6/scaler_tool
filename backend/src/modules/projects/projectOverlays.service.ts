@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { supabase } from "../../lib/supabase.js";
 import { getOwnedProject, getWorkspaceRole, roleAtLeast } from "../../lib/ownership.js";
 import { getChannelSettingsForProject } from "../../lib/channelSettings.js";
-import { placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
+import { DOCUMENTAL_DENSITY, placeNavHeaders, placeOverlays, type OverlaySceneTiming } from "../../lib/overlayTiming.js";
 import { numberLocale } from "../../lib/motion.js";
 import { isAdmin } from "../../lib/accounts.js";
 import { effectiveFormat } from "../../lib/formats.js";
@@ -45,12 +45,14 @@ export async function getProjectOverlays(req: Request, res: Response) {
     const format = effectiveFormat(project?.video_format, userId);
     // En el documental los graficos son parte del formato.
     const enabled = (Boolean(project?.overlays_enabled) || format === "animated" || format === "documental") && isAdmin(userId);
-    const overlays = enabled ? placeOverlays(scenes) : [];
+    // Documental: separacion y tope de animaciones (DOCUMENTAL_DENSITY).
+    const overlays = enabled ? placeOverlays(scenes, undefined, format === "documental" ? DOCUMENTAL_DENSITY : undefined) : [];
     const channelLanguage = (await getChannelSettingsForProject(access.id)).channel_language;
     const locale = numberLocale(channelLanguage);
     // Capa fija de arriba (canal · tema | capitulo), aparte: convive con los
     // demas graficos.
-    const nav = enabled
+    // Documental: sin franja fija arriba (se sumaba a cada grafico; MaV no la tiene).
+    const nav = enabled && format !== "documental"
       ? placeNavHeaders(overlays, Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0)), {
           ...(await navHeaderContext(access.id)),
           locale: channelLanguage,
