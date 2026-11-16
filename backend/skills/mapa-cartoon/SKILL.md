@@ -41,6 +41,8 @@ The look comes from geopolitics explainer channels: bold, readable and playful. 
   - The top third of the frame (centre) belongs to `cifra`, `anio` and `bocadillo`: no icon there when the shot has one of them.
   - Icons never sit on top of an `etiqueta` or a face; keep about 6% of the frame between them.
   - At most 4 icons per shot.
+- **A place inside one country** (a coast, a city, a region): zoom in (km 300-1500). At that zoom the country slab turns into a light tint so the real satellite shows: tell the place with `etiquetas` placed exactly on the spot, `rutas`, `iconos` and the `cifra`, not with the slab. Put the face only in wide shots (km >= 2500) and not in every shot: when the face appears all the time it stops meaning anything.
+- **Variety:** do not repeat the same framing and the same cast shot after shot; alternate wide and close framings with the story.
 - **Camera:** never a constant zoom-in.
   - Consecutive shots are joined automatically by a smooth camera flight from the previous framing, so just choose a good `centro`/`km` for each shot.
   - Inside a shot the camera barely drifts. Optional `"camara": {"mov": "quieto"}` holds it still (good for shots that read numbers or labels). `"camara": {"zoom": 0.02}` gives a slow push-in and `-0.02` a slow pull-out. `"camara": {"deriva": [0.02, 0]}` drifts slowly to one side (fractions of the frame over the whole shot).

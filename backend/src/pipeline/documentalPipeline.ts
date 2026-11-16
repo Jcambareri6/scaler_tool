@@ -19,7 +19,7 @@ import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGra
 import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
-import { correctPlace } from "../lib/geocode.js";
+import { correctPlace, haversineKm } from "../lib/geocode.js";
 import { MAPA_MODEL, directMapa } from "../director/directorMapa.js";
 import { formatValue, poblacion, samplePoints, serie } from "../lib/datosAbiertos.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
@@ -1336,6 +1336,25 @@ async function runMapaDocumental(ctx: DocumentalContext, phrases: Phrase[], styl
     max: style.mapaCartoon.planoMax,
   });
   if (!result) return false;
+  // Etiquetas de lugares con su coordenada real: el modelo las ubica de
+  // memoria y de cerca un error de 20 km deja "TULUM" en el mar. Solo si el
+  // resultado cae cerca (<= 300 km) de donde la puso el modelo; mares y
+  // golfos se dejan como estan (su "centro" es lo que el modelo eligio).
+  await reportJobProgress(ctx.jobId, 75, "Ubicando los nombres de los lugares en el mapa...", { force: true });
+  let labelsFixed = 0;
+  for (const escena of result.escenas) {
+    for (const l of (escena.etiquetas as { texto?: string; lat?: number; lon?: number }[] | undefined) ?? []) {
+      if (!l?.texto || typeof l.lat !== "number" || typeof l.lon !== "number") continue;
+      if (/\b(mar|golfo|oc[eé]ano|caribe|sea|gulf|ocean|bah[ií]a|estrecho|canal)\b/i.test(l.texto)) continue;
+      const fixed = await correctPlace(l.texto, { lat: l.lat, lon: l.lon }).catch(() => null);
+      if (fixed?.corrected && haversineKm({ lat: l.lat, lon: l.lon }, fixed) <= 300) {
+        l.lat = fixed.lat;
+        l.lon = fixed.lon;
+        labelsFixed += 1;
+      }
+    }
+  }
+  if (labelsFixed) console.log(`[documental] ${ctx.projectId}: ${labelsFixed} etiquetas del mapa ubicadas en su lugar real`);
   await reportJobProgress(ctx.jobId, 80, `Mapa listo: ${result.shots.length} planos (${result.buenas} escenas de Claude). Guardando...`, { force: true });
 
   const { error: deleteError } = await supabase.from("scenes").delete().eq("script_id", ctx.scriptId);

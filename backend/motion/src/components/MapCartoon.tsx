@@ -239,6 +239,10 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
     km = end.km;
   }
   const proj = projectionFor(centro, km, width, height);
+  // De cerca (un pais visto a < ~2500 km) la placa solida tapa el satelite y
+  // su contorno simplificado ya no calza con la costa real: se vuelve un
+  // tinte con borde, sin relieve ni cara. Cambia con el vuelo de camara.
+  const solid = interpolate(km, [900, 2500], [0.16, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const path = geoPath(proj);
   const at = (sec: number | undefined, damping = 14) => (sec === undefined || sec < 0 ? 1 : spring({ frame: frame - sec * fps, fps, config: { damping, stiffness: 170, mass: 0.7 } }));
   const fadeOut = (hasta: number | undefined) => (hasta === undefined ? 1 : interpolate(t, [Math.max(0, hasta - 0.45), hasta], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }));
@@ -258,8 +262,8 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
           const color = p.color ?? "#2F7FE0";
           return (
             <g key={i} opacity={op} transform={`translate(0 ${dy})`}>
-              <path d={d} fill="rgba(0,0,0,0.55)" transform={`translate(0 ${16 * k})`} />
-              <path d={d} fill={color} stroke="rgba(255,255,255,0.85)" strokeWidth={3.5 * k} strokeLinejoin="round" />
+              {solid > 0.6 && <path d={d} fill="rgba(0,0,0,0.55)" opacity={(solid - 0.6) / 0.4} transform={`translate(0 ${16 * k})`} />}
+              <path d={d} fill={color} fillOpacity={solid} stroke={solid < 1 ? color : "rgba(255,255,255,0.85)"} strokeOpacity={solid < 1 ? 0.9 : 1} strokeWidth={(solid < 1 ? 3 : 3.5) * k} strokeLinejoin="round" />
             </g>
           );
         })}
@@ -298,7 +302,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
         })}
         {/* Caras: solo protagonista (o rival), en el centro del pais. */}
         {slabs
-          .filter(({ p }) => p.cara)
+          .filter(({ p }) => p.cara && solid > 0.6)
           .map(({ p, feature }, i) => {
             const [cx, cy] = path.centroid(feature);
             if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
