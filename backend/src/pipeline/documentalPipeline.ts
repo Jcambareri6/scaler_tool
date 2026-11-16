@@ -18,6 +18,7 @@ import { buildPhrases, type Phrase } from "../director/phrases.js";
 import { directMontaje, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
 import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
+import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import {
   NOT_A_PORTRAIT,
   searchArchiveVideos,
@@ -407,7 +408,8 @@ async function fillShot(
   style: DocumentalStyle,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> } | null,
   used: Set<string>,
-  neighbours: { queries: string[]; context?: JudgeContext }
+  neighbours: { queries: string[]; context?: JudgeContext },
+  huellas: HuellaRegistry
 ): Promise<ShotOutcome> {
   const shot = row.shot;
   const minDuration = Math.max(1, row.end - row.start);
@@ -460,8 +462,16 @@ async function fillShot(
         }
         pick = clip;
       }
+      // Misma imagen desde otra fuente (dHash, como MaV): se rechaza.
+      const huella = await fingerprint(pick.url, pick.type, pick.duration_seconds);
       // Doble chequeo sincronico (planos en paralelo): si otro plano ya lo tomo, sigue.
       if (pick.provider === "youtube" || (!used.has(key(pick)) && !used.has(pick.url))) {
+        const dup = huellas.claim(key(pick), huella);
+        if (dup) {
+          used.add(key(pick));
+          rejected.push({ index: verdict.chosen, code: "equivocado", reason: `repetido: la misma imagen ya esta en el video (${dup})` });
+          return null;
+        }
         used.add(key(pick));
         used.add(pick.url);
         const reason = verdict.verdicts.find((v) => v.index === verdict.chosen)?.reason;
@@ -724,7 +734,8 @@ async function rescueGaps(
   style: DocumentalStyle,
   used: Set<string>,
   judge: Judge | null,
-  toolCtx: { userId: string; jobId: string }
+  toolCtx: { userId: string; jobId: string },
+  huellas: HuellaRegistry
 ): Promise<void> {
   const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
   const gaps = byOrder.filter((r) => outcomeOf.get(r.id)?.qa !== "ok");
@@ -783,8 +794,15 @@ async function rescueGaps(
   let texture: string | null = null;
   const counts = { youtube_momento: 0, commons_tema: 0, youtube_tema: 0, stock_ultimo: 0, rotulo: 0 };
 
-  const save = async (row: ShotRow, pick: VisualCandidate, via: string) => {
+  // Devuelve false si la imagen ya esta en el video (dHash): el rescate sigue
+  // con la proxima opcion.
+  const save = async (row: ShotRow, pick: VisualCandidate, via: string): Promise<boolean> => {
     used.add(key(pick));
+    const dup = huellas.claim(key(pick), await fingerprint(pick.url, pick.type, pick.duration_seconds));
+    if (dup) {
+      console.log(`[documental] plano ${row.order}: rescate ${via} descartado, repetido de ${dup}`);
+      return false;
+    }
     used.add(pick.url);
     const base = `${pick.provider}:${pick.external_id.split("@")[0]}`;
     originOf.set(row.id, base);
@@ -794,6 +812,7 @@ async function rescueGaps(
     o.source = "fallback";
     o.qa = "ok";
     o.provider = pick.provider;
+    return true;
   };
 
   await mapWithConcurrency(gaps, 3, async (row) => {
@@ -811,9 +830,9 @@ async function rescueGaps(
         if (fraction === undefined) continue;
         seen.add(fraction);
         const clip = await materializeYouTube(ctx, row, src, judge, context, { startFraction: fraction, tema });
-        if (clip) {
+        if (clip && (await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento"))) {
           counts.youtube_momento += 1;
-          return save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento");
+          return;
         }
       }
       // 2. Fotos del tema en Commons (hasta 4 por plano, juez en modo tema).
@@ -833,9 +852,9 @@ async function rescueGaps(
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? photos[verdict.chosen] : undefined;
-        if (pick && !used.has(key(pick))) {
+        if (pick && !used.has(key(pick)) && (await save(row, pick, "commons_tema"))) {
           counts.commons_tema += 1;
-          return save(row, pick, "commons_tema");
+          return;
         }
       }
       // 3. YouTube con una busqueda del tema (tope por video).
@@ -846,11 +865,11 @@ async function rescueGaps(
         if (found[0]) {
           used.add(key(found[0]));
           const clip = await materializeYouTube(ctx, row, found[0], judge, context, { tema });
-          if (clip) {
+          if (clip && (await save(row, clip, "youtube_tema"))) {
             counts.youtube_tema += 1;
             ytSources.push(found[0]);
             momentsUsed.set(found[0].external_id, new Set([0.3]));
-            return save(row, clip, "youtube_tema");
+            return;
           }
         }
       }
@@ -869,9 +888,9 @@ async function rescueGaps(
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? fresh[verdict.chosen] : undefined;
-        if (pick && !used.has(key(pick))) {
+        if (pick && !used.has(key(pick)) && (await save(row, pick, "stock_ultimo"))) {
           counts.stock_ultimo += 1;
-          return save(row, pick, "stock_ultimo");
+          return;
         }
       }
     }
@@ -908,7 +927,7 @@ async function rescueGaps(
       seen.add(fraction);
       const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
       if (!clip) continue;
-      await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima");
+      if (!(await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima"))) continue;
       counts.rotulo -= 1;
       recovered += 1;
     }
@@ -978,6 +997,8 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
         }
       : null;
   const used = new Set<string>();
+  // Huellas dHash de todo lo aceptado (misma imagen desde otra fuente).
+  const huellas = new HuellaRegistry();
   let done = 0;
   const outcomes: ShotOutcome[] = [];
   // QA final: cuadro de cada plano (cache por URL) para medir y para la hoja.
@@ -995,7 +1016,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
         queries: [byOrder[i - 1]?.shot.query, byOrder[i + 1]?.shot.query].filter((q): q is string => !!q),
         ...(context ? { context } : {}),
       };
-      outcomes.push(await fillShot(ctx, row, style, judge, used, neighbours));
+      outcomes.push(await fillShot(ctx, row, style, judge, used, neighbours, huellas));
       done += 1;
       await reportJobProgress(
         ctx.jobId,
@@ -1010,7 +1031,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     qaCounts.oscuros = flagged.oscuros;
     qaCounts.vacios = flagged.vacios;
     await reportJobProgress(ctx.jobId, 88, "Rescatando los planos sin material (otros momentos, fotos del tema)...", { force: true });
-    await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx);
+    await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx, huellas);
     await reportJobProgress(ctx.jobId, 89, "Armando la hoja de contactos...", { force: true });
     hoja = await buildContactSheet(ctx, byOrder, outcomes, workDir, frames).catch((err) => {
       console.warn(`[documental] no se pudo armar la hoja de contactos: ${(err as Error).message}`);
