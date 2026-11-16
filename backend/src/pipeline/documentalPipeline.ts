@@ -19,6 +19,7 @@ import { directMontaje, type MontajePlan, type PlannedShot, type ShotGraphic } f
 import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
+import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
 import {
   NOT_A_PORTRAIT,
   searchArchiveVideos,
@@ -512,19 +513,100 @@ async function fillShot(
 type Judge = { client: Anthropic; model: string; workDir: string; usage: Record<string, number> };
 
 // Visual (url + tipo) de cada plano, desde assets.
-async function shotVisuals(ctx: DocumentalContext): Promise<Map<string, { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string }>> {
+type ShotVisual = { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string; title?: string; duration?: number };
+
+async function shotVisuals(ctx: DocumentalContext): Promise<Map<string, ShotVisual>> {
   const { data } = await supabase
     .from("assets")
     .select("scene_id, type, storage_key, metadata")
     .eq("video_project_id", ctx.projectId)
     .in("type", ["VIDEO", "IMAGE"])
     .contains("metadata", { kind: "documental" });
-  const map = new Map<string, { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string }>();
+  const map = new Map<string, ShotVisual>();
   for (const r of data ?? []) {
-    const m = r.metadata as { provider?: string; qa?: { source?: string } };
-    map.set(r.scene_id as string, { url: r.storage_key as string, type: r.type as "VIDEO" | "IMAGE", provider: m.provider ?? "", via: m.qa?.source ?? m.provider ?? "" });
+    const m = r.metadata as { provider?: string; qa?: { source?: string }; title?: string; duration_seconds?: number; source_duration_seconds?: number };
+    map.set(r.scene_id as string, {
+      url: r.storage_key as string,
+      type: r.type as "VIDEO" | "IMAGE",
+      provider: m.provider ?? "",
+      via: m.qa?.source ?? m.provider ?? "",
+      ...(m.title ? { title: m.title } : {}),
+      ...((m.source_duration_seconds ?? m.duration_seconds) ? { duration: (m.source_duration_seconds ?? m.duration_seconds)! } : {}),
+    });
   }
   return map;
+}
+
+// Vias del rescate (persistShotVisual guarda la via en qa.source).
+const RESCUE_VIAS = new Set(["youtube_momento", "commons_tema", "youtube_tema", "stock_ultimo", "youtube_ultima"]);
+// Reintentos del QA final por plano (MaV: PLAN_QA_REINTENTOS = 2).
+const QA_RETRIES = envInt("DOCUMENTAL_QA_RETRIES", 2);
+
+// QA final con vision (qaFinal.ts): juzga el video entero en tandas; un plano
+// rechazado vuelve a llenarse con la cadena de fuentes (lo ya probado queda en
+// `used`), hasta QA_RETRIES veces. Si sigue mal, queda para el rescate.
+async function finalQa(
+  ctx: DocumentalContext,
+  byOrder: ShotRow[],
+  outcomes: ShotOutcome[],
+  style: DocumentalStyle,
+  judge: Judge,
+  used: Set<string>,
+  contexts: Map<string, JudgeContext>,
+  huellas: HuellaRegistry
+): Promise<QaDecision[]> {
+  const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
+  const all: QaDecision[] = [];
+  let obras: { order: number; obra: string | null; sitio: boolean; text: string }[] = [];
+  let pending = byOrder.filter((r) => outcomeOf.get(r.id)?.qa === "ok" && r.shot.clase !== "mapa");
+  for (let ronda = 0; ronda <= QA_RETRIES && pending.length > 0; ronda++) {
+    const visuals = await shotVisuals(ctx);
+    const items: QaItem[] = pending.flatMap((r) => {
+      const v = visuals.get(r.id);
+      if (!v || v.provider === "textura") return [];
+      return [
+        {
+          sceneId: r.id,
+          order: r.order,
+          shot: judgeShotOf(r, contexts.get(r.id)),
+          url: v.url,
+          type: v.type,
+          ...(v.duration ? { durationSeconds: v.duration } : {}),
+          ...(v.title ? { sourceTitle: v.title } : {}),
+          rescue: RESCUE_VIAS.has(v.via),
+        },
+      ];
+    });
+    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, ronda, obras);
+    obras = kept;
+    all.push(...decisions);
+    const badRows = decisions.filter((d) => d.malo).flatMap((d) => byOrder.filter((r) => r.id === d.sceneId));
+    console.log(`[documental] ${ctx.projectId}: QA final ronda ${ronda}: ${items.length} planos, ${badRows.length} rechazados`);
+    if (badRows.length === 0) break;
+    await mapWithConcurrency(badRows, SHOT_CONCURRENCY, async (row) => {
+      await supabase.from("assets").delete().eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
+      const o = outcomeOf.get(row.id)!;
+      if (ronda === QA_RETRIES) {
+        // Sin mas reintentos: queda para el rescate.
+        Object.assign(o, { source: "none", qa: "seguro", provider: undefined });
+        return;
+      }
+      const i = byOrder.indexOf(row);
+      const context = contexts.get(row.id);
+      const out = await fillShot(
+        ctx,
+        row,
+        style,
+        judge,
+        used,
+        { queries: [byOrder[i - 1]?.shot.query, byOrder[i + 1]?.shot.query].filter((q): q is string => !!q), ...(context ? { context } : {}) },
+        huellas
+      );
+      Object.assign(o, out, { rejected: o.rejected + out.rejected + 1 });
+    });
+    pending = badRows.filter((r) => outcomeOf.get(r.id)?.qa === "ok");
+  }
+  return all;
 }
 
 async function frameFor(url: string, type: "VIDEO" | "IMAGE", workDir: string, frames: Map<string, string | null>): Promise<string | null> {
@@ -1004,6 +1086,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   // QA final: cuadro de cada plano (cache por URL) para medir y para la hoja.
   const frames = new Map<string, string | null>();
   const qaCounts = { oscuros: 0, vacios: 0 };
+  let qaDecisions: QaDecision[] = [];
   let hoja: string | null = null;
   try {
     const idx = new Map(byOrder.map((r, i) => [r.id, i]));
@@ -1030,6 +1113,14 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     const flagged = await brightnessQa(ctx, byOrder, outcomes, workDir, frames);
     qaCounts.oscuros = flagged.oscuros;
     qaCounts.vacios = flagged.vacios;
+    // QA final con vision (MaV qaPlan): el video entero, en tandas.
+    if (judge && process.env.DOCUMENTAL_QA_FINAL !== "off") {
+      await reportJobProgress(ctx.jobId, 87, "Revisando el video entero con el juez (QA final)...", { force: true });
+      qaDecisions = await finalQa(ctx, byOrder, outcomes, style, judge, used, contexts, huellas).catch((err) => {
+        console.warn(`[documental] QA final fallo (sigue sin QA): ${(err as Error).message}`);
+        return [] as QaDecision[];
+      });
+    }
     await reportJobProgress(ctx.jobId, 88, "Rescatando los planos sin material (otros momentos, fotos del tema)...", { force: true });
     await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx, huellas);
     await reportJobProgress(ctx.jobId, 89, "Armando la hoja de contactos...", { force: true });
@@ -1049,7 +1140,13 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     issues: plan.issues,
     usage: { montaje: plan.usage, juez: judgeUsage },
     shots: outcomes.sort((a, b) => a.order - b.order),
-    qa: { hoja, ...qaCounts },
+    qa: {
+      hoja,
+      ...qaCounts,
+      revisados: new Set(qaDecisions.filter((d) => d.ronda === 0).map((d) => d.sceneId)).size,
+      marcados: qaDecisions.filter((d) => d.malo).length,
+      decisiones: qaDecisions,
+    },
     created_at: new Date().toISOString(),
   };
   const { error } = await supabase.from("video_projects").update({ documental_plan: summary, video_style: style.id }).eq("id", ctx.projectId);
