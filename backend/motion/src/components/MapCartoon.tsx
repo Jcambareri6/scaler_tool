@@ -4,7 +4,7 @@ import { geoMercator, geoPath, type GeoProjection } from "d3-geo";
 import type { OverlaySpec } from "../spec";
 import type { Theme } from "../theme";
 import { countries, type Country } from "../lib/geo";
-import { SatelliteTiles } from "./SatelliteTiles";
+import { SatelliteTiles, tileZoom } from "./SatelliteTiles";
 import { Anchor, Ban, Banknote, Building2, Calendar, Car, CloudLightning, Coins, Construction, Droplets, Factory, FileText, Fish, Flame, Fuel, Hospital, Hotel, House, Landmark, Lightbulb, MapPin, Mountain, Plane, Shield, Ship, ShoppingBag, Skull, Sun, Thermometer, Tornado, TreePalm, TreePine, TrendingDown, TrendingUp, TriangleAlert, Truck, Users, Waves, Wheat, Zap, type LucideIcon } from "lucide-react";
 
 // MAPA EXPLICATIVO (como mapa-cartoon de MaV): el video entero es un mapa
@@ -384,7 +384,9 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
 
   return (
     <AbsoluteFill style={{ background: "#173248", overflow: "hidden" }}>
-      <SatelliteTiles projection={proj} width={width} height={height} opacity={1} />
+      {/* Nivel de teselas fijo por plano (el de su propio encuadre): durante
+          la deriva y el vuelo solo se estiran, no se piden otras a mitad. */}
+      <SatelliteTiles projection={proj} width={width} height={height} opacity={1} zoom={tileZoom(projectionFor(e.centro, e.km, width, height).scale())} />
       <svg width={width} height={height} style={{ position: "absolute", inset: 0 }}>
         <rect width={width} height={height} fill="rgba(10,14,20,0.18)" />
         {/* Paises: placa en relieve (copia oscura abajo) que sube a su lugar. */}

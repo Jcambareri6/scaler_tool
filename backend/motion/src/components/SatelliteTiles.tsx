@@ -39,9 +39,27 @@ export function tileZoom(scale: number): number {
   return Math.max(1, Math.min(MAX_ZOOM, Math.round(Math.log2(worldPx / TILE_SIZE))));
 }
 
-export function SatelliteTiles({ projection, width, height, opacity }: { projection: GeoProjection; width: number; height: number; opacity: number }) {
+// Tope de teselas por cuadro: si el nivel pedido necesita mas, se baja un nivel
+// (menos detalle) en vez de no dibujar nada.
+const MAX_TILES = 160;
+
+export function SatelliteTiles({
+  projection,
+  width,
+  height,
+  opacity,
+  zoom,
+}: {
+  projection: GeoProjection;
+  width: number;
+  height: number;
+  opacity: number;
+  // Nivel fijo (el del encuadre del plano): con la camara en movimiento, si
+  // el nivel se recalcula en cada cuadro cambia a mitad del plano, se piden
+  // teselas nuevas y el mapa parpadea. Con un nivel fijo solo se estiran.
+  zoom?: number;
+}) {
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
-  const z = tileZoom(projection.scale());
   // Esquinas visibles -> rango de teselas.
   const corners = [
     [0, 0],
@@ -51,13 +69,23 @@ export function SatelliteTiles({ projection, width, height, opacity }: { project
   ].map(([px, py]) => projection.invert?.([px!, py!]) ?? [0, 0]);
   const lons = corners.map((c) => c[0]!);
   const lats = corners.map((c) => c[1]!);
-  const n = 2 ** z;
-  const x0 = Math.max(0, Math.floor(lonToX(Math.min(...lons), z)));
-  const x1 = Math.min(n - 1, Math.floor(lonToX(Math.max(...lons), z)));
-  const y0 = Math.max(0, Math.floor(latToY(Math.max(...lats), z)));
-  const y1 = Math.min(n - 1, Math.floor(latToY(Math.min(...lats), z)));
-  // Tope de seguridad: con un encuadre raro no se piden cientos de teselas.
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 160) return null;
+  const range = (zz: number) => {
+    const nn = 2 ** zz;
+    return {
+      n: nn,
+      x0: Math.max(0, Math.floor(lonToX(Math.min(...lons), zz))),
+      x1: Math.min(nn - 1, Math.floor(lonToX(Math.max(...lons), zz))),
+      y0: Math.max(0, Math.floor(latToY(Math.max(...lats), zz))),
+      y1: Math.min(nn - 1, Math.floor(latToY(Math.min(...lats), zz))),
+    };
+  };
+  let z = zoom ?? tileZoom(projection.scale());
+  let r = range(z);
+  while (z > 1 && (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) > MAX_TILES) {
+    z -= 1;
+    r = range(z);
+  }
+  const { x0, x1, y0, y1 } = r;
 
   const tiles: ReactElement[] = [];
   for (let x = x0; x <= x1; x++) {
