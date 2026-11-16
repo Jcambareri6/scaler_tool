@@ -17,6 +17,13 @@ const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
 
 const YTDLP = process.env.YTDLP_PATH?.trim() || "yt-dlp";
+// YouTube bloquea las IPs de datacenter (el worker de Hetzner): con un proxy
+// residencial (ej: http://usuario:clave@pr.oxylabs.io:7777) la busqueda y la
+// descarga salen por IPs de hogares. Sin la variable, conexion directa.
+function proxyArgs(): string[] {
+  const proxy = process.env.YTDLP_PROXY?.trim();
+  return proxy ? ["--proxy", proxy] : [];
+}
 const SEARCH_RESULTS = 8;
 const MAX_VIDEO_SECONDS = 3 * 60 * 60;
 const MIN_VIDEO_SECONDS = 20;
@@ -65,7 +72,7 @@ interface FlatEntry {
 }
 
 export async function searchYouTubeVideos(query: string): Promise<VisualCandidate[]> {
-  const raw = await run(YTDLP, [`ytsearch${SEARCH_RESULTS}:${query}`, "--flat-playlist", "-J", "--no-warnings"], 45_000);
+  const raw = await run(YTDLP, [`ytsearch${SEARCH_RESULTS}:${query}`, "--flat-playlist", "-J", "--no-warnings", ...proxyArgs()], 45_000);
   const entries = ((JSON.parse(raw) as { entries?: FlatEntry[] }).entries ?? []).filter(
     (e) =>
       e.id &&
@@ -187,6 +194,7 @@ async function downloadSection(url: string, start: number, length: number, out: 
       ...(ffmpegPath ? ["--ffmpeg-location", ffmpegPath] : []),
       "--no-warnings",
       "--no-playlist",
+      ...proxyArgs(),
       "-o",
       out,
     ],
