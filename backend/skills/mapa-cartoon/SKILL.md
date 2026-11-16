@@ -31,7 +31,14 @@ The look comes from geopolitics explainer channels: bold, readable and playful. 
   - `"flecha"` is a dashed movement arrow. With 2 points it curves (`arco`). With many points it follows them.
   - SEA ROUTES MUST STAY AT SEA: give enough waypoints to go around coasts (for example Hormuz → Arabian Sea → south of Sri Lanka (5.4, 84) → Malacca strait (5.3, 97.4) (3.3, 100.2) (1.6, 102.9) → Singapore (1.15, 104.2) → South China Sea).
 - **Numbers:** `cifra` is the one big number of the shot (count-up). Put the unit in `sub`. Use `coma: true` for a Spanish decimal comma ("4,5M"). The number must be one the narration says (the written script is authoritative).
-- **Icons:** `tipo` is one of pozo, barril, barriles, fabrica, refineria, camion, calendario (`texto` = the day number), documento, flecha-arriba, flecha-abajo, barco, alerta. Place them on the real spot (lat/lon) or in screen fractions (x, y 0-1). Use 1-5 per shot, with `escala` 0.6-1.1.
+- **Icons (stickers):** `tipo` is one of:
+  - energy and industry: pozo, barril, barriles, fabrica, refineria, energia, luz, fuego;
+  - transport: barco, puerto, camion, avion, coche, carretera;
+  - places and people: playa, hotel, turistas, personas, pueblo, ciudad, ruinas, hospital, lugar;
+  - nature and weather: selva, agua, mar, huracan, tornado, calor, sol, montana, pesca, campo;
+  - economy and data: dinero, monedas, comercio, documento, calendario, flecha-arriba, flecha-abajo;
+  - warnings: alerta, prohibido, peligro, proteccion.
+  Pick the sticker that SAYS the thing of the sentence (hotels -> hotel, tourists -> turistas, jungle -> selva). `alerta` only for a real warning or danger, never as a generic filler. `texto` (optional) is a short number or word shown in a pill under the sticker ("14", "+3M"). Place them on the real spot (lat/lon) or in screen fractions (x, y 0-1). Use 1-4 per shot, with `escala` 0.7-1.1. A shot without a fitting sticker has none.
 - **Bubble and year:**
   - `bocadillo` holds the question or title of the video. Use it only in a shot that asks something.
   - `anio` is for when the narration jumps to or names a year.

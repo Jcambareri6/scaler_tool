@@ -5,6 +5,7 @@ import type { OverlaySpec } from "../spec";
 import type { Theme } from "../theme";
 import { countries, type Country } from "../lib/geo";
 import { SatelliteTiles } from "./SatelliteTiles";
+import { Anchor, Ban, Banknote, Building2, Calendar, Car, CloudLightning, Coins, Construction, Droplets, Factory, FileText, Fish, Flame, Fuel, Hospital, Hotel, House, Landmark, Lightbulb, MapPin, Mountain, Plane, Shield, Ship, ShoppingBag, Skull, Sun, Thermometer, Tornado, TreePalm, TreePine, TrendingDown, TrendingUp, TriangleAlert, Truck, Users, Waves, Wheat, Zap, type LucideIcon } from "lucide-react";
 
 // MAPA EXPLICATIVO (como mapa-cartoon de MaV): el video entero es un mapa
 // sobre satelite; cada plano es UNA idea de su frase. Paises reales como
@@ -130,6 +131,50 @@ function endOf(centro: { lat: number; lon: number }, km: number, deriva: [number
 
 const SEA_NAME = /\b(mar|golfo|oc[eé]ano|caribe|bah[ií]a|estrecho|canal|pen[ií]nsula|selva|sea|gulf|ocean|bay|strait|channel|peninsula)\b/i;
 
+// ANTI-SOLAPE (como apartar/encajar de MaV: "Hamburgo y Amberes salian una
+// encima de otra"): cada etiqueta y pegatina es una caja en pantalla; si dos
+// se pisan, la de menor prioridad (la que entro despues) se corre en vertical
+// lo que haga falta, hacia el lado mas libre, y todo queda dentro del cuadro.
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  dy: number;
+  fixed?: boolean;
+}
+
+export function separate(boxes: Box[], width: number, height: number, gap: number): void {
+  // Ubicacion de a una en orden de prioridad: cada caja prueba corrimientos
+  // verticales cada vez mas grandes (abajo, arriba, abajo...) y se queda con el
+  // primero que no pisa nada de lo ya ubicado y entra en el cuadro.
+  const placed: Box[] = [];
+  const hits = (b: Box, dy: number) =>
+    placed.some((a) => {
+      const ay = a.y + a.dy;
+      const by = b.y + dy;
+      return Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > -gap && Math.min(ay + a.h, by + b.h) - Math.max(ay, by) > -gap;
+    });
+  const inside = (b: Box, dy: number) => b.y + dy >= gap && b.y + dy + b.h <= height - gap;
+  for (const b of boxes) {
+    if (!b.fixed) {
+      const step = Math.max(8, b.h / 3);
+      let chosen: number | null = null;
+      for (let n = 0; n <= 24 && chosen === null; n++) {
+        for (const dy of n === 0 ? [0] : [n * step, -n * step]) {
+          if (inside(b, dy) && !hits(b, dy)) {
+            chosen = dy;
+            break;
+          }
+        }
+      }
+      b.dy = chosen ?? 0;
+    }
+    placed.push(b);
+  }
+  void width;
+}
+
 function pathOfRoute(proj: GeoProjection, puntos: LatLon[], arco = 0): string {
   const pts = puntos.map(([lat, lon]) => proj([lon, lat])).filter((p): p is [number, number] => !!p);
   if (pts.length < 2) return "";
@@ -146,34 +191,86 @@ function pathOfRoute(proj: GeoProjection, puntos: LatLon[], arco = 0): string {
   return pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
 }
 
+// PEGATINAS: circulo de color con borde blanco grueso, el icono (lucide) en
+// blanco, un brillo arriba y sombra. Cada tipo con su color. La lista sirve
+// para cualquier tema (la de MaV era de petroleo y en un video de playas se
+// usaba "alerta" para todo).
+const STICKERS: Record<string, { icon: LucideIcon; color: string }> = {
+  // energia e industria
+  pozo: { icon: Fuel, color: "#2B2B2B" },
+  barril: { icon: Fuel, color: "#3A3A3A" },
+  barriles: { icon: Fuel, color: "#3A3A3A" },
+  fabrica: { icon: Factory, color: "#6B7280" },
+  refineria: { icon: Factory, color: "#4B5563" },
+  energia: { icon: Zap, color: "#F2A541" },
+  luz: { icon: Lightbulb, color: "#E9C443" },
+  fuego: { icon: Flame, color: "#E8590C" },
+  // transporte
+  barco: { icon: Ship, color: "#2F7FE0" },
+  puerto: { icon: Anchor, color: "#1D4E89" },
+  camion: { icon: Truck, color: "#7C5CFC" },
+  avion: { icon: Plane, color: "#0EA5E9" },
+  coche: { icon: Car, color: "#6366F1" },
+  carretera: { icon: Construction, color: "#F59E0B" },
+  // lugares y gente
+  playa: { icon: TreePalm, color: "#06B6D4" },
+  hotel: { icon: Hotel, color: "#8B5CF6" },
+  turistas: { icon: Users, color: "#EC4899" },
+  personas: { icon: Users, color: "#EC4899" },
+  pueblo: { icon: House, color: "#A16207" },
+  ciudad: { icon: Building2, color: "#475569" },
+  ruinas: { icon: Landmark, color: "#B45309" },
+  hospital: { icon: Hospital, color: "#DC2626" },
+  lugar: { icon: MapPin, color: "#E8312A" },
+  // naturaleza y clima
+  selva: { icon: TreePine, color: "#15803D" },
+  agua: { icon: Droplets, color: "#0284C7" },
+  mar: { icon: Waves, color: "#0369A1" },
+  huracan: { icon: CloudLightning, color: "#334155" },
+  tornado: { icon: Tornado, color: "#334155" },
+  calor: { icon: Thermometer, color: "#EA580C" },
+  sol: { icon: Sun, color: "#F59E0B" },
+  montana: { icon: Mountain, color: "#57534E" },
+  pesca: { icon: Fish, color: "#0891B2" },
+  campo: { icon: Wheat, color: "#CA8A04" },
+  // economia y datos
+  dinero: { icon: Banknote, color: "#16A34A" },
+  monedas: { icon: Coins, color: "#CA8A04" },
+  comercio: { icon: ShoppingBag, color: "#DB2777" },
+  documento: { icon: FileText, color: "#64748B" },
+  calendario: { icon: Calendar, color: "#E8312A" },
+  "flecha-arriba": { icon: TrendingUp, color: "#16A34A" },
+  "flecha-abajo": { icon: TrendingDown, color: "#DC2626" },
+  // avisos
+  alerta: { icon: TriangleAlert, color: "#E9A23B" },
+  prohibido: { icon: Ban, color: "#DC2626" },
+  peligro: { icon: Skull, color: "#1F2937" },
+  proteccion: { icon: Shield, color: "#2563EB" },
+};
+
+export const STICKER_TYPES = Object.keys(STICKERS);
+
 function Icon({ tipo, k }: { tipo: string; k: number }) {
-  const s = 96 * k;
-  const ring = <circle cx={s / 2} cy={s / 2} r={s / 2 - 3 * k} fill="#fff" stroke="#111" strokeWidth={3 * k} />;
-  const ink = "#1b1b1b";
-  const shapes: Record<string, ReactElement> = {
-    barril: <rect x={s * 0.32} y={s * 0.22} width={s * 0.36} height={s * 0.56} rx={6 * k} fill="#2b2b2b" />,
-    barriles: (
-      <>
-        <rect x={s * 0.2} y={s * 0.3} width={s * 0.28} height={s * 0.46} rx={5 * k} fill="#2b2b2b" />
-        <rect x={s * 0.52} y={s * 0.3} width={s * 0.28} height={s * 0.46} rx={5 * k} fill="#444" />
-      </>
-    ),
-    pozo: <path d={`M${s * 0.3},${s * 0.8} L${s * 0.5},${s * 0.2} L${s * 0.7},${s * 0.8} M${s * 0.36},${s * 0.6} L${s * 0.64},${s * 0.6}`} stroke={ink} strokeWidth={5 * k} fill="none" />,
-    fabrica: <path d={`M${s * 0.2},${s * 0.78} V${s * 0.45} L${s * 0.4},${s * 0.55} V${s * 0.45} L${s * 0.6},${s * 0.55} V${s * 0.25} H${s * 0.75} V${s * 0.78} Z`} fill={ink} />,
-    refineria: <path d={`M${s * 0.25},${s * 0.78} V${s * 0.35} H${s * 0.38} V${s * 0.78} M${s * 0.5},${s * 0.78} V${s * 0.22} H${s * 0.63} V${s * 0.78} M${s * 0.2},${s * 0.78} H${s * 0.8}`} stroke={ink} strokeWidth={6 * k} fill="none" />,
-    camion: <path d={`M${s * 0.15},${s * 0.35} H${s * 0.6} V${s * 0.65} H${s * 0.15} Z M${s * 0.6},${s * 0.45} H${s * 0.78} L${s * 0.85},${s * 0.55} V${s * 0.65} H${s * 0.6} Z`} fill={ink} />,
-    barco: <path d={`M${s * 0.15},${s * 0.55} H${s * 0.85} L${s * 0.72},${s * 0.75} H${s * 0.28} Z M${s * 0.35},${s * 0.55} V${s * 0.35} H${s * 0.6} V${s * 0.55}`} fill={ink} />,
-    documento: <path d={`M${s * 0.3},${s * 0.2} H${s * 0.6} L${s * 0.72},${s * 0.32} V${s * 0.8} H${s * 0.3} Z`} fill="#fff" stroke={ink} strokeWidth={4 * k} />,
-    calendario: <rect x={s * 0.25} y={s * 0.28} width={s * 0.5} height={s * 0.46} rx={5 * k} fill="#fff" stroke="#E8312A" strokeWidth={5 * k} />,
-    "flecha-arriba": <path d={`M${s * 0.5},${s * 0.2} L${s * 0.78},${s * 0.52} H${s * 0.6} V${s * 0.8} H${s * 0.4} V${s * 0.52} H${s * 0.22} Z`} fill="#4FB36B" />,
-    "flecha-abajo": <path d={`M${s * 0.5},${s * 0.8} L${s * 0.78},${s * 0.48} H${s * 0.6} V${s * 0.2} H${s * 0.4} V${s * 0.48} H${s * 0.22} Z`} fill="#E8312A" />,
-    alerta: <path d={`M${s * 0.5},${s * 0.18} L${s * 0.84},${s * 0.78} H${s * 0.16} Z`} fill="#E9C443" stroke={ink} strokeWidth={4 * k} />,
-  };
+  const s = 92 * k;
+  const st = STICKERS[tipo] ?? STICKERS.lugar!;
+  const Glyph = st.icon;
   return (
-    <svg width={s} height={s} style={{ overflow: "visible", filter: `drop-shadow(0 ${4 * k}px ${6 * k}px rgba(0,0,0,0.45))` }}>
-      {ring}
-      {shapes[tipo] ?? shapes.alerta}
-    </svg>
+    <div
+      style={{
+        width: s,
+        height: s,
+        borderRadius: "50%",
+        background: `radial-gradient(circle at 35% 30%, rgba(255,255,255,0.35), rgba(255,255,255,0) 55%), ${st.color}`,
+        border: `${6 * k}px solid #fff`,
+        boxShadow: `0 ${6 * k}px ${14 * k}px rgba(0,0,0,0.55), inset 0 ${-4 * k}px ${8 * k}px rgba(0,0,0,0.25)`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        boxSizing: "border-box",
+      }}
+    >
+      <Glyph size={s * 0.52} color="#fff" strokeWidth={2.6} style={{ filter: `drop-shadow(0 ${2 * k}px ${2 * k}px rgba(0,0,0,0.35))` }} />
+    </div>
   );
 }
 
@@ -255,6 +352,35 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
   const at = (sec: number | undefined, damping = 14) => (sec === undefined || sec < 0 ? 1 : spring({ frame: frame - sec * fps, fps, config: { damping, stiffness: 170, mass: 0.7 } }));
   const fadeOut = (hasta: number | undefined) => (hasta === undefined ? 1 : interpolate(t, [Math.max(0, hasta - 0.45), hasta], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }));
   const font = theme.fontSans;
+
+  // Cajas en pantalla de etiquetas y pegatinas, y su corrimiento anti-solape.
+  // El tercio de arriba queda para cifra/anio/bocadillo si el plano los tiene.
+  // Se calcula con el encuadre propio del plano (no el de cada cuadro): asi el
+  // corrimiento es fijo durante el plano y nada salta mientras la camara deriva.
+  const layoutProj = projectionFor(e.centro, e.km, width, height);
+  const labelBoxes = (e.etiquetas ?? []).map((l) => {
+    const pt = layoutProj([l.lon, l.lat]);
+    if (!pt) return null;
+    const sea = SEA_NAME.test(l.texto);
+    const fs = (l.tam ?? 34) * (sea ? 1.3 : 1.15) * k;
+    const w = l.texto.length * fs * 0.68 + 10 * k;
+    const h = fs * 1.3 + (sea ? 0 : 12 * k);
+    if (sea) return { x: pt[0] - w / 2, y: pt[1] - h / 2, w, h, dy: 0 };
+    const leftSide = pt[0] > width * 0.72;
+    const dx = (leftSide ? -1 : 1) * 46 * k;
+    return { x: leftSide ? pt[0] + dx - 8 * k - w : pt[0] + dx + 8 * k, y: pt[1] - 34 * k - h / 2, w, h, dy: 0 };
+  });
+  const iconPoints = (e.iconos ?? []).slice(0, 4).map((ic): [number, number] | null =>
+    ic.lat !== undefined && ic.lon !== undefined ? layoutProj([ic.lon, ic.lat]) : ic.x !== undefined && ic.y !== undefined ? [ic.x * width, ic.y * height] : null
+  );
+  const iconBoxes = (e.iconos ?? []).slice(0, 4).map((ic, i) => {
+    const pt = iconPoints[i];
+    if (!pt) return null;
+    const size = 92 * k * (ic.escala ?? 0.8);
+    return { x: pt[0] - size / 2, y: pt[1] - size / 2, w: size, h: size + (ic.texto ? 46 * k : 0), dy: 0 };
+  });
+  const topZone = e.cifra || e.anio || e.bocadillo ? [{ x: width * 0.2, y: 0, w: width * 0.6, h: height * 0.3, dy: 0, fixed: true }] : [];
+  separate([...topZone, ...labelBoxes.filter((b): b is Box => !!b), ...iconBoxes.filter((b): b is Box => !!b)], width, height, 10 * k);
 
   return (
     <AbsoluteFill style={{ background: "#173248", overflow: "hidden" }}>
@@ -338,7 +464,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
               style={{
                 position: "absolute",
                 left: pt[0],
-                top: pt[1],
+                top: pt[1] + (labelBoxes[i]?.dy ?? 0),
                 transform: `translate(-50%,-50%) rotate(${l.giro ?? 0}deg) scale(${0.7 + 0.3 * s})`,
                 opacity: s,
                 fontFamily: font,
@@ -367,12 +493,12 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
           <div key={`l${i}`} style={{ position: "absolute", left: pt[0], top: pt[1], opacity: Math.min(1, s * 2) }}>
             <svg width={1} height={1} style={{ position: "absolute", overflow: "visible" }}>
               <circle r={9 * k * Math.min(1, s * 2)} fill="#fff" stroke="#000" strokeWidth={3 * k} />
-              <path d={`M0,0 L${dx * 0.55 * line},${-34 * k * line} L${dx * line},${-34 * k * line}`} stroke="#fff" strokeWidth={3.5 * k} fill="none" style={{ filter: `drop-shadow(0 0 ${3 * k}px #000)` }} />
+              <path d={`M0,0 L${dx * 0.55 * line},${(-34 * k + (labelBoxes[i]?.dy ?? 0)) * line} L${dx * line},${(-34 * k + (labelBoxes[i]?.dy ?? 0)) * line}`} stroke="#fff" strokeWidth={3.5 * k} fill="none" style={{ filter: `drop-shadow(0 0 ${3 * k}px #000)` }} />
             </svg>
             <div
               style={{
                 position: "absolute",
-                top: -34 * k,
+                top: -34 * k + (labelBoxes[i]?.dy ?? 0),
                 ...(left ? { right: -dx + 8 * k } : { left: dx + 8 * k }),
                 transform: `translateY(-50%) rotate(${tilt}deg)`,
                 opacity: name,
@@ -408,14 +534,14 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
               position: "absolute",
               left: pt[0],
               // Despues de entrar, flota suave (cada una a su ritmo).
-              top: pt[1] + Math.sin(t * 2.2 + i * 1.7) * 5 * k * s,
+              top: pt[1] + (iconBoxes[i]?.dy ?? 0) + Math.sin(t * 2.2 + i * 1.7) * 5 * k * s,
               transform: `translate(-50%,-50%) scale(${sc}) rotate(${Math.sin(t * 1.6 + i) * 3 * s}deg)`,
               opacity: s,
             }}
           >
             <Icon tipo={ic.tipo} k={k} />
             {ic.texto && (
-              <div style={{ position: "absolute", top: 18 * k, width: "100%", textAlign: "center", fontFamily: font, fontWeight: 900, fontSize: 22 * k, color: "#E8312A" }}>{ic.texto}</div>
+              <div style={{ position: "absolute", top: "100%", left: "50%", transform: "translate(-50%, " + 6 * k + "px)", background: "#111", color: "#fff", border: 3 * k + "px solid #fff", borderRadius: 999, padding: 4 * k + "px " + 14 * k + "px", fontFamily: font, fontWeight: 900, fontSize: 26 * k, whiteSpace: "nowrap", boxShadow: "0 " + 4 * k + "px " + 10 * k + "px rgba(0,0,0,0.5)" }}>{ic.texto}</div>
             )}
           </div>
         );
