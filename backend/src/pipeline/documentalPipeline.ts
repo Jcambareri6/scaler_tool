@@ -16,7 +16,8 @@ import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { buildPhrases, type Phrase } from "../director/phrases.js";
 import { directMontaje, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
-import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type QaCode } from "../director/visualJudge.js";
+import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
+import { shotEpochs } from "../lib/epoca.js";
 import {
   NOT_A_PORTRAIT,
   searchArchiveVideos,
@@ -181,6 +182,7 @@ async function writeShotScenes(ctx: DocumentalContext, phrases: Phrase[], plan: 
           sujeto: shot.sujeto,
           query: shot.query,
           ...(shot.entidad ? { entidad: shot.entidad } : {}),
+          ...(shot.obligatorio?.length ? { obligatorio: shot.obligatorio } : {}),
           ...(shot.anio ? { anio: shot.anio } : {}),
           ...(shot.lugar ? { lugar: shot.lugar } : {}),
           ...(shot.capitulo ? { capitulo: shot.capitulo } : {}),
@@ -319,6 +321,43 @@ async function persistShotVisual(
   if (error) throw new Error(error.message);
 }
 
+// Contexto del juez para cada plano (como textoPlano de MaV): frases de
+// alrededor, titulo del video, lo que tiene que verse, el rotulo de lugar y
+// la epoca (lib/epoca.ts, por reglas). Lo arma el codigo, sin otra llamada.
+export type JudgeContext = Omit<JudgeShot, "frase" | "clase" | "sujeto" | "modo" | "tema">;
+
+export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | undefined): Map<string, JudgeContext> {
+  const epochs = shotEpochs(
+    byOrder.map((r) => r.text),
+    byOrder.map((r) => r.shot.anio)
+  );
+  return new Map(
+    byOrder.map((r, i) => {
+      const e = epochs[i]!;
+      const context: JudgeContext = {
+        epoca: e,
+        ...(e.historico && e.anio !== undefined ? { anio: e.anio } : {}),
+        ...(byOrder[i - 1]?.text ? { fraseAnterior: byOrder[i - 1]!.text } : {}),
+        ...(byOrder[i + 1]?.text ? { fraseSiguiente: byOrder[i + 1]!.text } : {}),
+        ...(videoTopic ? { titulo: videoTopic } : {}),
+        ...(r.shot.obligatorio?.length ? { obligatorio: r.shot.obligatorio } : {}),
+        ...(r.shot.lugar?.nombre ? { lugarRotulo: r.shot.lugar.nombre } : {}),
+      };
+      return [r.id, context];
+    })
+  );
+}
+
+function judgeShotOf(row: ShotRow, context: JudgeContext | undefined, rescue?: { tema: string }): JudgeShot {
+  return {
+    frase: row.text,
+    clase: row.shot.clase,
+    sujeto: row.shot.sujeto,
+    ...(context ?? {}),
+    ...(rescue ? { modo: "tema" as const, tema: rescue.tema } : {}),
+  };
+}
+
 // Baja el tramo de YouTube elegido por miniatura, lo revisa con 3 cuadros
 // reales (el juez otra vez, con un solo candidato) y lo sube a R2. Devuelve
 // el candidato con la URL propia, o null si el tramo no sirve.
@@ -327,8 +366,8 @@ async function materializeYouTube(
   row: ShotRow,
   pick: VisualCandidate,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> },
-  prevText: string | undefined,
-  opts: { startFraction?: number; tema?: string; anio?: number } = {}
+  context: JudgeContext | undefined,
+  opts: { startFraction?: number; tema?: string } = {}
 ): Promise<VisualCandidate | null> {
   try {
     const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction);
@@ -342,14 +381,7 @@ async function materializeYouTube(
     const check = await judgeCandidates(
       judge.client,
       judge.model,
-      {
-        frase: row.text,
-        clase: row.shot.clase,
-        sujeto: row.shot.sujeto,
-        ...((row.shot.anio ?? opts.anio) ? { anio: (row.shot.anio ?? opts.anio)! } : {}),
-        ...(prevText ? { fraseAnterior: prevText } : {}),
-        ...(opts.tema !== undefined ? { modo: "tema" as const, tema: opts.tema } : {}),
-      },
+      judgeShotOf(row, context, opts.tema !== undefined ? { tema: opts.tema } : undefined),
       [clip],
       judge.workDir,
       judge.usage
@@ -375,7 +407,7 @@ async function fillShot(
   style: DocumentalStyle,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> } | null,
   used: Set<string>,
-  neighbours: { prevText?: string; queries: string[]; epoch?: number }
+  neighbours: { queries: string[]; context?: JudgeContext }
 ): Promise<ShotOutcome> {
   const shot = row.shot;
   const minDuration = Math.max(1, row.end - row.start);
@@ -407,15 +439,7 @@ async function fillShot(
     const verdict = await judgeCandidates(
       judge.client,
       judge.model,
-      {
-        frase: row.text,
-        clase: shot.clase,
-        sujeto: shot.sujeto,
-        // Sin anio propio, el del capitulo: asi el juez rechaza lo moderno
-        // (un display digital) en una escena de 1912.
-        ...((shot.anio ?? neighbours.epoch) ? { anio: (shot.anio ?? neighbours.epoch)! } : {}),
-        ...(neighbours.prevText ? { fraseAnterior: neighbours.prevText } : {}),
-      },
+      judgeShotOf(row, neighbours.context),
       found,
       judge.workDir,
       judge.usage
@@ -429,7 +453,7 @@ async function fillShot(
       // el tramo y se revisa con cuadros reales (2da revision, como MaV).
       if (pick.provider === "youtube") {
         used.add(key(pick));
-        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.prevText);
+        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.context);
         if (!clip) {
           rejected.push({ index: verdict.chosen, code: "equivocado", reason: `youtube: el tramo bajado no muestra el sujeto (${pick.title ?? pick.external_id})` });
           return null;
@@ -751,14 +775,7 @@ async function rescueGaps(
     usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
   }
   const neighbourOrigins = (i: number) => [byOrder[i - 1], byOrder[i + 1]].map((r) => (r ? originOf.get(r.id) : undefined));
-  // Epoca de cada plano: su anio o el ultimo anio dicho en su capitulo.
-  const epochOf = new Map<string, number>();
-  let lastYear: number | undefined;
-  for (const r of byOrder) {
-    if (r.shot.capitulo !== undefined) lastYear = undefined;
-    if (r.shot.anio) lastYear = r.shot.anio;
-    if (lastYear) epochOf.set(r.id, lastYear);
-  }
+  const contexts = shotContexts(byOrder, ctx.videoTopic);
   const queries = judge ? await topicQueries(judge, ctx) : [];
   const commonsPool: VisualCandidate[] = [];
   let commonsLoaded = 0;
@@ -781,15 +798,7 @@ async function rescueGaps(
 
   await mapWithConcurrency(gaps, 3, async (row) => {
     const i = byOrder.indexOf(row);
-    const prevText = byOrder[i - 1]?.text;
-    const anio = row.shot.anio ?? epochOf.get(row.id);
-    const judgeShot = {
-      frase: row.text,
-      clase: row.shot.clase,
-      sujeto: row.shot.sujeto,
-      ...(anio ? { anio } : {}),
-      ...(prevText ? { fraseAnterior: prevText } : {}),
-    };
+    const context = contexts.get(row.id);
     if (judge && row.shot.clase !== "mapa") {
       // 1. Otro momento de un YouTube ya usado (rota entre los videos), sin
       // pasar el tope de usos por video ni repetir el video del plano vecino.
@@ -801,7 +810,7 @@ async function rescueGaps(
         const fraction = RESCUE_FRACTIONS.find((f) => !seen.has(f));
         if (fraction === undefined) continue;
         seen.add(fraction);
-        const clip = await materializeYouTube(ctx, row, src, judge, prevText, { startFraction: fraction, tema, ...(anio ? { anio } : {}) });
+        const clip = await materializeYouTube(ctx, row, src, judge, context, { startFraction: fraction, tema });
         if (clip) {
           counts.youtube_momento += 1;
           return save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento");
@@ -818,7 +827,7 @@ async function rescueGaps(
         const verdict = await judgeCandidates(
           judge.client,
           judge.model,
-          { ...judgeShot, modo: "tema", tema },
+          judgeShotOf(row, context, { tema }),
           photos,
           judge.workDir,
           judge.usage
@@ -836,7 +845,7 @@ async function rescueGaps(
         const found = (await searchYouTubeVideos(q).catch(() => [] as VisualCandidate[])).filter((c) => !used.has(key(c)));
         if (found[0]) {
           used.add(key(found[0]));
-          const clip = await materializeYouTube(ctx, row, found[0], judge, prevText, { tema, ...(anio ? { anio } : {}) });
+          const clip = await materializeYouTube(ctx, row, found[0], judge, context, { tema });
           if (clip) {
             counts.youtube_tema += 1;
             ytSources.push(found[0]);
@@ -854,7 +863,7 @@ async function rescueGaps(
         const verdict = await judgeCandidates(
           judge.client,
           judge.model,
-          judgeShot,
+          judgeShotOf(row, context),
           fresh,
           judge.workDir,
           judge.usage
@@ -890,7 +899,6 @@ async function rescueGaps(
       if (recovered >= LAST_PASS_MAX) break;
       const i = byOrder.indexOf(row);
       const near = neighbourOrigins(i);
-      const anio = row.shot.anio ?? epochOf.get(row.id);
       const src = ytSources.find((s) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES && !near.includes(`youtube:${s.external_id}`));
       if (!src) break;
       const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
@@ -898,7 +906,7 @@ async function rescueGaps(
       const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
       if (fraction === undefined) continue;
       seen.add(fraction);
-      const clip = await materializeYouTube(ctx, row, src, judge, byOrder[i - 1]?.text, { startFraction: fraction, tema, ...(anio ? { anio } : {}) });
+      const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
       if (!clip) continue;
       await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima");
       counts.rotulo -= 1;
@@ -978,20 +986,14 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   let hoja: string | null = null;
   try {
     const idx = new Map(byOrder.map((r, i) => [r.id, i]));
-    // Epoca de cada plano: su anio o el ultimo anio dicho en su capitulo.
-    const epochOf = new Map<string, number>();
-    let lastYear: number | undefined;
-    for (const r of byOrder) {
-      if (r.shot.capitulo !== undefined) lastYear = undefined;
-      if (r.shot.anio) lastYear = r.shot.anio;
-      if (lastYear) epochOf.set(r.id, lastYear);
-    }
+    // Contexto del juez por plano (frases de alrededor, titulo, epoca por reglas...).
+    const contexts = shotContexts(byOrder, ctx.videoTopic);
     await mapWithConcurrency(rows, SHOT_CONCURRENCY, async (row) => {
       const i = idx.get(row.id) ?? 0;
+      const context = contexts.get(row.id);
       const neighbours = {
-        ...(byOrder[i - 1]?.text ? { prevText: byOrder[i - 1]!.text } : {}),
         queries: [byOrder[i - 1]?.shot.query, byOrder[i + 1]?.shot.query].filter((q): q is string => !!q),
-        ...(epochOf.has(row.id) ? { epoch: epochOf.get(row.id)! } : {}),
+        ...(context ? { context } : {}),
       };
       outcomes.push(await fillShot(ctx, row, style, judge, used, neighbours));
       done += 1;

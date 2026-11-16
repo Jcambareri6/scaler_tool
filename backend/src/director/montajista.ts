@@ -46,6 +46,8 @@ export interface PlannedShot {
   sujeto: string;
   query: string;
   entidad?: string;
+  // Lo que la frase nombra y TIENE que verse (MaV: obligatorio). Va al juez.
+  obligatorio?: string[];
   anio?: number;
   lugar?: { nombre: string; lat: number; lon: number };
   grafico?: ShotGraphic;
@@ -105,6 +107,8 @@ ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.ep
 ## Graficos disponibles (campo grafico.type)
 ${guide}
 
+- obligatorio: las cosas concretas que nombra la frase y TIENEN que verse (en persona, la persona; en cosa, la cosa; en lugar, el lugar). Vacio en ambiente o si la frase no nombra nada. El juez rechaza la imagen que no lo muestra.
+
 Entrega UNA sola vez con submit_shot_plan. Los planos van en orden, sin huecos, y cubren de la primera a la ultima frase.`;
 }
 
@@ -150,6 +154,11 @@ const PLAN_TOOL: Anthropic.Tool = {
             sujeto: { type: "string", description: "Que se ve, en castellano" },
             query_en: { type: "string", description: "Busqueda en ingles, 2-6 palabras" },
             entidad: { type: "string", description: "Nombre propio exacto (persona/cosa/lugar) como en Wikipedia" },
+            obligatorio: {
+              type: "array",
+              items: { type: "string" },
+              description: "Las cosas concretas que nombra la frase y TIENEN que verse, en el idioma de la narracion. Vacio si no nombra nada concreto.",
+            },
             anio: { type: "number" },
             lugar: { type: "object", properties: { nombre: { type: "string" }, lat: { type: "number" }, lon: { type: "number" } }, required: ["nombre", "lat", "lon"] },
             grafico: graphicSchema,
@@ -217,6 +226,9 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
       sujeto: str(item.sujeto),
       query: str(item.query_en) || str(item.sujeto),
       ...(str(item.entidad) ? { entidad: str(item.entidad) } : {}),
+      ...(Array.isArray(item.obligatorio) && item.obligatorio.some((o) => str(o))
+        ? { obligatorio: (item.obligatorio as unknown[]).map(str).filter(Boolean).slice(0, 5) }
+        : {}),
       ...(anio ? { anio } : {}),
       ...(lugarRaw && typeof lugarRaw.lat === "number" && typeof lugarRaw.lon === "number"
         ? { lugar: { nombre: str(lugarRaw.nombre), lat: lugarRaw.lat, lon: lugarRaw.lon } }
