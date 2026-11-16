@@ -110,17 +110,25 @@ function projectionFor(centro: { lat: number; lon: number }, km: number, width: 
 // Curva del vuelo (MaV): seno con un 15 % lineal, sin el paron de la cubica.
 const flightEase = (u: number) => 0.15 * u + 0.85 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, Math.max(0, u))));
 
+// Cuanto mas se mueve la camara dentro del plano que los valores de MaV
+// (deriva ~0,02 del cuadro): con esos el mapa se sentia quieto.
+const MOTION_GAIN = 2.5;
+
 // Encuadre al final de un plano: su centro corrido por la deriva (fraccion del
-// cuadro) y el km reducido por el zoom.
+// cuadro) y el km reducido por el zoom. Con una curva suave (no lineal) para
+// que la deriva arranque y termine sin tirones.
 function endOf(centro: { lat: number; lon: number }, km: number, deriva: [number, number] | undefined, zoom: number | undefined, p: number) {
   const d = deriva ?? [0, 0];
   const cos = Math.max(0.2, Math.cos((centro.lat * Math.PI) / 180));
   const degX = (km / (R * cos)) * (180 / Math.PI);
+  const q = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, Math.max(0, p)));
   return {
-    centro: { lat: centro.lat - d[1] * p * degX * 0.5625, lon: centro.lon + d[0] * p * degX },
-    km: km * (1 - (zoom ?? 0) * p),
+    centro: { lat: centro.lat - d[1] * MOTION_GAIN * q * degX * 0.5625, lon: centro.lon + d[0] * MOTION_GAIN * q * degX },
+    km: km * (1 - (zoom ?? 0) * MOTION_GAIN * q),
   };
 }
+
+const SEA_NAME = /\b(mar|golfo|oc[eé]ano|caribe|bah[ií]a|estrecho|canal|pen[ií]nsula|selva|sea|gulf|ocean|bay|strait|channel|peninsula)\b/i;
 
 function pathOfRoute(proj: GeoProjection, puntos: LatLon[], arco = 0): string {
   const pts = puntos.map(([lat, lon]) => proj([lon, lat])).filter((p): p is [number, number] => !!p);
@@ -314,42 +322,97 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
             );
           })}
       </svg>
-      {/* Etiquetas (mares, lugares): mayusculas, giradas, con trazo negro. */}
+      {/* Etiquetas. Mares y regiones: texto grande girado con contorno negro
+          grueso y sombra (se lee sobre cualquier satelite). Lugares: rotulo
+          como el de MaV (punto blanco, linea en codo, nombre en mayusculas
+          con sombra y una barrita del acento debajo). */}
       {(e.etiquetas ?? []).map((l, i) => {
         const pt = proj([l.lon, l.lat]);
         if (!pt) return null;
         const s = at(l.en);
+        const outline = `0 0 ${2 * k}px #000, 0 0 ${4 * k}px #000, 0 ${3 * k}px ${12 * k}px rgba(0,0,0,0.9)`;
+        if (SEA_NAME.test(l.texto)) {
+          return (
+            <div
+              key={`l${i}`}
+              style={{
+                position: "absolute",
+                left: pt[0],
+                top: pt[1],
+                transform: `translate(-50%,-50%) rotate(${l.giro ?? 0}deg) scale(${0.7 + 0.3 * s})`,
+                opacity: s,
+                fontFamily: font,
+                fontWeight: 900,
+                fontSize: (l.tam ?? 34) * 1.3 * k,
+                letterSpacing: 4 * k,
+                textTransform: "uppercase",
+                color: "#fff",
+                WebkitTextStroke: `${7 * k}px rgba(0,0,0,0.85)`,
+                paintOrder: "stroke fill",
+                textShadow: outline,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {l.texto}
+            </div>
+          );
+        }
+        // Rotulo de lugar: el punto entra primero, despues la linea y el nombre.
+        const line = interpolate(s, [0.15, 0.6], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+        const name = interpolate(s, [0.45, 1], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+        const left = pt[0] > width * 0.72;
+        const dx = (left ? -1 : 1) * 46 * k;
+        const tilt = ((i * 37) % 7) - 3;
         return (
-          <div
-            key={`l${i}`}
-            style={{
-              position: "absolute",
-              left: pt[0],
-              top: pt[1],
-              transform: `translate(-50%,-50%) rotate(${l.giro ?? 0}deg) scale(${0.6 + 0.4 * s})`,
-              opacity: s,
-              fontFamily: font,
-              fontWeight: 900,
-              fontSize: (l.tam ?? 34) * 1.3 * k,
-              letterSpacing: 3 * k,
-              textTransform: "uppercase",
-              color: "#fff",
-              WebkitTextStroke: `${5 * k * 0.55}px rgba(0,0,0,0.55)`,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {l.texto}
+          <div key={`l${i}`} style={{ position: "absolute", left: pt[0], top: pt[1], opacity: Math.min(1, s * 2) }}>
+            <svg width={1} height={1} style={{ position: "absolute", overflow: "visible" }}>
+              <circle r={9 * k * Math.min(1, s * 2)} fill="#fff" stroke="#000" strokeWidth={3 * k} />
+              <path d={`M0,0 L${dx * 0.55 * line},${-34 * k * line} L${dx * line},${-34 * k * line}`} stroke="#fff" strokeWidth={3.5 * k} fill="none" style={{ filter: `drop-shadow(0 0 ${3 * k}px #000)` }} />
+            </svg>
+            <div
+              style={{
+                position: "absolute",
+                top: -34 * k,
+                ...(left ? { right: -dx + 8 * k } : { left: dx + 8 * k }),
+                transform: `translateY(-50%) rotate(${tilt}deg)`,
+                opacity: name,
+                whiteSpace: "nowrap",
+                fontFamily: font,
+                fontWeight: 900,
+                fontSize: (l.tam ?? 34) * 1.15 * k,
+                letterSpacing: 2.5 * k,
+                textTransform: "uppercase",
+                color: "#fff",
+                WebkitTextStroke: `${6 * k}px rgba(0,0,0,0.85)`,
+                paintOrder: "stroke fill",
+                textShadow: outline,
+              }}
+            >
+              {l.texto}
+              <div style={{ height: 6 * k, width: `${name * 100}%`, marginTop: 4 * k, background: "#E8312A", boxShadow: `0 0 ${6 * k}px rgba(0,0,0,0.8)` }} />
+            </div>
           </div>
         );
       })}
       {/* Pegatinas. */}
       {(e.iconos ?? []).slice(0, 4).map((ic, i) => {
-        const pt = ic.lat !== undefined && ic.lon !== undefined ? proj([ic.lon, ic.lat]) : ic.x !== undefined && ic.y !== undefined ? [ic.x * width, ic.y * height] : null;
+        const pt: [number, number] | null =
+          ic.lat !== undefined && ic.lon !== undefined ? proj([ic.lon, ic.lat]) : ic.x !== undefined && ic.y !== undefined ? [ic.x * width, ic.y * height] : null;
         if (!pt) return null;
         const s = at(ic.en, 11);
         const sc = (ic.escala ?? 0.8) * s;
         return (
-          <div key={`i${i}`} style={{ position: "absolute", left: pt[0], top: pt[1], transform: `translate(-50%,-50%) scale(${sc})`, opacity: s }}>
+          <div
+            key={`i${i}`}
+            style={{
+              position: "absolute",
+              left: pt[0],
+              // Despues de entrar, flota suave (cada una a su ritmo).
+              top: pt[1] + Math.sin(t * 2.2 + i * 1.7) * 5 * k * s,
+              transform: `translate(-50%,-50%) scale(${sc}) rotate(${Math.sin(t * 1.6 + i) * 3 * s}deg)`,
+              opacity: s,
+            }}
+          >
             <Icon tipo={ic.tipo} k={k} />
             {ic.texto && (
               <div style={{ position: "absolute", top: 18 * k, width: "100%", textAlign: "center", fontFamily: font, fontWeight: 900, fontSize: 22 * k, color: "#E8312A" }}>{ic.texto}</div>
