@@ -485,7 +485,10 @@ async function materializeYouTube(
     // con subtitulos que nunca nombran el sujeto se descarta sin bajarlo.
     let startSeconds: number | undefined;
     if (opts.startFraction === undefined) {
-      const keywords = subtitleKeywords([...(row.shot.obligatorio ?? []), row.shot.entidad, row.shot.sujeto]);
+      // En castellano (obligatorio, sujeto) Y en ingles (la busqueda del plano):
+      // muchos videos tienen los subtitulos en ingles y con solo castellano se
+      // descartaban videos que servian.
+      const keywords = subtitleKeywords([row.shot.query, row.shot.entidad, ...(row.shot.obligatorio ?? []), row.shot.sujeto]);
       const subs = await subtitleMoments(pick, keywords, judge.workDir);
       if (subs.hasSubs && keywords.length > 0 && subs.moments.length === 0) {
         console.log(`[documental] plano ${row.order}: youtube ${pick.external_id} descartado, los subtitulos nunca nombran ${keywords.join("/")}`);
@@ -917,7 +920,9 @@ async function topicQueries(judge: Judge, ctx: DocumentalContext): Promise<strin
   try {
     const message = await judge.client.messages.create({
       model: judge.model,
-      max_tokens: 400,
+      // Sonnet 5.5 piensa antes de contestar y eso cuenta dentro de max_tokens:
+      // con 400 la respuesta se cortaba y el rescate quedaba sin busquedas.
+      max_tokens: 6000,
       messages: [
         {
           role: "user",
@@ -984,7 +989,8 @@ async function addKeyPhraseOverlays(rows: ShotRow[], ctx: DocumentalContext, jud
     const list = rows.map((r) => ({ id: String(r.order), frase: r.text.slice(0, 260) }));
     const message = await judge.client.messages.create({
       model: judge.model,
-      max_tokens: 1200,
+      // Con 1200 el pensamiento se comia el limite ("Unexpected end of JSON input").
+      max_tokens: 10000,
       messages: [
         {
           role: "user",

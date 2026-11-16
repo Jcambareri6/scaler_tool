@@ -245,7 +245,7 @@ export async function judgeCandidates(
   }
   content.push({ type: "text", text: shotContext(shot) });
   try {
-    const message = await client.messages.stream({ model, max_tokens: 1500, system: SYSTEM, messages: [{ role: "user", content }] }).finalMessage();
+    const message = await client.messages.stream({ model, max_tokens: 8000, system: SYSTEM, messages: [{ role: "user", content }] }).finalMessage();
     usage.input = (usage.input ?? 0) + message.usage.input_tokens;
     usage.output = (usage.output ?? 0) + message.usage.output_tokens;
     const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");

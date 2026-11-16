@@ -185,7 +185,7 @@ function normWords(text: string): string[] {
 
 // Palabras clave del plano para buscar en los subtitulos.
 export function subtitleKeywords(parts: (string | undefined)[]): string[] {
-  return [...new Set(parts.flatMap((p) => (p ? normWords(p) : [])))].slice(0, 8);
+  return [...new Set(parts.flatMap((p) => (p ? normWords(p) : [])))].slice(0, 12);
 }
 
 // Lee un .vtt: tiempo de inicio y texto de cada cue (sin etiquetas).
@@ -294,7 +294,21 @@ function runCapture(cmd: string, args: string[], timeoutMs: number): Promise<str
   });
 }
 
+// YouTube corta a veces una descarga con 403/429 cuando se bajan muchos tramos
+// seguidos desde la misma IP: un reintento despues de una pausa suele pasar.
 async function downloadSection(url: string, start: number, length: number, out: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await downloadSectionOnce(url, start, length, out);
+      return;
+    } catch (err) {
+      if (attempt >= 1 || !/(403|429)/.test((err as Error).message)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+}
+
+async function downloadSectionOnce(url: string, start: number, length: number, out: string): Promise<void> {
   await run(
     YTDLP,
     [

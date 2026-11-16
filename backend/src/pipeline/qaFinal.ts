@@ -264,7 +264,7 @@ export async function judgeBatch(
     }
   }
   const message = await client.messages
-    .stream({ model, max_tokens: 400 + 220 * batch.length, system: SYSTEM, messages: [{ role: "user", content }] })
+    .stream({ model, max_tokens: 6000 + 800 * batch.length, system: SYSTEM, messages: [{ role: "user", content }] })
     .finalMessage();
   usage.input = (usage.input ?? 0) + message.usage.input_tokens;
   usage.output = (usage.output ?? 0) + message.usage.output_tokens;
