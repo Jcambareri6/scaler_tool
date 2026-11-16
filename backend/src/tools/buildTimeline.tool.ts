@@ -231,6 +231,18 @@ export const buildTimelineTool: ToolDefinition<BuildTimelineInput, BuildTimeline
       cursor = cursor + totalDuration * share;
       return { start, end: cursor };
     });
+    // Adelanto por escena (documental, como MaV ponerTiempos): la imagen
+    // entra `leadSeconds` antes de su primera palabra (un mapa 1,6 s, una
+    // persona 0,9 s...). Negativo = entra despues (el plano anterior se
+    // alarga, topes de pantalla). Nunca a menos de 1 s del inicio del plano
+    // anterior ni a menos de 0,5 s de su propio final.
+    sceneRows.forEach((scene, i) => {
+      const lead = Number((scene.content as { leadSeconds?: number } | null)?.leadSeconds ?? 0);
+      if (!lead || i === 0) return;
+      const range = ranges[i]!;
+      const prev = ranges[i - 1]!;
+      range.start = Math.min(range.end - 0.5, Math.max(prev.start + 1, range.start - lead));
+    });
     if (ranges.length > 0) {
       ranges[0]!.start = 0;
       for (let i = 0; i < ranges.length - 1; i++) {

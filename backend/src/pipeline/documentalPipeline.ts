@@ -15,7 +15,7 @@ import { reportJobProgress } from "../lib/jobProgress.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { buildPhrases, type Phrase } from "../director/phrases.js";
-import { directMontaje, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
+import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
 import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
@@ -179,6 +179,8 @@ async function writeShotScenes(ctx: DocumentalContext, phrases: Phrase[], plan: 
         startSeconds: start,
         endSeconds: end,
         duration: `${Math.round(end - start)}s`,
+        // La imagen entra antes que su palabra (MaV): build_timeline lo aplica.
+        ...(i > 0 && leadOf(shot) > 0 ? { leadSeconds: leadOf(shot) } : {}),
         shot: {
           clase: shot.clase,
           sujeto: shot.sujeto,
@@ -1032,7 +1034,8 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   console.log(`[documental] ${ctx.projectId}: ${plan.shots.length} planos (${plan.source}), ${plan.issues.length} avisos del verificador`);
 
   // 2. Planos -> escenas, con sus graficos validados.
-  const rows = await writeShotScenes(ctx, phrases, plan);
+  // Los planos estan anclados a palabras: las escenas se arman sobre plan.units.
+  const rows = await writeShotScenes(ctx, plan.units, plan);
   // Tarjetas de capitulo como MaV (directorV2.ponerCapitulos): solo en
   // videos de 3+ min, en capitulos de 60+ s y con 90 s entre tarjetas.
   // El capitulo sigue existiendo (musica, capitulos de YouTube); solo se
