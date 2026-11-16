@@ -46,6 +46,8 @@ export interface DocumentalStyle {
     forbid: string[];
     // Paleta de motion/niches.json ("nicho:paleta"); sin esto, la del canal.
     palette?: string;
+    // Fondo de los mapas: "satellite" = teselas satelitales de Esri (MaV).
+    mapBase?: "satellite" | "dark";
   };
   look: {
     contrast: number;
@@ -102,6 +104,7 @@ function style(overrides: Partial<DocumentalStyle> & Pick<DocumentalStyle, "id" 
     graphics: {
       favor: ["big_number", "person_card", "timeline", "milestone", "line_chart", "map_marker", "lower_third", "title_card"],
       forbid: ["subscribe_cta", "strike_word"],
+      mapBase: "satellite",
     },
     look: { contrast: 1.04, saturation: 0.94, brightness: -0.01, vignette: true, flashEvery: 9, zoomCutEvery: 4 },
     // 5 palabras como MaV (con 7 la linea era muy larga).

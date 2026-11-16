@@ -206,8 +206,11 @@ export interface OverlaySpec {
   // Mapas (map_globe, map_marker): coordenada del lugar de `text`, la da el
   // planificador; solo ubica el mapa, no se muestra. `ref`: segundo lugar
   // de map_marker (su `name` si es texto del guion y se valida).
-  geo?: { lat: number; lon: number };
+  // km: radio aproximado del sitio (geocodificador): elige el zoom.
+  geo?: { lat: number; lon: number; km?: number };
   ref?: { name: string; lat: number; lon: number };
+  // Fondo del mapa: "satellite" = teselas satelitales de Esri (MaV).
+  basemap?: "satellite" | "dark";
 }
 export interface Provider {
   id: string;

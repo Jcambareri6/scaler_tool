@@ -21,11 +21,15 @@ export interface OverlaySpec {
   // de referencia. No se muestran como texto: solo ubican el mapa.
   geo?: GeoPoint;
   ref?: GeoPoint & { name: string };
+  // Fondo del mapa: "satellite" = teselas satelitales de Esri.
+  basemap?: "satellite" | "dark";
 }
 
 export interface GeoPoint {
   lat: number;
   lon: number;
+  // Radio aproximado del sitio (km): elige el zoom final.
+  km?: number;
 }
 
 export interface OverlayProps {

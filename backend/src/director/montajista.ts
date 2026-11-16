@@ -35,7 +35,7 @@ export interface ShotGraphic {
   label?: string;
   items?: { label: string; text: string }[];
   icon?: string;
-  geo?: { lat: number; lon: number };
+  geo?: { lat: number; lon: number; km?: number };
 }
 
 export interface PlannedShot {
@@ -49,7 +49,7 @@ export interface PlannedShot {
   // Lo que la frase nombra y TIENE que verse (MaV: obligatorio). Va al juez.
   obligatorio?: string[];
   anio?: number;
-  lugar?: { nombre: string; lat: number; lon: number };
+  lugar?: { nombre: string; lat: number; lon: number; km?: number };
   grafico?: ShotGraphic;
   rotulo?: ShotGraphic;
   // Numero de capitulo (1..n) si el plano abre un capitulo.

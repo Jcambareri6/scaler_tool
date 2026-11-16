@@ -244,7 +244,9 @@ export const generateOverlayTool: ToolDefinition<
     // Mapas: la coordenada no es texto del guion (no se muestra), solo tiene
     // que ser valida. El nombre del lugar de referencia si se ve: literal.
     const isMap = overlay.type === "map_globe" || overlay.type === "map_marker";
-    const geo = isMap && isLatLon(overlay.geo) ? { lat: overlay.geo.lat, lon: overlay.geo.lon } : undefined;
+    const geo = isMap && isLatLon(overlay.geo)
+      ? { lat: overlay.geo.lat, lon: overlay.geo.lon, ...(typeof overlay.geo.km === "number" && overlay.geo.km > 0 ? { km: overlay.geo.km } : {}) }
+      : undefined;
     if (isMap && !geo) {
       throw new Error(`${overlay.type} sin coordenada valida — se descarta`);
     }
@@ -284,6 +286,7 @@ export const generateOverlayTool: ToolDefinition<
         ...(icon ? { icon } : {}),
         ...(geo ? { geo } : {}),
         ...(ref ? { ref } : {}),
+        ...(isMap && (overlay.basemap === "satellite" || overlay.basemap === "dark") ? { basemap: overlay.basemap } : {}),
         ...(typeof overlay.anchor === "number" ? { anchor: Math.min(1, Math.max(0, overlay.anchor)) } : {}),
         ...(typeof overlay.duration === "number" && overlay.duration > 0 ? { duration: Math.min(12, overlay.duration) } : {}),
       },

@@ -19,6 +19,7 @@ import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGra
 import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
+import { correctPlace } from "../lib/geocode.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
 import { TOPE_MARGIN, capFor, cutPoint, neighbourMax, planExtension } from "./topes.js";
 import {
@@ -102,7 +103,9 @@ function formatTime(totalSeconds: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function toSpec(g: ShotGraphic): OverlaySpec {
+const MAP_OVERLAYS = new Set(["map_marker", "map_globe"]);
+
+function toSpec(g: ShotGraphic, basemap?: "satellite" | "dark"): OverlaySpec {
   return {
     type: g.type as OverlayType,
     text: g.text,
@@ -111,7 +114,40 @@ function toSpec(g: ShotGraphic): OverlaySpec {
     ...(g.items ? { items: g.items } : {}),
     ...(g.icon ? { icon: g.icon } : {}),
     ...(g.geo ? { geo: g.geo } : {}),
+    ...(basemap && MAP_OVERLAYS.has(g.type) ? { basemap } : {}),
   };
+}
+
+// Coordenadas reales (geocode.ts, como MaV): el lugar de cada plano y la
+// coordenada de cada mapa se corrigen si el modelo se equivoco por mas de
+// 25 km o no la dio, y llevan el tamano del sitio (elige el zoom).
+async function correctPlaces(shots: PlannedShot[]): Promise<number> {
+  let corrected = 0;
+  // Primer lugar ya ubicado del video: pista para los que vienen sin coordenada.
+  let anchor: { lat: number; lon: number } | undefined;
+  const fix = async (name: string, model: { lat: number; lon: number } | undefined) => {
+    const fixed = await correctPlace(name, model, anchor);
+    if (fixed) anchor ??= { lat: fixed.lat, lon: fixed.lon };
+    return fixed;
+  };
+  for (const shot of shots) {
+    if (shot.lugar?.nombre) {
+      const fixed = await fix(shot.lugar.nombre, shot.lugar);
+      if (fixed) {
+        if (fixed.corrected) corrected += 1;
+        shot.lugar = { ...shot.lugar, lat: fixed.lat, lon: fixed.lon, ...(fixed.km ? { km: fixed.km } : {}) };
+      }
+    }
+    for (const key of ["grafico", "rotulo"] as const) {
+      const g = shot[key];
+      if (!g || !MAP_OVERLAYS.has(g.type)) continue;
+      const fixed = await fix(g.text, g.geo);
+      if (!fixed) continue;
+      if (fixed.corrected) corrected += 1;
+      g.geo = { lat: fixed.lat, lon: fixed.lon, ...(fixed.km ? { km: fixed.km } : {}) };
+    }
+  }
+  return corrected;
 }
 
 // Graficos, rotulos, mapa y tarjeta de capitulo del plano, validados en modo
@@ -124,7 +160,8 @@ async function validatedOverlays(
   fullText: string,
   chapterTitle: string | undefined,
   toolCtx: { userId: string; jobId: string },
-  startSeconds: number
+  startSeconds: number,
+  basemap?: "satellite" | "dark"
 ): Promise<OverlaySpec[]> {
   const wanted: OverlaySpec[] = [];
   // Tarjeta de capitulo: nunca en el gancho (primeros 20 s) y, si va, es lo
@@ -133,11 +170,17 @@ async function validatedOverlays(
   if (chapterCard) {
     wanted.push({ type: "title_card", text: chapterCard, source: "script" });
   } else {
-    if (shot.grafico) wanted.push(toSpec(shot.grafico));
+    if (shot.grafico) wanted.push(toSpec(shot.grafico, basemap));
     if (shot.clase === "mapa" && shot.lugar && !shot.grafico) {
-      wanted.push({ type: "map_marker", text: shot.lugar.nombre, source: "script", geo: { lat: shot.lugar.lat, lon: shot.lugar.lon } });
+      wanted.push({
+        type: "map_marker",
+        text: shot.lugar.nombre,
+        source: "script",
+        geo: { lat: shot.lugar.lat, lon: shot.lugar.lon, ...(shot.lugar.km ? { km: shot.lugar.km } : {}) },
+        ...(basemap ? { basemap } : {}),
+      });
     }
-    if (shot.rotulo) wanted.push(toSpec(shot.rotulo));
+    if (shot.rotulo) wanted.push(toSpec(shot.rotulo, basemap));
   }
   const valid: OverlaySpec[] = [];
   for (const planned of wanted) {
@@ -1140,6 +1183,12 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   console.log(`[documental] ${ctx.projectId}: ${plan.shots.length} planos (${plan.source}), ${plan.issues.length} avisos del verificador`);
 
   // 2. Planos -> escenas, con sus graficos validados.
+  // Coordenadas reales antes de guardar (lugar y mapas).
+  const placesFixed = await correctPlaces(plan.shots).catch((err) => {
+    console.warn(`[documental] geocodificador fallo: ${(err as Error).message}`);
+    return 0;
+  });
+  if (placesFixed) console.log(`[documental] ${ctx.projectId}: ${placesFixed} coordenadas corregidas`);
   // Los planos estan anclados a palabras: las escenas se arman sobre plan.units.
   const rows = await writeShotScenes(ctx, plan.units, plan);
   // Tarjetas de capitulo como MaV (directorV2.ponerCapitulos): solo en
@@ -1165,7 +1214,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     byOrder.map((r, i) => [r.id, [byOrder[i - 1]?.text, r.text, byOrder[i + 1]?.text].filter(Boolean).join(" ")])
   );
   await mapWithConcurrency(rows, 6, async (row) => {
-    const overlays = await validatedOverlays(row.shot, row.id, row.text, windowText.get(row.id) ?? row.text, ctx.scriptText, row.shot.capitulo ? chapterTitle.get(row.shot.capitulo) : undefined, toolCtx, row.start);
+    const overlays = await validatedOverlays(row.shot, row.id, row.text, windowText.get(row.id) ?? row.text, ctx.scriptText, row.shot.capitulo ? chapterTitle.get(row.shot.capitulo) : undefined, toolCtx, row.start, style.graphics.mapBase);
     const { data: current } = await supabase.from("scenes").select("content").eq("id", row.id).single();
     const { error } = await supabase
       .from("scenes")
