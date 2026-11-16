@@ -446,7 +446,8 @@ export function verifyPlan(
     const end = shotEnd(shots, i, phrases);
     const prevGraphic = i > 0 && shots[i - 1]!.grafico;
     const lastAccepted = accepted[accepted.length - 1];
-    const limit = start < 60 ? style.plan.graphicsPerMinuteHook : style.plan.graphicsPerMinute;
+    // Gancho (1er minuto) y vitrina (hasta el minuto 5) con mas graficos.
+    const limit = start < 60 ? style.plan.graphicsPerMinuteHook : start < SHOWCASE_SECONDS ? showcaseLimit(style) : style.plan.graphicsPerMinute;
     const inWindow = accepted.filter((g) => g.start > start - 60).length;
     const reason = !allowed.has(shot.grafico.type)
       ? `tipo ${shot.grafico.type} no permitido`
@@ -581,6 +582,73 @@ export function splitTramos(units: Phrase[], hook = HOOK_SECONDS, body = TRAMO_S
   return tramos;
 }
 
+// ---------- Vitrina: la biblioteca de graficos en los primeros 5 minutos ----------
+
+// En los primeros 5 minutos el espectador tiene que ver la variedad de
+// animaciones (cifras, mapas, lineas de tiempo, comparaciones...): es lo que
+// lo engancha. Mas presupuesto de graficos y los tipos repartidos entre los
+// tramos de esa ventana (los tramos se planifican en paralelo y sin esto
+// todos usaban los mismos 3-4 tipos).
+export const SHOWCASE_SECONDS = 300;
+
+// Orden de impacto: lo que mas se luce primero.
+const IMPACT_ORDER = [
+  "big_number",
+  "map_marker",
+  "timeline",
+  "versus",
+  "person_card",
+  "line_chart",
+  "data_viz_single",
+  "number_phrase",
+  "map_globe",
+  "scale_compare",
+  "kinetic_quote",
+  "rank_reveal",
+  "myth_fact",
+  "card_grid",
+  "list",
+  "layers_diagram",
+  "cycle_diagram",
+  "profile_card",
+  "pivot_question",
+  "scoreboard",
+  "phrase_swap",
+  "strike_word",
+];
+
+export function showcaseLimit(style: DocumentalStyle): number {
+  return Math.max(style.plan.graphicsPerMinute, Math.round(style.plan.graphicsPerMinuteHook * 0.8));
+}
+
+// Tipos de grafico de la vitrina: los del estilo (sin rotulos), favoritos
+// primero y despues por impacto.
+export function showcaseTypes(style: DocumentalStyle): string[] {
+  // Fuera rotulos y piezas de navegacion o llamados (no son "animaciones con datos").
+  const notShowcase = new Set(["chapter_index", "cta", "subscribe_cta", "location", "nav_header", "title_card"]);
+  const allowed = allowedGraphicTypes(style).filter((t) => !ROTULO_TYPES.includes(t) && !notShowcase.has(t));
+  const rank = (t: string) => {
+    const fav = style.graphics.favor.indexOf(t);
+    const imp = IMPACT_ORDER.indexOf(t);
+    return (fav >= 0 ? fav : 100) * 1000 + (imp >= 0 ? imp : 500);
+  };
+  return [...allowed].sort((a, b) => rank(a) - rank(b));
+}
+
+// Reparte los tipos de la vitrina entre los tramos que arrancan antes del
+// minuto 5 (round robin, el gancho primero). Los demas tramos: nada.
+export function showcaseAssignment(style: DocumentalStyle, tramoStarts: number[]): string[][] {
+  const inShowcase = tramoStarts.map((s, i) => (s < SHOWCASE_SECONDS ? i : -1)).filter((i) => i >= 0);
+  const out: string[][] = tramoStarts.map(() => []);
+  if (inShowcase.length === 0) return out;
+  showcaseTypes(style).forEach((type, k) => out[inShowcase[k % inShowcase.length]!]!.push(type));
+  return out;
+}
+
+function showcaseNotes(featured: string[]): string {
+  return `VITRINA (primeros 5 minutos del video): el espectador tiene que ver la variedad de animaciones. En ESTE tramo mostra estos tipos de grafico, uno de cada uno, en las frases que den un dato que los justifique: ${featured.join(", ")}. No repitas un tipo en el tramo mientras quede alguno de la lista sin usar. Cada cifra, fecha, lugar, persona o comparacion llamativa va como grafico (no como rotulo).`;
+}
+
 // Notas del gancho y del cuerpo (literales de MaV, pp:424-429).
 const HOOK_NOTES =
   "GANCHO: algo en cada frase. Planos de 2,5-4 s. Una fecha en su fecha, un mapa del primer sitio, la foto de la primera persona que se nombra, rotulos para cada nombre y cifra.";
@@ -597,12 +665,13 @@ export function numberedWords(units: Phrase[], desde: number, hasta: number): st
   return lines.join("\n");
 }
 
-function tramoPrompt(units: Phrase[], tramo: { desde: number; hasta: number }, index: number, total: number, topic: string): string {
+function tramoPrompt(units: Phrase[], tramo: { desde: number; hasta: number }, index: number, total: number, topic: string, featured: string[] = []): string {
   const before = units.slice(Math.max(0, tramo.desde - 30), tramo.desde).map((u) => u.text).join(" ");
   return `Tema del video: ${topic || "(sin titulo)"}
 Tramo ${index + 1} de ${total} (palabras ${units[tramo.desde]!.id}-${units[tramo.hasta]!.id}, ${units[tramo.desde]!.start.toFixed(1)}-${units[tramo.hasta]!.end.toFixed(1)} s).
 ${before ? `Lo que se dijo justo antes: «${before}»\n` : ""}
-${index === 0 ? HOOK_NOTES : BODY_NOTES}
+${index === 0 ? HOOK_NOTES : BODY_NOTES}${featured.length ? `
+${showcaseNotes(featured)}` : ""}
 
 Guion en palabras numeradas (numero:palabra). "desde" y "hasta" de cada plano son NUMEROS DE PALABRA de este tramo: el plano arranca en la palabra que nombra lo que se ve. Los planos cubren TODO el tramo, de la palabra ${units[tramo.desde]!.id} a la ${units[tramo.hasta]!.id}, sin huecos. Los capitulos tambien usan numero de palabra.
 ${numberedWords(units, tramo.desde, tramo.hasta)}`;
@@ -663,12 +732,15 @@ export async function directMontaje(input: {
   const model = (provider.configuration?.montaje_model as string | undefined) ?? DEFAULT_MODEL;
   const client = new Anthropic({ apiKey: provider.api_key });
   const tramos = splitTramos(units);
+  // Vitrina: los tipos de grafico del estilo repartidos entre los tramos de
+  // los primeros 5 minutos, para que entre todos aparezcan casi todos.
+  const featured = showcaseAssignment(style, tramos.map((t) => units[t.desde]!.start));
   const issues: string[] = [];
 
   // Un tramo: su plan con UNA correccion si sale con demasiado "ambiente".
   // Si falla, ese tramo va con el plan de reserva (los demas siguen).
   const planTramo = async (tramo: { desde: number; hasta: number }, index: number): Promise<{ shots: PlannedShot[]; chapters: MontajeChapter[] }> => {
-    const user = tramoPrompt(units, tramo, index, tramos.length, topic);
+    const user = tramoPrompt(units, tramo, index, tramos.length, topic, featured[index] ?? []);
     const inTramo = (p: { shots: PlannedShot[]; chapters: MontajeChapter[] }) => ({
       shots: p.shots
         .filter((s) => s.to >= tramo.desde && s.from <= tramo.hasta)

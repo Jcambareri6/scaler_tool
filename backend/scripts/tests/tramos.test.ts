@@ -82,3 +82,17 @@ console.log("palabras, verificador y adelanto OK");
   assert.deepEqual(shots.map((s) => [s.from, s.to]), [[0, 2], [3, 6], [7, 8]]);
   console.log("bordes OK");
 }
+
+// Vitrina: los tipos del estilo repartidos entre los tramos de los primeros 5 minutos.
+{
+  const { showcaseAssignment, showcaseLimit, showcaseTypes } = await import("../../src/director/montajista.js");
+  for (const id of ["documental", "mapa"]) {
+    const st = getDocumentalStyle(id);
+    const types = showcaseTypes(st);
+    const a = showcaseAssignment(st, [0, 60, 210, 360]);
+    assert.equal(a[3]!.length, 0, "el tramo del minuto 6 no es vitrina");
+    assert.equal(a[0]!.length + a[1]!.length + a[2]!.length, types.length, "todos los tipos repartidos");
+    assert.ok(!types.includes("lower_third") && !types.includes("milestone"), "sin rotulos");
+    console.log(`vitrina ${id} (${showcaseLimit(st)}/min): ${a.slice(0, 3).map((t) => t.join(",")).join(" | ")}`);
+  }
+}
