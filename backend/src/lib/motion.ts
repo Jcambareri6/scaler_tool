@@ -17,7 +17,7 @@ interface Catalog {
   fps: number;
   // blur: desenfoque del video de abajo mientras el grafico esta en
   // pantalla, en px a 1080p (ver motionOverlayGraph).
-  components: Record<string, { introSeconds: number; blur?: number }>;
+  components: Record<string, { introSeconds: number; blur?: number; full?: boolean }>;
   // Iconos que saben dibujar los componentes (scale_compare).
   icons?: string[];
 }
@@ -66,6 +66,8 @@ export interface MotionClip {
   // Desenfoque del video de abajo (sigma de gblur), ya escalado a la
   // resolucion del video desde el px-a-1080p del catalogo.
   blur: number;
+  // false: sin fundido de salida (el mapa explicativo empalma con el plano siguiente).
+  fade?: boolean;
 }
 
 export async function renderMotionClips(
@@ -92,7 +94,7 @@ export async function renderMotionClips(
       height: options.height,
       theme: options.theme ?? undefined,
       locale: options.locale,
-      items: placed.map((p, i) => ({ id: `overlay-${i}`, spec: p.spec })),
+      items: placed.map((p, i) => ({ id: `overlay-${i}`, spec: p.spec, seconds: p.end - p.start })),
     })
   );
 
@@ -126,7 +128,8 @@ export async function renderMotionClips(
   return placed.flatMap((p, i) => {
     const m = byId.get(`overlay-${i}`);
     const blur = ((motionCatalog()?.components[p.spec.type]?.blur ?? 0) * options.height) / 1080;
-    return m ? [{ path: m.path, start: p.start, end: p.end, introSeconds: m.durationSeconds, blur }] : [];
+    const full = !!motionCatalog()?.components[p.spec.type]?.full;
+    return m ? [{ path: m.path, start: p.start, end: p.end, introSeconds: m.durationSeconds, blur, ...(full ? { fade: false } : {}) }] : [];
   });
 }
 
@@ -227,7 +230,7 @@ export function motionOverlayGraph(
     inputArgs.push("-i", clip.path);
     parts.push(
       `[${input}:v]tpad=stop_mode=clone:stop_duration=${hold.toFixed(3)},` +
-        `fade=t=out:st=${fadeStart.toFixed(3)}:d=${EXIT_FADE_SECONDS}:alpha=1,` +
+        (clip.fade === false ? "" : `fade=t=out:st=${fadeStart.toFixed(3)}:d=${EXIT_FADE_SECONDS}:alpha=1,`) +
         `setpts=PTS-STARTPTS+${clip.start.toFixed(3)}/TB[mo${i}]`
     );
     const next = `mv${i}`;

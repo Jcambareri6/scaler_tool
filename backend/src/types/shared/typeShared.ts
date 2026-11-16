@@ -147,6 +147,8 @@ export type OverlayType =
   | "line_chart"
   // Piramide de poblacion con datos reales (Banco Mundial): `pyramid`.
   | "population_pyramid"
+  // Mapa explicativo a pantalla completa, un plano por frase (estilo Mapa interactivo).
+  | "map_cartoon"
   // Pregunta sola en pantalla; `label` = palabra clave que se subraya.
   | "pivot_question"
   // Muchos casos a la vez: `text` = titulo, `items` = tarjetas.
@@ -217,6 +219,9 @@ export interface OverlaySpec {
   basemap?: "satellite" | "dark";
   // population_pyramid: % del total por grupo de edad (17) y sexo, por anio.
   pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
+  // map_cartoon: escena del mapa explicativo (director/directorMapa.ts) y
+  // duracion fija = el plano entero.
+  escena?: Record<string, unknown>;
 }
 export interface Provider {
   id: string;

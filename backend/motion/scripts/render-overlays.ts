@@ -20,7 +20,8 @@ interface Job {
   // Nombre de tema o la paleta resuelta por el backend (ver theme.ts).
   theme?: OverlayProps["theme"];
   locale?: string;
-  items: { id: string; spec: OverlaySpec }[];
+  // seconds: lo que dura en pantalla (para los tipos "full", que se renderizan enteros).
+  items: { id: string; spec: OverlaySpec; seconds?: number }[];
 }
 
 interface ManifestEntry {
@@ -54,7 +55,7 @@ try {
     const inputProps: OverlayProps = {
       spec: item.spec,
       theme: job.theme,
-      durationSeconds: entry.introSeconds,
+      durationSeconds: entry.full && item.seconds ? item.seconds : entry.introSeconds,
       exit: false,
       ...(job.locale ? { locale: job.locale } : {}),
       width: job.width,

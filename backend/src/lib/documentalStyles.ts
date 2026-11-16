@@ -13,6 +13,9 @@ export type MusicMood = "documental" | "tension" | "triste" | "epico" | "misteri
 export interface DocumentalStyle {
   id: string;
   name: string;
+  // El video entero como mapa explicativo (director/directorMapa.ts, como
+  // look.mapaCartoon de MaV): un plano de mapa por frase de planoMin-planoMax s.
+  mapaCartoon?: { planoMin: number; planoMax: number };
   // Para la galeria del front.
   description: string;
   idealFor: string;
@@ -229,6 +232,7 @@ export const DOCUMENTAL_STYLES: DocumentalStyle[] = [
   style({
     id: "mapa",
     name: "Mapa interactivo",
+    mapaCartoon: { planoMin: 2.5, planoMax: 6.5 },
     description: "El relato se apoya en mapas: rutas, fronteras y lugares.",
     idealFor: "Geografía, rutas, guerras, exploraciones",
     examples: ["La ruta de Magallanes", "Por qué Rusia quiere salida al mar", "La frontera más larga del mundo"],

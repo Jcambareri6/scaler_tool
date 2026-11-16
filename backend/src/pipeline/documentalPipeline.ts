@@ -20,6 +20,7 @@ import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, ty
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import { correctPlace } from "../lib/geocode.js";
+import { MAPA_MODEL, directMapa } from "../director/directorMapa.js";
 import { formatValue, poblacion, samplePoints, serie } from "../lib/datosAbiertos.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
 import { TOPE_MARGIN, capFor, cutPoint, neighbourMax, planExtension } from "./topes.js";
@@ -1317,11 +1318,100 @@ async function rescueGaps(
   console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, rotulos_con_texto: withText })}`);
 }
 
+// ESTILO MAPA INTERACTIVO (como el directorMapa de MaV): el video entero es un
+// mapa explicativo, un plano map_cartoon por frase, sin montajista ni juez.
+// La base de cada escena es la textura del estilo (el mapa la tapa entera).
+// Devuelve false si no se pudo (sin provider o sin escenas): sigue el normal.
+async function runMapaDocumental(ctx: DocumentalContext, phrases: Phrase[], style: DocumentalStyle): Promise<boolean> {
+  const provider = await getActiveProvider("anthropic");
+  if (!provider?.api_key || !style.mapaCartoon) return false;
+  await reportJobProgress(ctx.jobId, 25, "El director de mapas está armando el mapa animado...", { force: true });
+  const result = await directMapa({
+    client: new Anthropic({ apiKey: provider.api_key }),
+    model: (provider.configuration?.mapa_model as string | undefined) ?? MAPA_MODEL,
+    phrases,
+    scriptText: ctx.scriptText,
+    language: ctx.channelLanguage ?? "",
+    min: style.mapaCartoon.planoMin,
+    max: style.mapaCartoon.planoMax,
+  });
+  if (!result) return false;
+  await reportJobProgress(ctx.jobId, 80, `Mapa listo: ${result.shots.length} planos (${result.buenas} escenas de Claude). Guardando...`, { force: true });
+
+  const { error: deleteError } = await supabase.from("scenes").delete().eq("script_id", ctx.scriptId);
+  if (deleteError) throw new Error(deleteError.message);
+  const rows = result.shots.map((s, i) => {
+    const spec = { type: "map_cartoon", text: s.line, source: "script", escena: result.escenas[i], anchor: 0 };
+    return {
+      script_id: ctx.scriptId,
+      order: i + 1,
+      content: {
+        text: s.line,
+        timeStart: formatTime(s.start),
+        timeEnd: formatTime(s.end),
+        startSeconds: s.start,
+        endSeconds: s.end,
+        duration: `${Math.round(s.end - s.start)}s`,
+        shot: { clase: "mapa", sujeto: "mapa explicativo", query: "" },
+        overlays: [spec],
+        overlay: spec,
+      },
+    };
+  });
+  const { data, error } = await supabase.from("scenes").insert(rows).select("id, order");
+  if (error) throw new Error(error.message);
+  const ids = new Map((data ?? []).map((r) => [r.order as number, r.id as string]));
+
+  // Base: la textura del estilo, una sola subida para todas las escenas.
+  const workDir = await makeWorkDir("skaler-mapa-");
+  const outcomes: { sceneId: string; order: number; source: string; qa: string; provider: string; rejected: number }[] = [];
+  try {
+    const base = await textureUrl(style, ctx, workDir);
+    await mapWithConcurrency(result.shots, 6, async (s, i) => {
+      const id = ids.get(i + 1)!;
+      const row: ShotRow = { id, order: i + 1, text: s.line, shot: { from: s.from, to: s.to, clase: "mapa", sujeto: "mapa explicativo", query: "" }, start: s.start, end: s.end };
+      await persistShotVisual(
+        ctx,
+        row,
+        { provider: "mapa", external_id: `mapa-${i + 1}`, type: "IMAGE", url: base, license: "Propia", source_page: "", query: "mapa" },
+        { code: "seguro", reason: "fondo del mapa explicativo", rejected: [], source: "mapa" }
+      );
+      outcomes.push({ sceneId: id, order: i + 1, source: "mapa", qa: "ok", provider: "mapa", rejected: 0 });
+    });
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  const summary = {
+    style: style.id,
+    source: "directorMapa",
+    chapters: [],
+    issues: result.buenas < result.shots.length ? [`${result.shots.length - result.buenas} plano(s) repiten la escena anterior`] : [],
+    usage: { mapa: result.usage },
+    shots: outcomes.sort((a, b) => a.order - b.order),
+    qa: { hoja: null },
+    created_at: new Date().toISOString(),
+  };
+  const { error: saveError } = await supabase.from("video_projects").update({ documental_plan: summary, video_style: style.id }).eq("id", ctx.projectId);
+  if (saveError) console.warn(`[documental] no se pudo guardar el plan del mapa: ${saveError.message}`);
+  console.log(`[documental] ${ctx.projectId}: mapa explicativo, ${result.shots.length} planos, ${result.buenas} escenas de Claude`);
+  return true;
+}
+
 export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void> {
   const style = getDocumentalStyle(ctx.styleId);
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
   const phrases = buildPhrases([ctx.scriptText], ctx.words);
   if (phrases.length === 0) throw new Error("El guion no tiene frases para armar el documental");
+
+  // Mapa interactivo: el video entero es un mapa explicativo.
+  if (style.mapaCartoon) {
+    const done = await runMapaDocumental(ctx, phrases, style).catch((err) => {
+      console.warn(`[documental] el director de mapas fallo, sigue el documental normal: ${(err as Error).message}`);
+      return false;
+    });
+    if (done) return;
+  }
 
   // 1. Montajista + verificador.
   await reportJobProgress(ctx.jobId, 25, `El montajista está armando los planos (${style.name})...`, { force: true });

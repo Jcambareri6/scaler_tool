@@ -19,6 +19,7 @@ import { CallToAction } from "./components/CallToAction";
 import { NavHeader } from "./components/NavHeader";
 import { LineChart } from "./components/LineChart";
 import { PopulationPyramid } from "./components/PopulationPyramid";
+import { MapCartoon } from "./components/MapCartoon";
 import { PivotQuestion } from "./components/PivotQuestion";
 import { CardGrid } from "./components/CardGrid";
 import { Scoreboard } from "./components/Scoreboard";
@@ -71,6 +72,8 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <NavHeader spec={spec} theme={theme} exit={exit} />;
     case "line_chart":
       return <LineChart spec={spec} theme={theme} exit={exit} locale={locale} />;
+    case "map_cartoon":
+      return <MapCartoon spec={spec} theme={theme} />;
     case "population_pyramid":
       return <PopulationPyramid spec={spec} theme={theme} exit={exit} locale={locale} />;
     case "pivot_question":

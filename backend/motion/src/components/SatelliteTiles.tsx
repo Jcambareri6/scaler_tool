@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { Img } from "remotion";
 import type { GeoProjection } from "d3-geo";
 
@@ -59,7 +59,7 @@ export function SatelliteTiles({ projection, width, height, opacity }: { project
   // Tope de seguridad: con un encuadre raro no se piden cientos de teselas.
   if ((x1 - x0 + 1) * (y1 - y0 + 1) > 160) return null;
 
-  const tiles: JSX.Element[] = [];
+  const tiles: ReactElement[] = [];
   for (let x = x0; x <= x1; x++) {
     for (let y = y0; y <= y1; y++) {
       const key = `${z}/${x}/${y}`;

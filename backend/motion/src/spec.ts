@@ -25,6 +25,8 @@ export interface OverlaySpec {
   basemap?: "satellite" | "dark";
   // population_pyramid: % del total por grupo de edad (17) y sexo, por anio.
   pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
+  // map_cartoon: la escena del mapa explicativo (backend director/directorMapa.ts).
+  escena?: unknown;
 }
 
 export interface GeoPoint {
