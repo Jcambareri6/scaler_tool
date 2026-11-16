@@ -5,11 +5,20 @@ import type { OverlaySpec } from "../spec";
 import type { Theme } from "../theme";
 import { TEXT_SHADOW, useMotion } from "../lib/anim";
 import { countries, countryAt, validGeo } from "../lib/geo";
+import { SatelliteTiles } from "./SatelliteTiles";
 
 // Frames del acercamiento.
 const ZOOM_FRAMES = 40;
-// Radio (grados) de la zona visible al final, sin lugar de referencia.
+// Radio (grados) de la zona visible al final, sin lugar de referencia ni
+// tamano del sitio.
 const CLOSE_RADIUS = 7;
+
+// Radio final segun el tamano del sitio (geocodificador, como MaV): un
+// pueblo de ~4 km se ve de cerca, un pais entero de lejos.
+export function closeRadius(km: number | undefined): number {
+  if (!km || !Number.isFinite(km)) return CLOSE_RADIUS;
+  return Math.max(0.02, Math.min(CLOSE_RADIUS, (km * 2.2) / 111));
+}
 
 // Mapa con marcador (terremoto del Tibet: mapa con reticula y "≈ 400 km de
 // Lhasa"): mapa plano oscuro que se acerca al lugar (`geo`), pais resaltado,
@@ -32,8 +41,14 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
   // Encuadre final: un circulo alrededor del lugar, o que entren los dos
   // puntos (radio = mitad de la distancia + margen) centrado entre ambos.
   const center: [number, number] = ref ? [(geo.lon + ref.lon) / 2, (geo.lat + ref.lat) / 2] : [geo.lon, geo.lat];
-  const finalRadius = ref ? Math.max(CLOSE_RADIUS, ((geoDistance([geo.lon, geo.lat], [ref.lon, ref.lat]) * 180) / Math.PI) * 0.75) : CLOSE_RADIUS;
-  const radius = finalRadius * (1 + 3 * (1 - zoom));
+  const satellite = spec.basemap === "satellite";
+  // Los contornos de pais son de baja resolucion: sobre el satelite de cerca
+  // (menos de ~1 grado) quedan corridos de la costa real, asi que no se dibujan.
+  const outlines = !satellite || closeRadius(geo.km) >= 1;
+  const close = closeRadius(geo.km);
+  const finalRadius = ref ? Math.max(close, ((geoDistance([geo.lon, geo.lat], [ref.lon, ref.lat]) * 180) / Math.PI) * 0.75) : close;
+  // De cerca se arranca mas lejos para dar contexto (de la region al pueblo).
+  const radius = finalRadius * (1 + (finalRadius < 1 ? 12 : 3) * (1 - zoom));
   const frameBox: [[number, number], [number, number]] = [
     [width * 0.08, height * 0.12],
     [width * 0.92, height * 0.88],
@@ -53,6 +68,7 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
 
   return (
     <AbsoluteFill style={{ opacity: exit }}>
+      {satellite && <SatelliteTiles projection={projection} width={width} height={height} opacity={enter(0, 14)} />}
       <svg width={width} height={height} style={{ position: "absolute", inset: 0, opacity: enter(0, 14) }}>
         <defs>
           <radialGradient id="map-vignette" cx="50%" cy="50%" r="70%">
@@ -60,13 +76,16 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
             <stop offset="100%" stopColor="rgba(0,0,0,0.85)" />
           </radialGradient>
         </defs>
-        <rect width={width} height={height} fill="#0a1018" opacity={0.97} />
-        <path d={path(geoGraticule10()) ?? ""} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={1 * s} />
-        {countries().map((c, i) =>
-          c === country ? null : <path key={i} d={path(c) ?? ""} fill="rgba(255,255,255,0.13)" stroke="rgba(255,255,255,0.3)" strokeWidth={0.8 * s} />
+        {/* Satelite: un velo leve para que se lean el punto y la tarjeta. */}
+        <rect width={width} height={height} fill="#0a1018" opacity={satellite ? 0.18 : 0.97} />
+        {!satellite && <path d={path(geoGraticule10()) ?? ""} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={1 * s} />}
+        {outlines && countries().map((c, i) =>
+          c === country ? null : (
+            <path key={i} d={path(c) ?? ""} fill={satellite ? "none" : "rgba(255,255,255,0.13)"} stroke={satellite ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.3)"} strokeWidth={0.8 * s} />
+          )
         )}
-        {country && (
-          <path d={path(country) ?? ""} fill={theme.accent} fillOpacity={0.06 + 0.12 * lit} stroke={theme.accent} strokeWidth={2.2 * s} strokeOpacity={0.4 + 0.6 * lit} />
+        {outlines && country && (
+          <path d={path(country) ?? ""} fill={theme.accent} fillOpacity={satellite ? 0.04 * lit : 0.06 + 0.12 * lit} stroke={theme.accent} strokeWidth={2.2 * s} strokeOpacity={0.4 + 0.6 * lit} />
         )}
         {ref && (
           <>
@@ -137,6 +156,11 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
           </div>
         )}
       </div>
+      {satellite && (
+        <div style={{ position: "absolute", right: 14 * s, bottom: 10 * s, fontFamily: theme.fontSans, fontSize: 14 * s, color: "rgba(255,255,255,0.7)", textShadow: TEXT_SHADOW, opacity: enter(0, 14) }}>
+          Imagen satelital: Esri, Maxar, Earthstar Geographics
+        </div>
+      )}
     </AbsoluteFill>
   );
 }

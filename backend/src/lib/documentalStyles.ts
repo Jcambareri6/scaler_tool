@@ -13,6 +13,9 @@ export type MusicMood = "documental" | "tension" | "triste" | "epico" | "misteri
 export interface DocumentalStyle {
   id: string;
   name: string;
+  // El video entero como mapa explicativo (director/directorMapa.ts, como
+  // look.mapaCartoon de MaV): un plano de mapa por frase de planoMin-planoMax s.
+  mapaCartoon?: { planoMin: number; planoMax: number };
   // Para la galeria del front.
   description: string;
   idealFor: string;
@@ -46,6 +49,8 @@ export interface DocumentalStyle {
     forbid: string[];
     // Paleta de motion/niches.json ("nicho:paleta"); sin esto, la del canal.
     palette?: string;
+    // Fondo de los mapas: "satellite" = teselas satelitales de Esri (MaV).
+    mapBase?: "satellite" | "dark";
   };
   look: {
     contrast: number;
@@ -102,6 +107,7 @@ function style(overrides: Partial<DocumentalStyle> & Pick<DocumentalStyle, "id" 
     graphics: {
       favor: ["big_number", "person_card", "timeline", "milestone", "line_chart", "map_marker", "lower_third", "title_card"],
       forbid: ["subscribe_cta", "strike_word"],
+      mapBase: "satellite",
     },
     look: { contrast: 1.04, saturation: 0.94, brightness: -0.01, vignette: true, flashEvery: 9, zoomCutEvery: 4 },
     // 5 palabras como MaV (con 7 la linea era muy larga).
@@ -226,6 +232,7 @@ export const DOCUMENTAL_STYLES: DocumentalStyle[] = [
   style({
     id: "mapa",
     name: "Mapa interactivo",
+    mapaCartoon: { planoMin: 2.5, planoMax: 6.5 },
     description: "El relato se apoya en mapas: rutas, fronteras y lugares.",
     idealFor: "Geografía, rutas, guerras, exploraciones",
     examples: ["La ruta de Magallanes", "Por qué Rusia quiere salida al mar", "La frontera más larga del mundo"],

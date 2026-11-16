@@ -7,6 +7,7 @@ import { fetchWithTimeout } from "../lib/http.js";
 import { withRetry } from "../lib/retry.js";
 import { WIKIMEDIA_UA, type VisualCandidate } from "../lib/documentalSources.js";
 import type { ShotClass } from "../lib/documentalStyles.js";
+import { epochLine, type ShotEpoch } from "../lib/epoca.js";
 
 // JUEZ VISUAL del formato documental: mismo criterio que el Revisor de
 // sceneReview.ts (vision + JSON), pero sobre MATERIAL REAL: mira una
@@ -29,6 +30,13 @@ export interface JudgeShot {
   anio?: number;
   // Para las transiciones: sirve una imagen del tema de la frase anterior.
   fraseAnterior?: string;
+  // Contexto como el QA de MaV (textoPlano): la frase siguiente, el titulo
+  // del video, lo que TIENE que verse, el rotulo de lugar y la epoca.
+  fraseSiguiente?: string;
+  titulo?: string;
+  obligatorio?: string[];
+  lugarRotulo?: string;
+  epoca?: ShotEpoch;
   // "tema": rescate (como MaV): acepta material del tema del video si el
   // lugar, el pais y la epoca son los de la historia; no rechaza por generico.
   modo?: "tema";
@@ -67,7 +75,33 @@ Se estricto con generico/equivocado (el espectador no tiene que sentir que la im
 Para clase "ambiente" alcanza con que el ambiente sea coherente con la frase, la epoca y el lugar (no hace falta un sujeto exacto).
 En videos (cuadros de un clip o miniatura de YouTube): rechaza (codigo generico) un presentador hablando a camara, una reaccion, una recopilacion o una animacion; y (codigo equivocado) un sujeto solo "parecido" al que se pide.
 Si la frase es una transicion sin nada concreto que mostrar ("pero eso no fue todo", "y entonces"), sirve una imagen del tema de la frase anterior. Una imagen de algo sin relacion, no.
+"Tiene que verse": si el plano lo trae, eso tiene que estar en la imagen; una cosa parecida pero DISTINTA (otra maquina, otro edificio, otro hecho del mismo tipo) es equivocado.
+Si el titulo del candidato nombra otro lugar u otro hecho que el de la frase, es equivocado aunque se parezca.
+Una foto MODERNA de producto, catalogo, estudio o stock sobre un hecho HISTORICO es generico.
+"Era" y "TODAY": usalos para el codigo epoca. Sin linea Era, no marques epoca. Antes del cine (la linea lo dice) valen ruinas, estatuas, cuadros de la epoca y reconstrucciones si no se ve nada de hoy; actores con ropa de epoca en una reconstruccion documental no son epoca.
 No apruebes por cortesia: si ninguno sirve, "elegido": null.
+
+Responde SOLO con JSON: {"elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto"}]}`;
+
+// JUEZ DE TEMA (rescate, como el prompt "tema" de fotoTema en MaV): el plano
+// ya no tiene una imagen especifica, asi que la pregunta CAMBIA: no "¿es la
+// cosa?" sino "¿es de ESTA historia?". Con el juez estricto en el rescate se
+// rechazaban 11 candidatos por plano y quedaban rotulos.
+const SYSTEM_TEMA = `Sos el juez de RESCATE de un documental hecho con material real. Este plano no consiguio una imagen especifica: necesita material del TEMA de esta historia (b-roll) que no se sienta al azar bajo la frase.
+
+Elegi el UNO que claramente pertenece a esta historia: su lugar principal, su barco/vehiculo, sus edificios, su gente, sus objetos o su epoca. No hace falta que muestre la accion exacta de la frase.
+
+Codigos por candidato:
+- ok: pertenece a esta historia (mismo pais, lugar y epoca) y no se siente al azar bajo la frase.
+- equivocado: es de OTRA historia, otro pais, otro lugar u otra epoca.
+- epoca: el plano es historico y se ve algo claramente moderno (o al reves).
+- texto: texto grande quemado, subtitulos o graficos encima.
+- marca_agua: marca de agua o logo grande.
+- ficcion: pelicula, serie, animacion, CGI, videojuego o remix (solo material real).
+- persona: se ve claramente a otra persona presentada como protagonista.
+- oscuro: muy oscuro, borroso o de muy baja calidad.
+- generico: SOLO si no tiene nada que ver con la historia (una oficina moderna cualquiera, un paisaje de otro lado).
+Rechaza mapas, diagramas y escenas modernas sin relacion. Si ninguno pertenece a la historia, "elegido": null.
 
 Responde SOLO con JSON: {"elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto"}]}`;
 
@@ -183,6 +217,34 @@ export function parseVerdict(raw: Record<string, unknown>, count: number, seen: 
   return { chosen, verdicts };
 }
 
+function clip(text: string, max: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+// Bloque de texto de un plano para el juez (como textoPlano de MaV): lo arma
+// el codigo con lo que ya tiene el plano, sin otra llamada al modelo. Lo usa
+// tambien el QA final (qaFinal.ts).
+export function shotContext(shot: JudgeShot): string {
+  const lines: string[] = [];
+  if (shot.titulo) lines.push(`Documental: "${clip(shot.titulo, 120)}".`);
+  lines.push(`Plano: clase ${shot.clase}. Sujeto: ${shot.sujeto || "(sin sujeto)"}.`);
+  if (shot.obligatorio?.length) lines.push(`Tiene que verse: ${shot.obligatorio.join(", ")}.`);
+  if (shot.lugarRotulo) lines.push(`Rotulo de lugar en pantalla: "${shot.lugarRotulo}".`);
+  lines.push(`La voz dice: "${clip(shot.frase, 260)}"`);
+  if (shot.fraseAnterior || shot.fraseSiguiente) {
+    lines.push(`Alrededor: antes: «${clip(shot.fraseAnterior ?? "", 140)}» despues: «${clip(shot.fraseSiguiente ?? "", 140)}»`);
+  }
+  const era = shot.epoca ? epochLine(shot.epoca) : shot.anio ? `Era: ${shot.anio}.` : null;
+  if (era) lines.push(era);
+  if (shot.modo === "tema") {
+    lines.push(
+      `MODO RESCATE: ninguna fuente dio el sujeto exacto. Acepta (ok) material del tema del video${shot.tema ? ` ("${shot.tema}")` : ""} si el lugar, el pais y la epoca son los de la historia; no lo rechaces por "generico". Si rechaza (equivocado/epoca/texto/marca_agua) otro lugar, otro pais, otra epoca, texto o marca de agua.`
+    );
+  }
+  return lines.join("\n");
+}
+
 export async function judgeCandidates(
   client: Anthropic,
   model: string,
@@ -203,16 +265,9 @@ export async function judgeCandidates(
     content.push({ type: "text", text: `Candidato ${i + 1} (${c.type === "VIDEO" ? "video" : "foto"}, ${c.provider}${c.title ? `, "${c.title.slice(0, 80)}"` : ""}):` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await readFile(thumb)).toString("base64") } });
   }
-  content.push({
-    type: "text",
-    text: `Plano: clase ${shot.clase}. Sujeto: ${shot.sujeto || "(sin sujeto)"}${shot.anio ? `. Ano: ${shot.anio}` : ""}.${shot.fraseAnterior ? `\nFrase anterior: "${shot.fraseAnterior}"` : ""}\nLa voz dice: "${shot.frase}"${
-      shot.modo === "tema"
-        ? `\nMODO RESCATE: ninguna fuente dio el sujeto exacto. Acepta (ok) material del tema del video${shot.tema ? ` ("${shot.tema}")` : ""} si el lugar, el pais y la epoca son los de la historia; no lo rechaces por "generico". Si rechaza (equivocado/epoca/texto/marca_agua) otro lugar, otro pais, otra epoca, texto o marca de agua.`
-        : ""
-    }`,
-  });
+  content.push({ type: "text", text: shotContext(shot) });
   try {
-    const message = await client.messages.stream({ model, max_tokens: 1500, system: SYSTEM, messages: [{ role: "user", content }] }).finalMessage();
+    const message = await client.messages.stream({ model, max_tokens: 8000, system: shot.modo === "tema" ? SYSTEM_TEMA : SYSTEM, messages: [{ role: "user", content }] }).finalMessage();
     usage.input = (usage.input ?? 0) + message.usage.input_tokens;
     usage.output = (usage.output ?? 0) + message.usage.output_tokens;
     const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");

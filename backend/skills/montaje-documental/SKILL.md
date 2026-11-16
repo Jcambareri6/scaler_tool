@@ -44,7 +44,7 @@ El arranque decide si el espectador se queda. En los primeros 60 s (como MaV):
 
 ## Duracion y ritmo
 
-- Cada plano dura lo que tarda la voz en decir sus frases. Juntas frases seguidas que hablan del mismo sujeto; separas cuando cambia el sujeto.
+- Los planos se anclan a PALABRAS: cada plano arranca en la palabra que nombra lo que se ve ("el canal", "Magallanes"), no al principio de la frase. Un plano dura 2,5-9 s; juntas palabras seguidas que hablan del mismo sujeto y cortas cuando cambia el sujeto.
 - Respeta las duraciones del estilo (te las paso). Una persona no se queda mas de 6 s; un mapa necesita al menos 4 s.
 - Variedad: no repitas la misma clase mas de 3 planos seguidos salvo que el sujeto cambie.
 

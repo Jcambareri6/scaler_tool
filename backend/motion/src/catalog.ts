@@ -11,6 +11,8 @@ import catalogJson from "../catalog.json";
 export interface CatalogEntry {
   introSeconds: number;
   blur?: number;
+  // Se renderiza el plano ENTERO (no solo la entrada): el mapa explicativo.
+  full?: boolean;
 }
 
 export const FPS: number = catalogJson.fps;

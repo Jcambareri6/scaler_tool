@@ -1,3 +1,4 @@
+import { INDICATORS } from "../lib/datosAbiertos.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -35,7 +36,7 @@ export interface ShotGraphic {
   label?: string;
   items?: { label: string; text: string }[];
   icon?: string;
-  geo?: { lat: number; lon: number };
+  geo?: { lat: number; lon: number; km?: number };
 }
 
 export interface PlannedShot {
@@ -46,14 +47,30 @@ export interface PlannedShot {
   sujeto: string;
   query: string;
   entidad?: string;
+  // Lo que la frase nombra y TIENE que verse (MaV: obligatorio). Va al juez.
+  obligatorio?: string[];
   anio?: number;
-  lugar?: { nombre: string; lat: number; lon: number };
+  lugar?: { nombre: string; lat: number; lon: number; km?: number };
   grafico?: ShotGraphic;
   rotulo?: ShotGraphic;
   // Numero de capitulo (1..n) si el plano abre un capitulo.
   capitulo?: number;
   // Parte de un plano largo que se partio (para no repetir el mismo visual).
   parte?: number;
+  // Grafico con datos reales del Banco Mundial (lib/datosAbiertos.ts).
+  datos?: ShotData;
+}
+
+export interface ShotData {
+  tipo: "serie" | "piramide";
+  // Alias de la tabla (fertilidad, pib...) o codigo del Banco Mundial.
+  indicador?: string;
+  // ISO3 del pais.
+  pais: string;
+  desde?: number;
+  hasta?: number;
+  anios?: number[];
+  titulo?: string;
 }
 
 export interface MontajeChapter {
@@ -65,6 +82,8 @@ export interface MontajeChapter {
 export interface MontajePlan {
   shots: PlannedShot[];
   chapters: MontajeChapter[];
+  // Unidades del plan (palabras): from/to de los planos son indices aca.
+  units: Phrase[];
   issues: string[];
   source: "montajista" | "heuristic";
   usage: Usage;
@@ -88,6 +107,17 @@ function allowedGraphicTypes(style: DocumentalStyle): string[] {
   return plannableTypes().filter((t) => !style.graphics.forbid.includes(t) && t !== "nav_header" && t !== "title_card");
 }
 
+// Datos reales (como directorV2 de MaV): el modelo elige indicador y pais; el
+// codigo trae las cifras. Sin datos, el grafico se quita.
+const DATA_GUIDE = `
+## Datos reales (campo datos, opcional)
+Cuando el guion habla de la evolucion de un PAIS (poblacion, economia, natalidad...) y una cifra real lo cuenta mejor que un rotulo, pone "datos" en ese plano en vez de "grafico". Las cifras las trae el sistema del Banco Mundial: vos solo elegis que mostrar.
+- tipo "serie": una linea en el tiempo. indicador = uno de estos alias: ${Object.keys(INDICATORS).join(", ")}. desde/hasta = anios (1960-2050).
+- tipo "piramide": piramide de poblacion por edad y sexo. anios = 2-4 anios (ej. 1960, 2024, 2050). El plano dura 8-10 s.
+- pais = codigo ISO3. Solo paises: una ciudad, un estado o una costa no tienen datos (no pongas datos).
+- Como mucho 2 por video y nunca dos seguidos.
+`;
+
 function systemPrompt(style: DocumentalStyle): string {
   const types = allowedGraphicTypes(style);
   const guide = types.map((t) => `- ${t}: ${TYPE_GUIDE[t as keyof typeof TYPE_GUIDE] ?? ""}`).join("\n");
@@ -104,8 +134,11 @@ ${style.description}
 ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.epochHint ? ` (${style.sources.epochHint})` : ""}: pon siempre \`anio\` cuando sea historico.\n` : ""}
 ## Graficos disponibles (campo grafico.type)
 ${guide}
+${style.graphics.favor.includes("line_chart") ? DATA_GUIDE : ""}
 
-Entrega UNA sola vez con submit_shot_plan. Los planos van en orden, sin huecos, y cubren de la primera a la ultima frase.`;
+- obligatorio: las cosas concretas que nombra la frase y TIENEN que verse (en persona, la persona; en cosa, la cosa; en lugar, el lugar). Vacio en ambiente o si la frase no nombra nada. El juez rechaza la imagen que no lo muestra.
+
+Entrega UNA sola vez con submit_shot_plan. Los planos van en orden, sin huecos, y cubren de la primera a la ultima palabra del tramo. desde/hasta son numeros de palabra.`;
 }
 
 const graphicSchema = {
@@ -133,7 +166,7 @@ const PLAN_TOOL: Anthropic.Tool = {
           type: "object",
           properties: {
             titulo: { type: "string" },
-            desde: { type: "string", description: "Id de la frase donde arranca (p1, p2...)" },
+            desde: { type: "string", description: "Numero de la palabra donde arranca" },
             animo: { type: "string", enum: MUSIC_MOODS },
           },
           required: ["titulo", "desde", "animo"],
@@ -144,16 +177,35 @@ const PLAN_TOOL: Anthropic.Tool = {
         items: {
           type: "object",
           properties: {
-            desde: { type: "string", description: "Id de la primera frase (p1...)" },
-            hasta: { type: "string", description: "Id de la ultima frase (inclusive)" },
+            desde: { type: "string", description: "Numero de la primera palabra del plano (la que nombra lo que se ve)" },
+            hasta: { type: "string", description: "Numero de la ultima palabra (inclusive)" },
             clase: { type: "string", enum: SHOT_CLASSES },
             sujeto: { type: "string", description: "Que se ve, en castellano" },
             query_en: { type: "string", description: "Busqueda en ingles, 2-6 palabras" },
             entidad: { type: "string", description: "Nombre propio exacto (persona/cosa/lugar) como en Wikipedia" },
+            obligatorio: {
+              type: "array",
+              items: { type: "string" },
+              description: "Las cosas concretas que nombra la frase y TIENEN que verse, en el idioma de la narracion. Vacio si no nombra nada concreto.",
+            },
             anio: { type: "number" },
             lugar: { type: "object", properties: { nombre: { type: "string" }, lat: { type: "number" }, lon: { type: "number" } }, required: ["nombre", "lat", "lon"] },
             grafico: graphicSchema,
             rotulo: graphicSchema,
+            datos: {
+              type: "object",
+              description: "Grafico con datos REALES del Banco Mundial (solo un pais que el guion trata). Reemplaza al grafico.",
+              properties: {
+                tipo: { type: "string", enum: ["serie", "piramide"] },
+                indicador: { type: "string", description: "Alias de la tabla de indicadores" },
+                pais: { type: "string", description: "Codigo ISO3 del pais (MEX, ARG, JPN...)" },
+                desde: { type: "number" },
+                hasta: { type: "number" },
+                anios: { type: "array", items: { type: "number" }, description: "Piramide: 2-4 anios entre 1960 y 2050" },
+                titulo: { type: "string", description: "Indicador · Pais, en el idioma de la narracion" },
+              },
+              required: ["tipo", "pais"],
+            },
           },
           required: ["desde", "hasta", "clase", "sujeto", "query_en"],
         },
@@ -162,6 +214,26 @@ const PLAN_TOOL: Anthropic.Tool = {
     required: ["chapters", "shots"],
   } as Anthropic.Tool.InputSchema,
 };
+
+function dataOf(raw: unknown): ShotData | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const tipo = r.tipo === "piramide" ? "piramide" : r.tipo === "serie" ? "serie" : null;
+  const pais = str(r.pais).toUpperCase();
+  if (!tipo || !/^[A-Z]{2,3}$/.test(pais)) return undefined;
+  if (tipo === "serie" && !str(r.indicador)) return undefined;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : undefined);
+  const anios = Array.isArray(r.anios) ? (r.anios as unknown[]).map(num).filter((n): n is number => n !== undefined) : undefined;
+  return {
+    tipo,
+    pais,
+    ...(str(r.indicador) ? { indicador: str(r.indicador) } : {}),
+    ...(num(r.desde) ? { desde: num(r.desde)! } : {}),
+    ...(num(r.hasta) ? { hasta: num(r.hasta)! } : {}),
+    ...(anios?.length ? { anios } : {}),
+    ...(str(r.titulo) ? { titulo: str(r.titulo) } : {}),
+  };
+}
 
 function phraseIndex(id: unknown, total: number): number | null {
   const n = typeof id === "string" ? Number(id.replace(/^p/i, "")) : typeof id === "number" ? id : NaN;
@@ -217,12 +289,16 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
       sujeto: str(item.sujeto),
       query: str(item.query_en) || str(item.sujeto),
       ...(str(item.entidad) ? { entidad: str(item.entidad) } : {}),
+      ...(Array.isArray(item.obligatorio) && item.obligatorio.some((o) => str(o))
+        ? { obligatorio: (item.obligatorio as unknown[]).map(str).filter(Boolean).slice(0, 5) }
+        : {}),
       ...(anio ? { anio } : {}),
       ...(lugarRaw && typeof lugarRaw.lat === "number" && typeof lugarRaw.lon === "number"
         ? { lugar: { nombre: str(lugarRaw.nombre), lat: lugarRaw.lat, lon: lugarRaw.lon } }
         : {}),
       ...(grafico ? { grafico } : {}),
       ...(rotulo ? { rotulo } : {}),
+      ...(dataOf(item.datos) ? { datos: dataOf(item.datos)! } : {}),
     });
   }
   const chapters: MontajeChapter[] = [];
@@ -370,7 +446,8 @@ export function verifyPlan(
     const end = shotEnd(shots, i, phrases);
     const prevGraphic = i > 0 && shots[i - 1]!.grafico;
     const lastAccepted = accepted[accepted.length - 1];
-    const limit = start < 60 ? style.plan.graphicsPerMinuteHook : style.plan.graphicsPerMinute;
+    // Gancho (1er minuto) y vitrina (hasta el minuto 5) con mas graficos.
+    const limit = start < 60 ? style.plan.graphicsPerMinuteHook : start < SHOWCASE_SECONDS ? showcaseLimit(style) : style.plan.graphicsPerMinute;
     const inWindow = accepted.filter((g) => g.start > start - 60).length;
     const reason = !allowed.has(shot.grafico.type)
       ? `tipo ${shot.grafico.type} no permitido`
@@ -439,17 +516,199 @@ export function verifyPlan(
 }
 
 // Respaldo sin LLM: planos de ~5 s de ambiente. Solo para no perder el video.
-export function heuristicPlan(phrases: Phrase[], topic: string): { shots: PlannedShot[]; chapters: MontajeChapter[] } {
+// Con `units` (palabras) corta en final de oracion despues de 5 s, o a los 7 s.
+export function heuristicPlan(phrases: Phrase[], topic: string, units: Phrase[] = phrases): { shots: PlannedShot[]; chapters: MontajeChapter[] } {
   const shots: PlannedShot[] = [];
   let start = 0;
-  phrases.forEach((phrase, i) => {
-    const long = phrase.end - phrases[start]!.start;
-    if (long >= 5 || i === phrases.length - 1) {
+  const byWord = units !== phrases;
+  units.forEach((unit, i) => {
+    const long = unit.end - units[start]!.start;
+    const cut = byWord ? (long >= 5 && SENTENCE_END.test(unit.text)) || long >= 7 : long >= 5;
+    if (cut || i === units.length - 1) {
       shots.push({ from: start, to: i, clase: "ambiente", sujeto: topic, query: topic });
       start = i + 1;
     }
   });
-  return { shots, chapters: phrases.length ? [{ titulo: topic, desde: 0, animo: "documental" }] : [] };
+  return { shots, chapters: units.length ? [{ titulo: topic, desde: 0, animo: "documental" }] : [] };
+}
+
+// ---------- Plan anclado a palabras y por tramos (como planDePlanos de MaV) ----------
+
+// Cada palabra es una unidad (id = su numero, 1-based): los planos arrancan
+// en la palabra que nombra lo que se ve, no al principio de la frase. El
+// verificador y build_timeline trabajan igual sobre estas unidades.
+export function wordUnits(phrases: Phrase[]): Phrase[] {
+  const units: Phrase[] = [];
+  for (const phrase of phrases) {
+    for (const w of phrase.words) {
+      units.push({ id: String(units.length + 1), text: w.text, start: w.start, end: w.end, words: [w] });
+    }
+  }
+  return units;
+}
+
+const SENTENCE_END = /[.!?…]["»”)]*$/;
+export const HOOK_SECONDS = 60;
+export const TRAMO_SECONDS = 150;
+const TRAMO_MIN_TAIL = 20;
+
+// Tramos de unidades: el gancho (60 s) y despues de 150 s, cortados en el
+// final de oracion mas cercano por detras si deja mas del 60 % del limite.
+// Un resto de menos de 20 s se une al tramo anterior.
+export function splitTramos(units: Phrase[], hook = HOOK_SECONDS, body = TRAMO_SECONDS): { desde: number; hasta: number }[] {
+  const tramos: { desde: number; hasta: number }[] = [];
+  let from = 0;
+  while (from < units.length) {
+    const limit = tramos.length === 0 ? hook : body;
+    const t0 = units[from]!.start;
+    let to = from;
+    while (to + 1 < units.length && units[to + 1]!.end - t0 <= limit) to++;
+    if (to + 1 < units.length) {
+      for (let k = to; k > from; k--) {
+        if (SENTENCE_END.test(units[k]!.text) && units[k]!.end - t0 >= limit * 0.6) {
+          to = k;
+          break;
+        }
+      }
+    }
+    tramos.push({ desde: from, hasta: to });
+    from = to + 1;
+  }
+  const last = tramos[tramos.length - 1];
+  if (tramos.length > 1 && last && units[last.hasta]!.end - units[last.desde]!.start < TRAMO_MIN_TAIL) {
+    tramos.pop();
+    tramos[tramos.length - 1]!.hasta = last.hasta;
+  }
+  return tramos;
+}
+
+// ---------- Vitrina: la biblioteca de graficos en los primeros 5 minutos ----------
+
+// En los primeros 5 minutos el espectador tiene que ver la variedad de
+// animaciones (cifras, mapas, lineas de tiempo, comparaciones...): es lo que
+// lo engancha. Mas presupuesto de graficos y los tipos repartidos entre los
+// tramos de esa ventana (los tramos se planifican en paralelo y sin esto
+// todos usaban los mismos 3-4 tipos).
+export const SHOWCASE_SECONDS = 300;
+
+// Orden de impacto: lo que mas se luce primero.
+const IMPACT_ORDER = [
+  "big_number",
+  "map_marker",
+  "timeline",
+  "versus",
+  "person_card",
+  "line_chart",
+  "data_viz_single",
+  "number_phrase",
+  "map_globe",
+  "scale_compare",
+  "kinetic_quote",
+  "rank_reveal",
+  "myth_fact",
+  "card_grid",
+  "list",
+  "layers_diagram",
+  "cycle_diagram",
+  "profile_card",
+  "pivot_question",
+  "scoreboard",
+  "phrase_swap",
+  "strike_word",
+];
+
+export function showcaseLimit(style: DocumentalStyle): number {
+  return Math.max(style.plan.graphicsPerMinute, Math.round(style.plan.graphicsPerMinuteHook * 0.8));
+}
+
+// Tipos de grafico de la vitrina: los del estilo (sin rotulos), favoritos
+// primero y despues por impacto.
+export function showcaseTypes(style: DocumentalStyle): string[] {
+  // Fuera rotulos y piezas de navegacion o llamados (no son "animaciones con datos").
+  const notShowcase = new Set(["chapter_index", "cta", "subscribe_cta", "location", "nav_header", "title_card"]);
+  const allowed = allowedGraphicTypes(style).filter((t) => !ROTULO_TYPES.includes(t) && !notShowcase.has(t));
+  const rank = (t: string) => {
+    const fav = style.graphics.favor.indexOf(t);
+    const imp = IMPACT_ORDER.indexOf(t);
+    return (fav >= 0 ? fav : 100) * 1000 + (imp >= 0 ? imp : 500);
+  };
+  return [...allowed].sort((a, b) => rank(a) - rank(b));
+}
+
+// Reparte los tipos de la vitrina entre los tramos que arrancan antes del
+// minuto 5 (round robin, el gancho primero). Los demas tramos: nada.
+export function showcaseAssignment(style: DocumentalStyle, tramoStarts: number[]): string[][] {
+  const inShowcase = tramoStarts.map((s, i) => (s < SHOWCASE_SECONDS ? i : -1)).filter((i) => i >= 0);
+  const out: string[][] = tramoStarts.map(() => []);
+  if (inShowcase.length === 0) return out;
+  showcaseTypes(style).forEach((type, k) => out[inShowcase[k % inShowcase.length]!]!.push(type));
+  return out;
+}
+
+function showcaseNotes(featured: string[]): string {
+  return `VITRINA (primeros 5 minutos del video): el espectador tiene que ver que hay variedad de animaciones. Para ESTE tramo, priorizá estos tipos de grafico: ${featured.join(", ")}.
+Es un MENU, no una obligacion. CRITERIO, que es lo principal:
+- Cada grafico tiene que nacer de un dato que la frase DICE y que tiene la forma de ese grafico: big_number = una cifra que impacta; versus = dos cosas que se comparan; timeline = varias fechas en orden; line_chart = una evolucion en el tiempo con varios valores; map_marker/map_globe = un lugar que importa; scale_compare = una escala o equivalencia; rank_reveal/list = un ranking o una enumeracion real. Si el dato no tiene esa forma, ese tipo no va.
+- Mejor un tramo con 3 graficos bien elegidos que 7 forzados. Nunca un grafico de relleno, nunca uno que repita lo que ya dice la imagen.
+- Entre dos tipos que sirven para el mismo dato, elegi el que todavia no aparecio en el video.
+- Cada cifra, fecha, lugar o comparacion llamativa que de verdad aporte va como grafico animado (no como rotulo).`;
+}
+
+// Notas del gancho y del cuerpo (literales de MaV, pp:424-429).
+const HOOK_NOTES =
+  "GANCHO: algo en cada frase. Planos de 2,5-4 s. Una fecha en su fecha, un mapa del primer sitio, la foto de la primera persona que se nombra, rotulos para cada nombre y cifra.";
+const BODY_NOTES =
+  "CUERPO: el video respira; el metraje real lo lleva (planos de 4-6 s). Mas o menos un grafico por minuto, fotos a menudo, mapas cuando importa un sitio nuevo, 2-4 rotulos por minuto.";
+
+// Palabras numeradas, 25 por linea, con el tiempo al principio de cada linea.
+export function numberedWords(units: Phrase[], desde: number, hasta: number): string {
+  const lines: string[] = [];
+  for (let i = desde; i <= hasta; i += 25) {
+    const chunk = units.slice(i, Math.min(hasta + 1, i + 25));
+    lines.push(`[${chunk[0]!.start.toFixed(1)}s] ${chunk.map((u) => `${u.id}:${u.text}`).join(" ")}`);
+  }
+  return lines.join("\n");
+}
+
+function tramoPrompt(units: Phrase[], tramo: { desde: number; hasta: number }, index: number, total: number, topic: string, featured: string[] = []): string {
+  const before = units.slice(Math.max(0, tramo.desde - 30), tramo.desde).map((u) => u.text).join(" ");
+  return `Tema del video: ${topic || "(sin titulo)"}
+Tramo ${index + 1} de ${total} (palabras ${units[tramo.desde]!.id}-${units[tramo.hasta]!.id}, ${units[tramo.desde]!.start.toFixed(1)}-${units[tramo.hasta]!.end.toFixed(1)} s).
+${before ? `Lo que se dijo justo antes: «${before}»\n` : ""}
+${index === 0 ? HOOK_NOTES : BODY_NOTES}${featured.length ? `
+${showcaseNotes(featured)}` : ""}
+
+Guion en palabras numeradas (numero:palabra). "desde" y "hasta" de cada plano son NUMEROS DE PALABRA de este tramo: el plano arranca en la palabra que nombra lo que se ve. Los planos cubren TODO el tramo, de la palabra ${units[tramo.desde]!.id} a la ${units[tramo.hasta]!.id}, sin huecos. Los capitulos tambien usan numero de palabra.
+${numberedWords(units, tramo.desde, tramo.hasta)}`;
+}
+
+// Un plano no termina en "el", "de", "y"...: esa palabra va con la que sigue
+// ("A las 23:40 el | vigia" -> "A las 23:40 | el vigia"). Solo mueve palabras
+// de enlace al plano siguiente, nunca deja un plano vacio.
+const LINK_WORD = /^(el|la|los|las|lo|un|una|unos|unas|de|del|a|al|en|con|por|para|sin|sobre|y|e|o|u|que|su|sus|the|a|an|of|to|in|and|or)$/i;
+
+export function tidyBoundaries(shots: PlannedShot[], units: Phrase[]): number {
+  let moved = 0;
+  for (let i = 0; i < shots.length - 1; i++) {
+    const shot = shots[i]!;
+    const next = shots[i + 1]!;
+    while (shot.to > shot.from && next.from === shot.to + 1 && LINK_WORD.test(units[shot.to]!.text.replace(/[^\p{L}]/gu, ""))) {
+      shot.to -= 1;
+      next.from -= 1;
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
+// Adelanto de la imagen respecto de su primera palabra, por clase (MaV
+// ponerTiempos): el ojo llega antes que la palabra.
+export const LEAD_BY_CLASS: Partial<Record<ShotClass, number>> = { mapa: 1.6, persona: 0.9, cosa: 0.5, lugar: 0.5 };
+export const GRAPHIC_LEAD = 0.15;
+
+export function leadOf(shot: Pick<PlannedShot, "clase" | "grafico">): number {
+  if (shot.grafico) return GRAPHIC_LEAD;
+  return LEAD_BY_CLASS[shot.clase] ?? 0;
 }
 
 // Tope de planos "ambiente" (stock generico). En la prueba del Titanic el
@@ -465,44 +724,68 @@ export async function directMontaje(input: {
   style: DocumentalStyle;
   videoTopic?: string;
 }): Promise<MontajePlan> {
-  const { phrases, style } = input;
+  const { style } = input;
+  // Unidades = palabras (plan anclado a palabras, como MaV).
+  const units = wordUnits(input.phrases);
   const topic = input.videoTopic ?? "";
   const usage: Usage = {};
   const provider = await getActiveProvider("anthropic");
   if (!provider?.api_key) {
-    const verified = verifyPlan(heuristicPlan(phrases, topic), phrases, style);
-    return { ...verified, source: "heuristic", usage, issues: ["sin provider anthropic: plan heuristico", ...verified.issues] };
+    const verified = verifyPlan(heuristicPlan(input.phrases, topic, units), units, style);
+    return { ...verified, units, source: "heuristic", usage, issues: ["sin provider anthropic: plan heuristico", ...verified.issues] };
   }
   const model = (provider.configuration?.montaje_model as string | undefined) ?? DEFAULT_MODEL;
   const client = new Anthropic({ apiKey: provider.api_key });
-  const user = `Tema del video: ${topic || "(sin titulo)"}
+  const tramos = splitTramos(units);
+  // Vitrina: los tipos de grafico del estilo repartidos entre los tramos de
+  // los primeros 5 minutos, para que entre todos aparezcan casi todos.
+  const featured = showcaseAssignment(style, tramos.map((t) => units[t.desde]!.start));
+  const issues: string[] = [];
 
-Guion en frases numeradas con su tiempo (segundos):
-${phrases.map((p) => `${p.id} [${p.start.toFixed(1)}-${p.end.toFixed(1)}] ${p.text}`).join("\n")}`;
-  try {
-    const raw = await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, user, usage);
-    const parsed = parsePlan(raw, phrases);
-    if (parsed.shots.length === 0) throw new Error("el montajista no devolvio planos");
-    let verified = verifyPlan(parsed, phrases, style);
-    // Demasiado "ambiente" = demasiado stock generico: UNA correccion.
-    const share = ambientShare(verified.shots);
-    if (share > MAX_AMBIENT_SHARE) {
-      const fix = `${user}\n\nTu plan anterior puso el ${Math.round(share * 100)}% de los planos como "ambiente" (maximo ${Math.round(MAX_AMBIENT_SHARE * 100)}%). Rehacelo: todo lo que nombra o describe algo mostrable (el barco, la gente, un lugar, un hecho filmado) va como persona, cosa, lugar o metraje. Ambiente solo para transiciones e ideas abstractas.`;
-      try {
-        const retry = parsePlan(await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, fix, usage), phrases);
-        if (retry.shots.length > 0) {
-          const second = verifyPlan(retry, phrases, style);
-          if (ambientShare(second.shots) < share) verified = second;
+  // Un tramo: su plan con UNA correccion si sale con demasiado "ambiente".
+  // Si falla, ese tramo va con el plan de reserva (los demas siguen).
+  const planTramo = async (tramo: { desde: number; hasta: number }, index: number): Promise<{ shots: PlannedShot[]; chapters: MontajeChapter[] }> => {
+    const user = tramoPrompt(units, tramo, index, tramos.length, topic, featured[index] ?? []);
+    const inTramo = (p: { shots: PlannedShot[]; chapters: MontajeChapter[] }) => ({
+      shots: p.shots
+        .filter((s) => s.to >= tramo.desde && s.from <= tramo.hasta)
+        .map((s) => ({ ...s, from: Math.max(tramo.desde, s.from), to: Math.min(tramo.hasta, s.to) })),
+      chapters: p.chapters.filter((c) => c.desde >= tramo.desde && c.desde <= tramo.hasta),
+    });
+    try {
+      let parsed = inTramo(parsePlan(await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, user, usage), units));
+      if (parsed.shots.length === 0) throw new Error("sin planos");
+      const share = ambientShare(parsed.shots);
+      if (share > MAX_AMBIENT_SHARE) {
+        const fix = `${user}\n\nTu plan anterior puso el ${Math.round(share * 100)}% de los planos como "ambiente" (maximo ${Math.round(MAX_AMBIENT_SHARE * 100)}%). Rehacelo: todo lo que nombra o describe algo mostrable (el barco, la gente, un lugar, un hecho filmado) va como persona, cosa, lugar o metraje. Ambiente solo para transiciones e ideas abstractas.`;
+        try {
+          const retry = inTramo(parsePlan(await callTool(client, model, MAX_TOKENS, systemPrompt(style), PLAN_TOOL, fix, usage), units));
+          if (retry.shots.length > 0 && ambientShare(retry.shots) < share) parsed = retry;
+        } catch (err) {
+          console.warn(`[montajista] tramo ${index + 1}: la correccion de ambiente fallo:`, err);
         }
-      } catch (err) {
-        console.warn("[montajista] la correccion de ambiente fallo, sigo con el primer plan:", err);
+        issues.push(`tramo ${index + 1}: ambiente ${Math.round(share * 100)}% -> ${Math.round(ambientShare(parsed.shots) * 100)}%`);
       }
-      verified.issues.push(`ambiente ${Math.round(share * 100)}% en el primer plan -> ${Math.round(ambientShare(verified.shots) * 100)}% tras la correccion`);
+      return parsed;
+    } catch (err) {
+      console.warn(`[montajista] tramo ${index + 1} fallo, va con el plan de reserva:`, err);
+      issues.push(`tramo ${index + 1}: reserva (${(err as Error).message})`);
+      const sub = units.slice(tramo.desde, tramo.hasta + 1);
+      const reserve = heuristicPlan([{ id: "r", text: sub.map((u) => u.text).join(" "), start: sub[0]!.start, end: sub[sub.length - 1]!.end, words: sub.flatMap((u) => u.words) }], topic, sub);
+      return {
+        shots: reserve.shots.map((s) => ({ ...s, from: s.from + tramo.desde, to: s.to + tramo.desde })),
+        chapters: index === 0 ? reserve.chapters : [],
+      };
     }
-    return { ...verified, source: "montajista", usage };
-  } catch (err) {
-    console.warn("[montajista] fallo, sigo con el plan heuristico:", err);
-    const verified = verifyPlan(heuristicPlan(phrases, topic), phrases, style);
-    return { ...verified, source: "heuristic", usage, issues: [`montajista fallo: ${(err as Error).message}`, ...verified.issues] };
+  };
+
+  const results = await Promise.all(tramos.map((t, i) => planTramo(t, i)));
+  if (results.every((r) => r.shots.length === 0)) {
+    const verified = verifyPlan(heuristicPlan(input.phrases, topic, units), units, style);
+    return { ...verified, units, source: "heuristic", usage, issues: ["montajista sin planos", ...verified.issues] };
   }
+  const verified = verifyPlan({ shots: results.flatMap((r) => r.shots), chapters: results.flatMap((r) => r.chapters) }, units, style);
+  tidyBoundaries(verified.shots, units);
+  const allReserve = issues.filter((i) => i.includes("reserva")).length === tramos.length;
+  return { ...verified, units, source: allReserve ? "heuristic" : "montajista", usage, issues: [`${tramos.length} tramos`, ...issues, ...verified.issues] };
 }

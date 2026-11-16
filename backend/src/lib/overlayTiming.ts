@@ -41,6 +41,8 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   myth_fact: 5.5,
   scale_compare: 5,
   line_chart: 7,
+  // Piramide de poblacion (datos reales): las barras cambian de anio en anio.
+  population_pyramid: 9,
   pivot_question: 3.5,
   card_grid: 7,
   scoreboard: 5,
@@ -144,6 +146,7 @@ const PRIORITY: Record<string, number> = {
   versus: 3,
   milestone: 3,
   line_chart: 3,
+  population_pyramid: 3,
   timeline: 3,
   badge: 2,
   list: 2,
@@ -182,8 +185,14 @@ function applyDensity(placed: PlacedOverlay[], rules: DensityRules): PlacedOverl
 
 // Timelines de antes de anchorSceneOverlays no traen start_seconds: se usa
 // el anchor relativo (0-1) dentro de la escena.
+// Tipos que ocupan el plano ENTERO (el mapa explicativo): exactamente de su
+// inicio a su fin, sin adelanto, sin hueco con el siguiente y sin pasar por
+// la densidad (el video entero es mapa).
+const FULL_SCENE_TYPES = ["map_cartoon"];
+
 export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: readonly string[], density?: DensityRules): PlacedOverlay[] {
   const candidates: PlacedOverlay[] = [];
+  const fullScene: PlacedOverlay[] = [];
   for (const scene of scenes) {
     const sceneStart = scene.start_seconds;
     const sceneEnd = scene.end_seconds;
@@ -194,6 +203,10 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
       if (supportedTypes && !supportedTypes.includes(spec.type)) continue;
       const narrated = spec.start_seconds ?? sceneStart + (spec.anchor ?? 0) * (sceneEnd - sceneStart);
       const { start_seconds: _s, anchor: _a, ...clean } = spec as TimedOverlay;
+      if (FULL_SCENE_TYPES.includes(spec.type)) {
+        fullScene.push({ spec: clean, start: sceneStart, end: sceneEnd });
+        continue;
+      }
       if (ROTULO_TYPES.includes(spec.type)) {
         // Rotulos (MaV): entran con su palabra, sin adelanto; salen 300 ms
         // despues de su frase (un nombre, 1,2 s); al menos 2,2 s en pantalla.
@@ -237,6 +250,7 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
   // que el render y el preview del front reciban lo mismo.
   const videoEnd = Math.max(0, ...scenes.map((s) => s.end_seconds ?? 0));
   let chapter = 0;
+  if (fullScene.length) result.unshift(...fullScene);
   for (const p of result) {
     if (p.spec.type !== "title_card") continue;
     chapter += 1;

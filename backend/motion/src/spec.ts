@@ -21,11 +21,19 @@ export interface OverlaySpec {
   // de referencia. No se muestran como texto: solo ubican el mapa.
   geo?: GeoPoint;
   ref?: GeoPoint & { name: string };
+  // Fondo del mapa: "satellite" = teselas satelitales de Esri.
+  basemap?: "satellite" | "dark";
+  // population_pyramid: % del total por grupo de edad (17) y sexo, por anio.
+  pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
+  // map_cartoon: la escena del mapa explicativo (backend director/directorMapa.ts).
+  escena?: unknown;
 }
 
 export interface GeoPoint {
   lat: number;
   lon: number;
+  // Radio aproximado del sitio (km): elige el zoom final.
+  km?: number;
 }
 
 export interface OverlayProps {

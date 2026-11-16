@@ -15,8 +15,15 @@ import { reportJobProgress } from "../lib/jobProgress.js";
 import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { buildPhrases, type Phrase } from "../director/phrases.js";
-import { directMontaje, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
-import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type QaCode } from "../director/visualJudge.js";
+import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
+import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
+import { shotEpochs } from "../lib/epoca.js";
+import { HuellaRegistry, fingerprint } from "../lib/huella.js";
+import { correctPlace, haversineKm } from "../lib/geocode.js";
+import { MAPA_MODEL, directMapa } from "../director/directorMapa.js";
+import { formatValue, poblacion, samplePoints, serie } from "../lib/datosAbiertos.js";
+import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
+import { TOPE_MARGIN, capFor, cutPoint, neighbourMax, planExtension } from "./topes.js";
 import {
   NOT_A_PORTRAIT,
   searchArchiveVideos,
@@ -28,7 +35,7 @@ import {
   type VisualCandidate,
 } from "../lib/documentalSources.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
-import { downloadYouTubeSegment, searchYouTubeVideos, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
+import { downloadYouTubeSegment, searchYouTubeVideos, subtitleKeywords, subtitleMoments, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
 import type { TranscribedWord } from "../tools/transcribeAudio.tool.js";
 import type { SearchStockInput, SearchStockOutput } from "../tools/searchStock.tool.js";
 import type { GenerateImageInput, GenerateImageOutput } from "../tools/generateImage.tool.js";
@@ -98,7 +105,9 @@ function formatTime(totalSeconds: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function toSpec(g: ShotGraphic): OverlaySpec {
+const MAP_OVERLAYS = new Set(["map_marker", "map_globe"]);
+
+function toSpec(g: ShotGraphic, basemap?: "satellite" | "dark"): OverlaySpec {
   return {
     type: g.type as OverlayType,
     text: g.text,
@@ -107,7 +116,94 @@ function toSpec(g: ShotGraphic): OverlaySpec {
     ...(g.items ? { items: g.items } : {}),
     ...(g.icon ? { icon: g.icon } : {}),
     ...(g.geo ? { geo: g.geo } : {}),
+    ...(basemap && MAP_OVERLAYS.has(g.type) ? { basemap } : {}),
   };
+}
+
+// Graficos con datos reales por plano (attachData).
+const dataSpecs = new WeakMap<PlannedShot, OverlaySpec>();
+
+// Trae las cifras del Banco Mundial de los planos con `datos`. Sin datos (pais
+// sin codigo, region, serie vacia) el plano sigue con su grafico o su visual:
+// "un grafico con una linea inventada es peor que ningun grafico".
+async function attachData(shots: PlannedShot[]): Promise<{ con: number; sin: number }> {
+  const counts = { con: 0, sin: 0 };
+  let last = -Infinity;
+  for (const [i, shot] of shots.entries()) {
+    const d = shot.datos;
+    if (!d) continue;
+    // Como mucho 2 por video y nunca seguidos.
+    if (counts.con >= 2 || i - last < 2) {
+      delete shot.datos;
+      continue;
+    }
+    let spec: OverlaySpec | null = null;
+    if (d.tipo === "serie" && d.indicador) {
+      const s = await serie(d.pais, d.indicador, d.desde ?? 1960, d.hasta ?? new Date().getFullYear()).catch(() => null);
+      if (s) {
+        spec = {
+          type: "line_chart",
+          text: d.titulo || `${s.nombre} · ${s.pais}`,
+          label: s.fuente,
+          source: "data",
+          items: samplePoints(s.puntos, 8).map((p) => ({ label: String(p.anio), text: formatValue(p.valor) })),
+        };
+      }
+    } else if (d.tipo === "piramide") {
+      const years = d.anios?.length ? d.anios : [1960, new Date().getFullYear() - 2, 2050];
+      const p = await poblacion(d.pais, years).catch(() => null);
+      if (p && p.anios.length) {
+        spec = {
+          type: "population_pyramid",
+          text: d.titulo || `Población · ${p.pais}`,
+          label: p.fuente,
+          source: "data",
+          pyramid: { years: p.anios.map((a) => ({ year: a.anio, men: a.hombres, women: a.mujeres })) },
+        };
+      }
+    }
+    if (spec) {
+      dataSpecs.set(shot, spec);
+      counts.con += 1;
+      last = i;
+    } else {
+      delete shot.datos;
+      counts.sin += 1;
+    }
+  }
+  return counts;
+}
+
+// Coordenadas reales (geocode.ts, como MaV): el lugar de cada plano y la
+// coordenada de cada mapa se corrigen si el modelo se equivoco por mas de
+// 25 km o no la dio, y llevan el tamano del sitio (elige el zoom).
+async function correctPlaces(shots: PlannedShot[]): Promise<number> {
+  let corrected = 0;
+  // Primer lugar ya ubicado del video: pista para los que vienen sin coordenada.
+  let anchor: { lat: number; lon: number } | undefined;
+  const fix = async (name: string, model: { lat: number; lon: number } | undefined) => {
+    const fixed = await correctPlace(name, model, anchor);
+    if (fixed) anchor ??= { lat: fixed.lat, lon: fixed.lon };
+    return fixed;
+  };
+  for (const shot of shots) {
+    if (shot.lugar?.nombre) {
+      const fixed = await fix(shot.lugar.nombre, shot.lugar);
+      if (fixed) {
+        if (fixed.corrected) corrected += 1;
+        shot.lugar = { ...shot.lugar, lat: fixed.lat, lon: fixed.lon, ...(fixed.km ? { km: fixed.km } : {}) };
+      }
+    }
+    for (const key of ["grafico", "rotulo"] as const) {
+      const g = shot[key];
+      if (!g || !MAP_OVERLAYS.has(g.type)) continue;
+      const fixed = await fix(g.text, g.geo);
+      if (!fixed) continue;
+      if (fixed.corrected) corrected += 1;
+      g.geo = { lat: fixed.lat, lon: fixed.lon, ...(fixed.km ? { km: fixed.km } : {}) };
+    }
+  }
+  return corrected;
 }
 
 // Graficos, rotulos, mapa y tarjeta de capitulo del plano, validados en modo
@@ -120,7 +216,8 @@ async function validatedOverlays(
   fullText: string,
   chapterTitle: string | undefined,
   toolCtx: { userId: string; jobId: string },
-  startSeconds: number
+  startSeconds: number,
+  basemap?: "satellite" | "dark"
 ): Promise<OverlaySpec[]> {
   const wanted: OverlaySpec[] = [];
   // Tarjeta de capitulo: nunca en el gancho (primeros 20 s) y, si va, es lo
@@ -129,13 +226,27 @@ async function validatedOverlays(
   if (chapterCard) {
     wanted.push({ type: "title_card", text: chapterCard, source: "script" });
   } else {
-    if (shot.grafico) wanted.push(toSpec(shot.grafico));
+    if (shot.grafico) wanted.push(toSpec(shot.grafico, basemap));
     if (shot.clase === "mapa" && shot.lugar && !shot.grafico) {
-      wanted.push({ type: "map_marker", text: shot.lugar.nombre, source: "script", geo: { lat: shot.lugar.lat, lon: shot.lugar.lon } });
+      wanted.push({
+        type: "map_marker",
+        text: shot.lugar.nombre,
+        source: "script",
+        geo: { lat: shot.lugar.lat, lon: shot.lugar.lon, ...(shot.lugar.km ? { km: shot.lugar.km } : {}) },
+        ...(basemap ? { basemap } : {}),
+      });
     }
-    if (shot.rotulo) wanted.push(toSpec(shot.rotulo));
+    if (shot.rotulo) wanted.push(toSpec(shot.rotulo, basemap));
   }
   const valid: OverlaySpec[] = [];
+  // Datos reales (Banco Mundial): no pasan por el modo estricto (la cifra no
+  // sale del guion, sale de la fuente, que va en pantalla). Reemplazan al grafico.
+  const dataSpec = chapterCard ? undefined : dataSpecs.get(shot);
+  if (dataSpec) {
+    valid.push({ ...dataSpec, anchor: 0 });
+    const i = wanted.findIndex((w) => w.type !== "title_card" && shot.grafico && w.type === shot.grafico.type);
+    if (i >= 0) wanted.splice(i, 1);
+  }
   for (const planned of wanted) {
     try {
       const { overlay } = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
@@ -176,11 +287,14 @@ async function writeShotScenes(ctx: DocumentalContext, phrases: Phrase[], plan: 
         startSeconds: start,
         endSeconds: end,
         duration: `${Math.round(end - start)}s`,
+        // La imagen entra antes que su palabra (MaV): build_timeline lo aplica.
+        ...(i > 0 && leadOf(shot) > 0 ? { leadSeconds: leadOf(shot) } : {}),
         shot: {
           clase: shot.clase,
           sujeto: shot.sujeto,
           query: shot.query,
           ...(shot.entidad ? { entidad: shot.entidad } : {}),
+          ...(shot.obligatorio?.length ? { obligatorio: shot.obligatorio } : {}),
           ...(shot.anio ? { anio: shot.anio } : {}),
           ...(shot.lugar ? { lugar: shot.lugar } : {}),
           ...(shot.capitulo ? { capitulo: shot.capitulo } : {}),
@@ -319,6 +433,50 @@ async function persistShotVisual(
   if (error) throw new Error(error.message);
 }
 
+// Contexto del juez para cada plano (como textoPlano de MaV): frases de
+// alrededor, titulo del video, lo que tiene que verse, el rotulo de lugar y
+// la epoca (lib/epoca.ts, por reglas). Lo arma el codigo, sin otra llamada.
+export type JudgeContext = Omit<JudgeShot, "frase" | "clase" | "sujeto" | "modo" | "tema">;
+
+export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | undefined): Map<string, JudgeContext> {
+  const epochs = shotEpochs(
+    byOrder.map((r) => r.text),
+    byOrder.map((r) => r.shot.anio)
+  );
+  return new Map(
+    byOrder.map((r, i) => {
+      const e = epochs[i]!;
+      const context: JudgeContext = {
+        epoca: e,
+        ...(e.historico && e.anio !== undefined ? { anio: e.anio } : {}),
+        ...(byOrder[i - 1]?.text ? { fraseAnterior: byOrder[i - 1]!.text } : {}),
+        ...(byOrder[i + 1]?.text ? { fraseSiguiente: byOrder[i + 1]!.text } : {}),
+        ...(videoTopic ? { titulo: videoTopic } : {}),
+        ...(r.shot.obligatorio?.length ? { obligatorio: r.shot.obligatorio } : {}),
+        ...(r.shot.lugar?.nombre ? { lugarRotulo: r.shot.lugar.nombre } : {}),
+      };
+      return [r.id, context];
+    })
+  );
+}
+
+function judgeShotOf(row: ShotRow, context: JudgeContext | undefined, rescue?: { tema: string }): JudgeShot {
+  // En el rescate (MaV deTema) el juez no recibe el "tiene que verse" ni el
+  // rotulo de lugar: la pregunta es si es de esta historia, no si es la cosa.
+  let ctx = context;
+  if (rescue && context) {
+    const { obligatorio: _o, lugarRotulo: _l, ...rest } = context;
+    ctx = rest;
+  }
+  return {
+    frase: row.text,
+    clase: row.shot.clase,
+    sujeto: row.shot.sujeto,
+    ...(ctx ?? {}),
+    ...(rescue ? { modo: "tema" as const, tema: rescue.tema } : {}),
+  };
+}
+
 // Baja el tramo de YouTube elegido por miniatura, lo revisa con 3 cuadros
 // reales (el juez otra vez, con un solo candidato) y lo sube a R2. Devuelve
 // el candidato con la URL propia, o null si el tramo no sirve.
@@ -327,11 +485,26 @@ async function materializeYouTube(
   row: ShotRow,
   pick: VisualCandidate,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> },
-  prevText: string | undefined,
-  opts: { startFraction?: number; tema?: string; anio?: number } = {}
+  context: JudgeContext | undefined,
+  opts: { startFraction?: number; tema?: string } = {}
 ): Promise<VisualCandidate | null> {
   try {
-    const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction);
+    // Primer uso del video: el momento sale de los subtitulos (MaV). Un video
+    // con subtitulos que nunca nombran el sujeto se descarta sin bajarlo.
+    let startSeconds: number | undefined;
+    if (opts.startFraction === undefined) {
+      // En castellano (obligatorio, sujeto) Y en ingles (la busqueda del plano):
+      // muchos videos tienen los subtitulos en ingles y con solo castellano se
+      // descartaban videos que servian.
+      const keywords = subtitleKeywords([row.shot.query, row.shot.entidad, ...(row.shot.obligatorio ?? []), row.shot.sujeto]);
+      const subs = await subtitleMoments(pick, keywords, judge.workDir);
+      if (subs.hasSubs && keywords.length > 0 && subs.moments.length === 0) {
+        console.log(`[documental] plano ${row.order}: youtube ${pick.external_id} descartado, los subtitulos nunca nombran ${keywords.join("/")}`);
+        return null;
+      }
+      startSeconds = subs.moments[0];
+    }
+    const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction, startSeconds);
     const clip: VisualCandidate = {
       ...pick,
       url: local,
@@ -342,14 +515,7 @@ async function materializeYouTube(
     const check = await judgeCandidates(
       judge.client,
       judge.model,
-      {
-        frase: row.text,
-        clase: row.shot.clase,
-        sujeto: row.shot.sujeto,
-        ...((row.shot.anio ?? opts.anio) ? { anio: (row.shot.anio ?? opts.anio)! } : {}),
-        ...(prevText ? { fraseAnterior: prevText } : {}),
-        ...(opts.tema !== undefined ? { modo: "tema" as const, tema: opts.tema } : {}),
-      },
+      judgeShotOf(row, context, opts.tema !== undefined ? { tema: opts.tema } : undefined),
       [clip],
       judge.workDir,
       judge.usage
@@ -375,7 +541,8 @@ async function fillShot(
   style: DocumentalStyle,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> } | null,
   used: Set<string>,
-  neighbours: { prevText?: string; queries: string[]; epoch?: number }
+  neighbours: { queries: string[]; context?: JudgeContext },
+  huellas: HuellaRegistry
 ): Promise<ShotOutcome> {
   const shot = row.shot;
   const minDuration = Math.max(1, row.end - row.start);
@@ -407,15 +574,7 @@ async function fillShot(
     const verdict = await judgeCandidates(
       judge.client,
       judge.model,
-      {
-        frase: row.text,
-        clase: shot.clase,
-        sujeto: shot.sujeto,
-        // Sin anio propio, el del capitulo: asi el juez rechaza lo moderno
-        // (un display digital) en una escena de 1912.
-        ...((shot.anio ?? neighbours.epoch) ? { anio: (shot.anio ?? neighbours.epoch)! } : {}),
-        ...(neighbours.prevText ? { fraseAnterior: neighbours.prevText } : {}),
-      },
+      judgeShotOf(row, neighbours.context),
       found,
       judge.workDir,
       judge.usage
@@ -429,15 +588,23 @@ async function fillShot(
       // el tramo y se revisa con cuadros reales (2da revision, como MaV).
       if (pick.provider === "youtube") {
         used.add(key(pick));
-        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.prevText);
+        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.context);
         if (!clip) {
           rejected.push({ index: verdict.chosen, code: "equivocado", reason: `youtube: el tramo bajado no muestra el sujeto (${pick.title ?? pick.external_id})` });
           return null;
         }
         pick = clip;
       }
+      // Misma imagen desde otra fuente (dHash, como MaV): se rechaza.
+      const huella = await fingerprint(pick.url, pick.type, pick.duration_seconds);
       // Doble chequeo sincronico (planos en paralelo): si otro plano ya lo tomo, sigue.
       if (pick.provider === "youtube" || (!used.has(key(pick)) && !used.has(pick.url))) {
+        const dup = huellas.claim(key(pick), huella);
+        if (dup) {
+          used.add(key(pick));
+          rejected.push({ index: verdict.chosen, code: "equivocado", reason: `repetido: la misma imagen ya esta en el video (${dup})` });
+          return null;
+        }
         used.add(key(pick));
         used.add(pick.url);
         const reason = verdict.verdicts.find((v) => v.index === verdict.chosen)?.reason;
@@ -478,19 +645,205 @@ async function fillShot(
 type Judge = { client: Anthropic; model: string; workDir: string; usage: Record<string, number> };
 
 // Visual (url + tipo) de cada plano, desde assets.
-async function shotVisuals(ctx: DocumentalContext): Promise<Map<string, { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string }>> {
+type ShotVisual = { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string; title?: string; duration?: number };
+
+async function shotVisuals(ctx: DocumentalContext): Promise<Map<string, ShotVisual>> {
   const { data } = await supabase
     .from("assets")
     .select("scene_id, type, storage_key, metadata")
     .eq("video_project_id", ctx.projectId)
     .in("type", ["VIDEO", "IMAGE"])
     .contains("metadata", { kind: "documental" });
-  const map = new Map<string, { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string }>();
+  const map = new Map<string, ShotVisual>();
   for (const r of data ?? []) {
-    const m = r.metadata as { provider?: string; qa?: { source?: string } };
-    map.set(r.scene_id as string, { url: r.storage_key as string, type: r.type as "VIDEO" | "IMAGE", provider: m.provider ?? "", via: m.qa?.source ?? m.provider ?? "" });
+    const m = r.metadata as { provider?: string; qa?: { source?: string }; title?: string; duration_seconds?: number; source_duration_seconds?: number };
+    map.set(r.scene_id as string, {
+      url: r.storage_key as string,
+      type: r.type as "VIDEO" | "IMAGE",
+      provider: m.provider ?? "",
+      via: m.qa?.source ?? m.provider ?? "",
+      ...(m.title ? { title: m.title } : {}),
+      ...((m.source_duration_seconds ?? m.duration_seconds) ? { duration: (m.source_duration_seconds ?? m.duration_seconds)! } : {}),
+    });
   }
   return map;
+}
+
+// Tiempo maximo para partir planos por los topes (MaV: PLAN_TOPES_MS, 3 min).
+const TOPES_MS = envInt("DOCUMENTAL_TOPES_MS", 180_000);
+
+// Parte un plano en dos: la segunda parte (desde `cut`) busca otro visual con
+// la cadena de fuentes y el juez; los dos quedan en la misma escena
+// (metadata.sequence 0 y 1, build_timeline reparte por duration_seconds).
+async function splitShot(
+  ctx: DocumentalContext,
+  row: ShotRow,
+  cut: number,
+  words: Phrase[],
+  style: DocumentalStyle,
+  judge: Judge,
+  used: Set<string>,
+  context: JudgeContext | undefined,
+  huellas: HuellaRegistry
+): Promise<boolean> {
+  const { data: current } = await supabase
+    .from("assets")
+    .select("video_project_id, scene_id, type, storage_key, metadata")
+    .eq("scene_id", row.id)
+    .in("type", ["VIDEO", "IMAGE"]);
+  const original = current?.length === 1 ? current[0]! : null;
+  if (!original) return false;
+  const second = words.filter((w) => w.start - 0.12 >= cut);
+  if (second.length === 0) return false;
+  const part: ShotRow = { ...row, text: second.map((w) => w.text).join(" "), start: cut };
+  // fillShot solo persiste si encontro algo: si falla, el original queda.
+  const out = await fillShot(ctx, part, style, judge, used, { queries: [], ...(context ? { context } : {}) }, huellas);
+  if (out.qa !== "ok") return false;
+  const { data: added } = await supabase.from("assets").select("id, metadata").eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
+  const fresh = added?.[0];
+  if (!fresh) return false;
+  await supabase
+    .from("assets")
+    .update({ metadata: { ...(fresh.metadata as Record<string, unknown>), sequence: 1, duration_seconds: row.end - cut, parte: 1 } })
+    .eq("id", fresh.id as string);
+  const { error } = await supabase
+    .from("assets")
+    .insert({ ...original, metadata: { ...(original.metadata as Record<string, unknown>), sequence: 0, duration_seconds: cut - row.start } });
+  if (error) throw new Error(error.message);
+  return true;
+}
+
+// Topes de pantalla (topes.ts): rotulo 3 s, foto de tema 4 s. Primero se
+// parte (si queda tiempo), si no se alargan los vecinos con leadSeconds.
+async function applyScreenCaps(
+  ctx: DocumentalContext,
+  byOrder: ShotRow[],
+  units: Phrase[],
+  style: DocumentalStyle,
+  judge: Judge | null,
+  used: Set<string>,
+  contexts: Map<string, JudgeContext>,
+  huellas: HuellaRegistry,
+  qaDecisions: QaDecision[]
+): Promise<{ partidos: number; alargados: number }> {
+  const visuals = await shotVisuals(ctx);
+  const stockIds = new Set(qaDecisions.filter((d) => d.stock && !d.malo).map((d) => d.sceneId));
+  const capOf = (r: ShotRow) => {
+    const v = visuals.get(r.id);
+    return v ? capFor({ ...v, stock: stockIds.has(r.id) }) : null;
+  };
+  const deadline = Date.now() + TOPES_MS;
+  const counts = { partidos: 0, alargados: 0 };
+  const leadDelta = new Map<string, number>();
+  for (const [i, row] of byOrder.entries()) {
+    const v = visuals.get(row.id);
+    const cap = capOf(row);
+    if (!v || cap === null) continue;
+    const dur = row.end - row.start;
+    if (dur <= cap + TOPE_MARGIN) continue;
+    // 1. Partir con otra imagen (el rotulo ya agoto las fuentes: no se parte).
+    if (judge && v.provider !== "textura" && Date.now() < deadline) {
+      const words = units.slice(row.shot.from, row.shot.to + 1);
+      const cut = cutPoint(words, row.start, row.end, cap);
+      const ok = cut !== null && (await splitShot(ctx, row, cut, words, style, judge, used, contexts.get(row.id), huellas).catch(() => false));
+      if (ok) {
+        counts.partidos += 1;
+        continue;
+      }
+    }
+    // 2. Alargar los vecinos: el siguiente entra antes, el anterior sale despues.
+    const room = (r: ShotRow | undefined) => {
+      if (!r) return 0;
+      const nv = visuals.get(r.id);
+      const max = neighbourMax({ ...(nv ? { type: nv.type } : {}), graphic: !!r.shot.grafico || r.shot.clase === "mapa", cap: capOf(r), ...(nv?.duration ? { clipSeconds: nv.duration } : {}) });
+      return Math.max(0, max - (r.end - r.start));
+    };
+    const next = byOrder[i + 1];
+    const ext = planExtension(dur - cap, i > 0 ? room(byOrder[i - 1]) : 0, room(next));
+    if (!ext) continue;
+    if (ext.next && next) leadDelta.set(next.id, (leadDelta.get(next.id) ?? 0) + ext.next);
+    if (ext.prev) leadDelta.set(row.id, (leadDelta.get(row.id) ?? 0) - ext.prev);
+    counts.alargados += 1;
+  }
+  for (const [id, delta] of leadDelta) {
+    const { data } = await supabase.from("scenes").select("content").eq("id", id).single();
+    const content = (data?.content as Record<string, unknown>) ?? {};
+    const lead = Number(content.leadSeconds ?? 0) + delta;
+    await supabase.from("scenes").update({ content: { ...content, leadSeconds: Math.round(lead * 100) / 100 } }).eq("id", id);
+  }
+  return counts;
+}
+
+// Vias del rescate (persistShotVisual guarda la via en qa.source).
+const RESCUE_VIAS = new Set(["youtube_momento", "commons_tema", "youtube_tema", "stock_ultimo", "youtube_ultima"]);
+// Reintentos del QA final por plano (MaV: PLAN_QA_REINTENTOS = 2).
+const QA_RETRIES = envInt("DOCUMENTAL_QA_RETRIES", 2);
+
+// QA final con vision (qaFinal.ts): juzga el video entero en tandas; un plano
+// rechazado vuelve a llenarse con la cadena de fuentes (lo ya probado queda en
+// `used`), hasta QA_RETRIES veces. Si sigue mal, queda para el rescate.
+async function finalQa(
+  ctx: DocumentalContext,
+  byOrder: ShotRow[],
+  outcomes: ShotOutcome[],
+  style: DocumentalStyle,
+  judge: Judge,
+  used: Set<string>,
+  contexts: Map<string, JudgeContext>,
+  huellas: HuellaRegistry
+): Promise<QaDecision[]> {
+  const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
+  const all: QaDecision[] = [];
+  let obras: { order: number; obra: string | null; sitio: boolean; text: string }[] = [];
+  let pending = byOrder.filter((r) => outcomeOf.get(r.id)?.qa === "ok" && r.shot.clase !== "mapa");
+  for (let ronda = 0; ronda <= QA_RETRIES && pending.length > 0; ronda++) {
+    const visuals = await shotVisuals(ctx);
+    const items: QaItem[] = pending.flatMap((r) => {
+      const v = visuals.get(r.id);
+      if (!v || v.provider === "textura") return [];
+      return [
+        {
+          sceneId: r.id,
+          order: r.order,
+          shot: judgeShotOf(r, contexts.get(r.id)),
+          url: v.url,
+          type: v.type,
+          ...(v.duration ? { durationSeconds: v.duration } : {}),
+          ...(v.title ? { sourceTitle: v.title } : {}),
+          rescue: RESCUE_VIAS.has(v.via),
+        },
+      ];
+    });
+    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, ronda, obras);
+    obras = kept;
+    all.push(...decisions);
+    const badRows = decisions.filter((d) => d.malo).flatMap((d) => byOrder.filter((r) => r.id === d.sceneId));
+    console.log(`[documental] ${ctx.projectId}: QA final ronda ${ronda}: ${items.length} planos, ${badRows.length} rechazados`);
+    if (badRows.length === 0) break;
+    await mapWithConcurrency(badRows, SHOT_CONCURRENCY, async (row) => {
+      await supabase.from("assets").delete().eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
+      const o = outcomeOf.get(row.id)!;
+      if (ronda === QA_RETRIES) {
+        // Sin mas reintentos: queda para el rescate.
+        Object.assign(o, { source: "none", qa: "seguro", provider: undefined });
+        return;
+      }
+      const i = byOrder.indexOf(row);
+      const context = contexts.get(row.id);
+      const out = await fillShot(
+        ctx,
+        row,
+        style,
+        judge,
+        used,
+        { queries: [byOrder[i - 1]?.shot.query, byOrder[i + 1]?.shot.query].filter((q): q is string => !!q), ...(context ? { context } : {}) },
+        huellas
+      );
+      Object.assign(o, out, { rejected: o.rejected + out.rejected + 1 });
+    });
+    pending = badRows.filter((r) => outcomeOf.get(r.id)?.qa === "ok");
+  }
+  return all;
 }
 
 async function frameFor(url: string, type: "VIDEO" | "IMAGE", workDir: string, frames: Map<string, string | null>): Promise<string | null> {
@@ -565,8 +918,11 @@ const YT_MAX_USES = envInt("DOCUMENTAL_YT_MAX_USES", 3);
 // La tarjeta de capitulo no va en el gancho.
 const CHAPTER_MIN_START = 20;
 // Ultima pasada contra los rotulos: cuantos reemplazos y en que puntos del video.
-const LAST_PASS_MAX = 4;
-const LAST_PASS_FRACTIONS = [0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.1];
+const LAST_PASS_MAX = envInt("DOCUMENTAL_LAST_PASS_MAX", 60);
+const LAST_PASS_ROUNDS = 2;
+// Intentos (fuente + momento) por rotulo en cada ronda.
+const LAST_PASS_TRIES = 3;
+const LAST_PASS_FRACTIONS = [0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.1, 0.33, 0.48, 0.63, 0.78, 0.18];
 
 // Una llamada al modelo (una vez por video): 5 busquedas "seguras" del tema
 // para Commons, como temaDelVideo de MaV.
@@ -575,11 +931,13 @@ async function topicQueries(judge: Judge, ctx: DocumentalContext): Promise<strin
   try {
     const message = await judge.client.messages.create({
       model: judge.model,
-      max_tokens: 400,
+      // Sonnet 5.5 piensa antes de contestar y eso cuenta dentro de max_tokens:
+      // con 400 la respuesta se cortaba y el rescate quedaba sin busquedas.
+      max_tokens: 6000,
       messages: [
         {
           role: "user",
-          content: `Tema del video: ${ctx.videoTopic ?? "(sin titulo)"}\nComienzo del guion: ${ctx.scriptText.slice(0, 1500)}\n\nEscribi 5 busquedas en INGLES de 2 a 4 palabras para encontrar en Wikimedia Commons fotos seguras del tema central (el sujeto principal, su epoca, sus lugares, su gente). Concretas, con nombre propio y con la EPOCA de la historia (anio o decada) para no traer fotos actuales ("RMS Titanic 1912", "White Star Line 1912", "Titanic lifeboats 1912"). Responde SOLO JSON: {"queries": ["...", "..."]}`,
+          content: `Tema del video: ${ctx.videoTopic ?? "(sin titulo)"}\nComienzo del guion: ${ctx.scriptText.slice(0, 1500)}\n\nEscribi 5 busquedas en INGLES de 1 a 3 palabras que SEGURO tengan muchas fotos libres en Wikimedia Commons sobre el tema central (como temaDelVideo de MaV). Cada una es: el lugar, barco, edificio o persona principal ("RMS Titanic"); el TIPO de cosa central ("ocean liner", "Soviet submarine"); o objetos, lugares o gente de la epoca ("Belfast shipyard", "Edwardian passengers"). Cortas y amplias: una busqueda larga o con anio trae pocas fotos. Responde SOLO JSON: {"queries": ["...", "..."]}`,
         },
       ],
     });
@@ -635,6 +993,33 @@ function runFfmpeg(args: string[]): Promise<void> {
 // textura queda sin texto (solo subtitulos), nunca con una frase cortada.
 const EDGE_WORDS = /^(el|la|los|las|un|una|de|del|a|al|en|con|por|para|y|o|que|se|su|sus|lo|pero|como|mas|más|muy|ni)$/i;
 
+// Frase clave sin modelo: de 3 a 5 palabras SEGUIDAS de la frase, sin empezar
+// ni terminar en palabra de enlace, con mas nombres propios y cifras (a
+// igualdad, la mas larga). "" si la frase no da ninguna.
+export function reserveKeyPhrase(text: string, seen: Set<string> = new Set()): string {
+  const words = text
+    .replace(/["«»“”]/g, "")
+    .split(/\s+/)
+    .map((w) => w.replace(/^[¿¡(]+/, "").replace(/[.,;:!?)]+$/, ""))
+    .filter(Boolean);
+  let best = "";
+  let bestScore = -1;
+  for (let size = 5; size >= 3; size--) {
+    for (let i = 0; i + size <= words.length; i++) {
+      const win = words.slice(i, i + size);
+      if (EDGE_WORDS.test(win[0]!) || EDGE_WORDS.test(win[size - 1]!)) continue;
+      const phrase = win.join(" ");
+      if (seen.has(phrase.toLowerCase())) continue;
+      const score = win.filter((w, k) => /\d/.test(w) || (i + k > 0 && /^[A-ZÁÉÍÓÚÑ]/.test(w))).length * 10 + size;
+      if (score > bestScore) {
+        best = phrase;
+        bestScore = score;
+      }
+    }
+  }
+  return best;
+}
+
 async function addKeyPhraseOverlays(rows: ShotRow[], ctx: DocumentalContext, judge: Judge | null, toolCtx: { userId: string; jobId: string }): Promise<number> {
   if (!judge || rows.length === 0) return 0;
   let phrases: Record<string, string> = {};
@@ -642,7 +1027,8 @@ async function addKeyPhraseOverlays(rows: ShotRow[], ctx: DocumentalContext, jud
     const list = rows.map((r) => ({ id: String(r.order), frase: r.text.slice(0, 260) }));
     const message = await judge.client.messages.create({
       model: judge.model,
-      max_tokens: 1200,
+      // Con 1200 el pensamiento se comia el limite ("Unexpected end of JSON input").
+      max_tokens: 10000,
       messages: [
         {
           role: "user",
@@ -657,16 +1043,21 @@ Responde SOLO JSON: {"rotulos": {"<id>": "<frase clave>"}}`,
     const text = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     phrases = (JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { rotulos?: Record<string, string> }).rotulos ?? {};
   } catch (err) {
-    console.warn(`[documental] frases clave de los rotulos fallaron: ${(err as Error).message}`);
-    return 0;
+    // Sin la llamada, cada rotulo usa la frase de reserva: nunca queda vacio.
+    console.warn(`[documental] frases clave de los rotulos fallaron, uso la reserva: ${(err as Error).message}`);
   }
   const seen = new Set<string>();
   let added = 0;
+  const valid = (p: string) => {
+    const w = p.split(/\s+/).filter(Boolean);
+    return w.length >= 3 && w.length <= 6 && !EDGE_WORDS.test(w[0]!) && !EDGE_WORDS.test(w[w.length - 1]!) && !seen.has(p.toLowerCase());
+  };
   for (const row of rows) {
-    const phrase = (phrases[String(row.order)] ?? "").replace(/["«»“”]/g, "").replace(/[.,;:]+$/, "").trim();
-    const words = phrase.split(/\s+/).filter(Boolean);
+    let phrase = (phrases[String(row.order)] ?? "").replace(/["«»“”]/g, "").replace(/[.,;:]+$/, "").trim();
+    // Reserva (MaV claveDeReserva): el tramo con mas nombres y cifras.
+    if (!valid(phrase)) phrase = reserveKeyPhrase(row.text, seen);
+    if (!valid(phrase)) continue;
     const key = phrase.toLowerCase();
-    if (words.length < 3 || words.length > 6 || EDGE_WORDS.test(words[0]!) || EDGE_WORDS.test(words[words.length - 1]!) || seen.has(key)) continue;
     const { data: current } = await supabase.from("scenes").select("content").eq("id", row.id).single();
     const content = (current?.content as Record<string, unknown>) ?? {};
     if (Array.isArray(content.overlays) && content.overlays.length > 0) continue; // ya tiene grafico o mapa encima
@@ -700,7 +1091,8 @@ async function rescueGaps(
   style: DocumentalStyle,
   used: Set<string>,
   judge: Judge | null,
-  toolCtx: { userId: string; jobId: string }
+  toolCtx: { userId: string; jobId: string },
+  huellas: HuellaRegistry
 ): Promise<void> {
   const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
   const gaps = byOrder.filter((r) => outcomeOf.get(r.id)?.qa !== "ok");
@@ -751,14 +1143,7 @@ async function rescueGaps(
     usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
   }
   const neighbourOrigins = (i: number) => [byOrder[i - 1], byOrder[i + 1]].map((r) => (r ? originOf.get(r.id) : undefined));
-  // Epoca de cada plano: su anio o el ultimo anio dicho en su capitulo.
-  const epochOf = new Map<string, number>();
-  let lastYear: number | undefined;
-  for (const r of byOrder) {
-    if (r.shot.capitulo !== undefined) lastYear = undefined;
-    if (r.shot.anio) lastYear = r.shot.anio;
-    if (lastYear) epochOf.set(r.id, lastYear);
-  }
+  const contexts = shotContexts(byOrder, ctx.videoTopic);
   const queries = judge ? await topicQueries(judge, ctx) : [];
   const commonsPool: VisualCandidate[] = [];
   let commonsLoaded = 0;
@@ -766,8 +1151,15 @@ async function rescueGaps(
   let texture: string | null = null;
   const counts = { youtube_momento: 0, commons_tema: 0, youtube_tema: 0, stock_ultimo: 0, rotulo: 0 };
 
-  const save = async (row: ShotRow, pick: VisualCandidate, via: string) => {
+  // Devuelve false si la imagen ya esta en el video (dHash): el rescate sigue
+  // con la proxima opcion.
+  const save = async (row: ShotRow, pick: VisualCandidate, via: string): Promise<boolean> => {
     used.add(key(pick));
+    const dup = huellas.claim(key(pick), await fingerprint(pick.url, pick.type, pick.duration_seconds));
+    if (dup) {
+      console.log(`[documental] plano ${row.order}: rescate ${via} descartado, repetido de ${dup}`);
+      return false;
+    }
     used.add(pick.url);
     const base = `${pick.provider}:${pick.external_id.split("@")[0]}`;
     originOf.set(row.id, base);
@@ -777,34 +1169,30 @@ async function rescueGaps(
     o.source = "fallback";
     o.qa = "ok";
     o.provider = pick.provider;
+    return true;
   };
 
   await mapWithConcurrency(gaps, 3, async (row) => {
     const i = byOrder.indexOf(row);
-    const prevText = byOrder[i - 1]?.text;
-    const anio = row.shot.anio ?? epochOf.get(row.id);
-    const judgeShot = {
-      frase: row.text,
-      clase: row.shot.clase,
-      sujeto: row.shot.sujeto,
-      ...(anio ? { anio } : {}),
-      ...(prevText ? { fraseAnterior: prevText } : {}),
-    };
+    const context = contexts.get(row.id);
     if (judge && row.shot.clase !== "mapa") {
-      // 1. Otro momento de un YouTube ya usado (rota entre los videos), sin
-      // pasar el tope de usos por video ni repetir el video del plano vecino.
+      // 1. Otro momento de un YouTube ya usado (rota entre los videos, el menos
+      // usado primero). Como MaV rescatar: sin tope de usos (es del tema por
+      // construccion), solo sin repetir el video del plano vecino.
       const near = neighbourOrigins(i);
-      const candidatesYt = ytSources.filter((s) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES && !near.includes(`youtube:${s.external_id}`));
+      const candidatesYt = ytSources
+        .filter((s) => !near.includes(`youtube:${s.external_id}`))
+        .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
       for (let attempt = 0; attempt < Math.min(2, candidatesYt.length); attempt++) {
         const src = candidatesYt[(i + attempt) % candidatesYt.length]!;
         const seen = momentsUsed.get(src.external_id)!;
         const fraction = RESCUE_FRACTIONS.find((f) => !seen.has(f));
         if (fraction === undefined) continue;
         seen.add(fraction);
-        const clip = await materializeYouTube(ctx, row, src, judge, prevText, { startFraction: fraction, tema, ...(anio ? { anio } : {}) });
-        if (clip) {
+        const clip = await materializeYouTube(ctx, row, src, judge, context, { startFraction: fraction, tema });
+        if (clip && (await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento"))) {
           counts.youtube_momento += 1;
-          return save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento");
+          return;
         }
       }
       // 2. Fotos del tema en Commons (hasta 4 por plano, juez en modo tema).
@@ -818,15 +1206,15 @@ async function rescueGaps(
         const verdict = await judgeCandidates(
           judge.client,
           judge.model,
-          { ...judgeShot, modo: "tema", tema },
+          judgeShotOf(row, context, { tema }),
           photos,
           judge.workDir,
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? photos[verdict.chosen] : undefined;
-        if (pick && !used.has(key(pick))) {
+        if (pick && !used.has(key(pick)) && (await save(row, pick, "commons_tema"))) {
           counts.commons_tema += 1;
-          return save(row, pick, "commons_tema");
+          return;
         }
       }
       // 3. YouTube con una busqueda del tema (tope por video).
@@ -836,12 +1224,12 @@ async function rescueGaps(
         const found = (await searchYouTubeVideos(q).catch(() => [] as VisualCandidate[])).filter((c) => !used.has(key(c)));
         if (found[0]) {
           used.add(key(found[0]));
-          const clip = await materializeYouTube(ctx, row, found[0], judge, prevText, { tema, ...(anio ? { anio } : {}) });
-          if (clip) {
+          const clip = await materializeYouTube(ctx, row, found[0], judge, context, { tema });
+          if (clip && (await save(row, clip, "youtube_tema"))) {
             counts.youtube_tema += 1;
             ytSources.push(found[0]);
             momentsUsed.set(found[0].external_id, new Set([0.3]));
-            return save(row, clip, "youtube_tema");
+            return;
           }
         }
       }
@@ -854,15 +1242,15 @@ async function rescueGaps(
         const verdict = await judgeCandidates(
           judge.client,
           judge.model,
-          judgeShot,
+          judgeShotOf(row, context, { tema }),
           fresh,
           judge.workDir,
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? fresh[verdict.chosen] : undefined;
-        if (pick && !used.has(key(pick))) {
+        if (pick && !used.has(key(pick)) && (await save(row, pick, "stock_ultimo"))) {
           counts.stock_ultimo += 1;
-          return save(row, pick, "stock_ultimo");
+          return;
         }
       }
     }
@@ -883,26 +1271,45 @@ async function rescueGaps(
   // Ultima pasada contra los rotulos (MaV, nuncaNiebla): hasta 4 momentos mas
   // de los YouTube ya usados, en puntos lejanos a lo ya usado, siempre con
   // juez y sin pasar el tope de usos ni repetir el video del plano vecino.
+  // Como nuncaNiebla de MaV: el tope de usos por video NO aplica a "otro
+  // momento" (un video que ya dio un plano bueno es del tema por
+  // construccion); solo no se pisan los tramos, no se repite el video del
+  // vecino y un video que falla 3 veces sale. Antes se cortaba toda la pasada
+  // apenas el primer video llegaba a 3 usos (0 rescatados en el Titanic).
   let recovered = 0;
   if (judge) {
-    const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
-    for (const row of leftovers) {
-      if (recovered >= LAST_PASS_MAX) break;
-      const i = byOrder.indexOf(row);
-      const near = neighbourOrigins(i);
-      const anio = row.shot.anio ?? epochOf.get(row.id);
-      const src = ytSources.find((s) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES && !near.includes(`youtube:${s.external_id}`));
-      if (!src) break;
-      const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
-      momentsUsed.set(src.external_id, seen);
-      const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
-      if (fraction === undefined) continue;
-      seen.add(fraction);
-      const clip = await materializeYouTube(ctx, row, src, judge, byOrder[i - 1]?.text, { startFraction: fraction, tema, ...(anio ? { anio } : {}) });
-      if (!clip) continue;
-      await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima");
-      counts.rotulo -= 1;
-      recovered += 1;
+    const fails = new Map<string, number>();
+    for (let round = 0; round < LAST_PASS_ROUNDS; round++) {
+      const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
+      if (leftovers.length === 0) break;
+      for (const row of leftovers) {
+        if (recovered >= LAST_PASS_MAX) break;
+        const i = byOrder.indexOf(row);
+        const near = neighbourOrigins(i);
+        // Menos usado primero; nunca el video del plano de al lado.
+        const sources = ytSources
+          .filter((s) => !near.includes(`youtube:${s.external_id}`) && (fails.get(s.external_id) ?? 0) < 3)
+          .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
+        let attempts = 0;
+        for (const src of sources) {
+          if (attempts >= LAST_PASS_TRIES) break;
+          const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
+          momentsUsed.set(src.external_id, seen);
+          const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
+          if (fraction === undefined) continue;
+          seen.add(fraction);
+          attempts += 1;
+          const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
+          if (!clip) {
+            fails.set(src.external_id, (fails.get(src.external_id) ?? 0) + 1);
+            continue;
+          }
+          if (!(await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima"))) continue;
+          counts.rotulo -= 1;
+          recovered += 1;
+          break;
+        }
+      }
     }
   }
   // Frase clave de los rotulos que quedaron (una sola llamada al modelo).
@@ -911,11 +1318,119 @@ async function rescueGaps(
   console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, rotulos_con_texto: withText })}`);
 }
 
+// ESTILO MAPA INTERACTIVO (como el directorMapa de MaV): el video entero es un
+// mapa explicativo, un plano map_cartoon por frase, sin montajista ni juez.
+// La base de cada escena es la textura del estilo (el mapa la tapa entera).
+// Devuelve false si no se pudo (sin provider o sin escenas): sigue el normal.
+async function runMapaDocumental(ctx: DocumentalContext, phrases: Phrase[], style: DocumentalStyle): Promise<boolean> {
+  const provider = await getActiveProvider("anthropic");
+  if (!provider?.api_key || !style.mapaCartoon) return false;
+  await reportJobProgress(ctx.jobId, 25, "El director de mapas está armando el mapa animado...", { force: true });
+  const result = await directMapa({
+    client: new Anthropic({ apiKey: provider.api_key }),
+    model: (provider.configuration?.mapa_model as string | undefined) ?? MAPA_MODEL,
+    phrases,
+    scriptText: ctx.scriptText,
+    language: ctx.channelLanguage ?? "",
+    min: style.mapaCartoon.planoMin,
+    max: style.mapaCartoon.planoMax,
+  });
+  if (!result) return false;
+  // Etiquetas de lugares con su coordenada real: el modelo las ubica de
+  // memoria y de cerca un error de 20 km deja "TULUM" en el mar. Solo si el
+  // resultado cae cerca (<= 300 km) de donde la puso el modelo; mares y
+  // golfos se dejan como estan (su "centro" es lo que el modelo eligio).
+  await reportJobProgress(ctx.jobId, 75, "Ubicando los nombres de los lugares en el mapa...", { force: true });
+  let labelsFixed = 0;
+  for (const escena of result.escenas) {
+    for (const l of (escena.etiquetas as { texto?: string; lat?: number; lon?: number }[] | undefined) ?? []) {
+      if (!l?.texto || typeof l.lat !== "number" || typeof l.lon !== "number") continue;
+      if (/\b(mar|golfo|oc[eé]ano|caribe|sea|gulf|ocean|bah[ií]a|estrecho|canal)\b/i.test(l.texto)) continue;
+      const fixed = await correctPlace(l.texto, { lat: l.lat, lon: l.lon }).catch(() => null);
+      if (fixed?.corrected && haversineKm({ lat: l.lat, lon: l.lon }, fixed) <= 300) {
+        l.lat = fixed.lat;
+        l.lon = fixed.lon;
+        labelsFixed += 1;
+      }
+    }
+  }
+  if (labelsFixed) console.log(`[documental] ${ctx.projectId}: ${labelsFixed} etiquetas del mapa ubicadas en su lugar real`);
+  await reportJobProgress(ctx.jobId, 80, `Mapa listo: ${result.shots.length} planos (${result.buenas} escenas de Claude). Guardando...`, { force: true });
+
+  const { error: deleteError } = await supabase.from("scenes").delete().eq("script_id", ctx.scriptId);
+  if (deleteError) throw new Error(deleteError.message);
+  const rows = result.shots.map((s, i) => {
+    const spec = { type: "map_cartoon", text: s.line, source: "script", escena: result.escenas[i], anchor: 0 };
+    return {
+      script_id: ctx.scriptId,
+      order: i + 1,
+      content: {
+        text: s.line,
+        timeStart: formatTime(s.start),
+        timeEnd: formatTime(s.end),
+        startSeconds: s.start,
+        endSeconds: s.end,
+        duration: `${Math.round(s.end - s.start)}s`,
+        shot: { clase: "mapa", sujeto: "mapa explicativo", query: "" },
+        overlays: [spec],
+        overlay: spec,
+      },
+    };
+  });
+  const { data, error } = await supabase.from("scenes").insert(rows).select("id, order");
+  if (error) throw new Error(error.message);
+  const ids = new Map((data ?? []).map((r) => [r.order as number, r.id as string]));
+
+  // Base: la textura del estilo, una sola subida para todas las escenas.
+  const workDir = await makeWorkDir("skaler-mapa-");
+  const outcomes: { sceneId: string; order: number; source: string; qa: string; provider: string; rejected: number }[] = [];
+  try {
+    const base = await textureUrl(style, ctx, workDir);
+    await mapWithConcurrency(result.shots, 6, async (s, i) => {
+      const id = ids.get(i + 1)!;
+      const row: ShotRow = { id, order: i + 1, text: s.line, shot: { from: s.from, to: s.to, clase: "mapa", sujeto: "mapa explicativo", query: "" }, start: s.start, end: s.end };
+      await persistShotVisual(
+        ctx,
+        row,
+        { provider: "mapa", external_id: `mapa-${i + 1}`, type: "IMAGE", url: base, license: "Propia", source_page: "", query: "mapa" },
+        { code: "seguro", reason: "fondo del mapa explicativo", rejected: [], source: "mapa" }
+      );
+      outcomes.push({ sceneId: id, order: i + 1, source: "mapa", qa: "ok", provider: "mapa", rejected: 0 });
+    });
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  const summary = {
+    style: style.id,
+    source: "directorMapa",
+    chapters: [],
+    issues: result.buenas < result.shots.length ? [`${result.shots.length - result.buenas} plano(s) repiten la escena anterior`] : [],
+    usage: { mapa: result.usage },
+    shots: outcomes.sort((a, b) => a.order - b.order),
+    qa: { hoja: null },
+    created_at: new Date().toISOString(),
+  };
+  const { error: saveError } = await supabase.from("video_projects").update({ documental_plan: summary, video_style: style.id }).eq("id", ctx.projectId);
+  if (saveError) console.warn(`[documental] no se pudo guardar el plan del mapa: ${saveError.message}`);
+  console.log(`[documental] ${ctx.projectId}: mapa explicativo, ${result.shots.length} planos, ${result.buenas} escenas de Claude`);
+  return true;
+}
+
 export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void> {
   const style = getDocumentalStyle(ctx.styleId);
   const toolCtx = { userId: ctx.userId, jobId: ctx.jobId };
   const phrases = buildPhrases([ctx.scriptText], ctx.words);
   if (phrases.length === 0) throw new Error("El guion no tiene frases para armar el documental");
+
+  // Mapa interactivo: el video entero es un mapa explicativo.
+  if (style.mapaCartoon) {
+    const done = await runMapaDocumental(ctx, phrases, style).catch((err) => {
+      console.warn(`[documental] el director de mapas fallo, sigue el documental normal: ${(err as Error).message}`);
+      return false;
+    });
+    if (done) return;
+  }
 
   // 1. Montajista + verificador.
   await reportJobProgress(ctx.jobId, 25, `El montajista está armando los planos (${style.name})...`, { force: true });
@@ -923,7 +1438,17 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   console.log(`[documental] ${ctx.projectId}: ${plan.shots.length} planos (${plan.source}), ${plan.issues.length} avisos del verificador`);
 
   // 2. Planos -> escenas, con sus graficos validados.
-  const rows = await writeShotScenes(ctx, phrases, plan);
+  // Coordenadas reales antes de guardar (lugar y mapas).
+  const placesFixed = await correctPlaces(plan.shots).catch((err) => {
+    console.warn(`[documental] geocodificador fallo: ${(err as Error).message}`);
+    return 0;
+  });
+  if (placesFixed) console.log(`[documental] ${ctx.projectId}: ${placesFixed} coordenadas corregidas`);
+  // Datos reales del Banco Mundial para los planos que los piden.
+  const data = await attachData(plan.shots);
+  if (data.con || data.sin) console.log(`[documental] ${ctx.projectId}: graficos con datos ${data.con}, sin datos ${data.sin}`);
+  // Los planos estan anclados a palabras: las escenas se arman sobre plan.units.
+  const rows = await writeShotScenes(ctx, plan.units, plan);
   // Tarjetas de capitulo como MaV (directorV2.ponerCapitulos): solo en
   // videos de 3+ min, en capitulos de 60+ s y con 90 s entre tarjetas.
   // El capitulo sigue existiendo (musica, capitulos de YouTube); solo se
@@ -947,7 +1472,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     byOrder.map((r, i) => [r.id, [byOrder[i - 1]?.text, r.text, byOrder[i + 1]?.text].filter(Boolean).join(" ")])
   );
   await mapWithConcurrency(rows, 6, async (row) => {
-    const overlays = await validatedOverlays(row.shot, row.id, row.text, windowText.get(row.id) ?? row.text, ctx.scriptText, row.shot.capitulo ? chapterTitle.get(row.shot.capitulo) : undefined, toolCtx, row.start);
+    const overlays = await validatedOverlays(row.shot, row.id, row.text, windowText.get(row.id) ?? row.text, ctx.scriptText, row.shot.capitulo ? chapterTitle.get(row.shot.capitulo) : undefined, toolCtx, row.start, style.graphics.mapBase);
     const { data: current } = await supabase.from("scenes").select("content").eq("id", row.id).single();
     const { error } = await supabase
       .from("scenes")
@@ -970,30 +1495,28 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
         }
       : null;
   const used = new Set<string>();
+  // Huellas dHash de todo lo aceptado (misma imagen desde otra fuente).
+  const huellas = new HuellaRegistry();
   let done = 0;
   const outcomes: ShotOutcome[] = [];
   // QA final: cuadro de cada plano (cache por URL) para medir y para la hoja.
   const frames = new Map<string, string | null>();
   const qaCounts = { oscuros: 0, vacios: 0 };
+  let qaDecisions: QaDecision[] = [];
+  let topes = { partidos: 0, alargados: 0 };
   let hoja: string | null = null;
   try {
     const idx = new Map(byOrder.map((r, i) => [r.id, i]));
-    // Epoca de cada plano: su anio o el ultimo anio dicho en su capitulo.
-    const epochOf = new Map<string, number>();
-    let lastYear: number | undefined;
-    for (const r of byOrder) {
-      if (r.shot.capitulo !== undefined) lastYear = undefined;
-      if (r.shot.anio) lastYear = r.shot.anio;
-      if (lastYear) epochOf.set(r.id, lastYear);
-    }
+    // Contexto del juez por plano (frases de alrededor, titulo, epoca por reglas...).
+    const contexts = shotContexts(byOrder, ctx.videoTopic);
     await mapWithConcurrency(rows, SHOT_CONCURRENCY, async (row) => {
       const i = idx.get(row.id) ?? 0;
+      const context = contexts.get(row.id);
       const neighbours = {
-        ...(byOrder[i - 1]?.text ? { prevText: byOrder[i - 1]!.text } : {}),
         queries: [byOrder[i - 1]?.shot.query, byOrder[i + 1]?.shot.query].filter((q): q is string => !!q),
-        ...(epochOf.has(row.id) ? { epoch: epochOf.get(row.id)! } : {}),
+        ...(context ? { context } : {}),
       };
-      outcomes.push(await fillShot(ctx, row, style, judge, used, neighbours));
+      outcomes.push(await fillShot(ctx, row, style, judge, used, neighbours, huellas));
       done += 1;
       await reportJobProgress(
         ctx.jobId,
@@ -1007,8 +1530,21 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     const flagged = await brightnessQa(ctx, byOrder, outcomes, workDir, frames);
     qaCounts.oscuros = flagged.oscuros;
     qaCounts.vacios = flagged.vacios;
+    // QA final con vision (MaV qaPlan): el video entero, en tandas.
+    if (judge && process.env.DOCUMENTAL_QA_FINAL !== "off") {
+      await reportJobProgress(ctx.jobId, 87, "Revisando el video entero con el juez (QA final)...", { force: true });
+      qaDecisions = await finalQa(ctx, byOrder, outcomes, style, judge, used, contexts, huellas).catch((err) => {
+        console.warn(`[documental] QA final fallo (sigue sin QA): ${(err as Error).message}`);
+        return [] as QaDecision[];
+      });
+    }
     await reportJobProgress(ctx.jobId, 88, "Rescatando los planos sin material (otros momentos, fotos del tema)...", { force: true });
-    await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx);
+    await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx, huellas);
+    // Topes de pantalla: rotulo 3 s, foto de tema 4 s (partir o alargar vecinos).
+    topes = await applyScreenCaps(ctx, byOrder, plan.units, style, judge, used, contexts, huellas, qaDecisions).catch((err) => {
+      console.warn(`[documental] topes de pantalla fallaron: ${(err as Error).message}`);
+      return { partidos: 0, alargados: 0 };
+    });
     await reportJobProgress(ctx.jobId, 89, "Armando la hoja de contactos...", { force: true });
     hoja = await buildContactSheet(ctx, byOrder, outcomes, workDir, frames).catch((err) => {
       console.warn(`[documental] no se pudo armar la hoja de contactos: ${(err as Error).message}`);
@@ -1026,7 +1562,14 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     issues: plan.issues,
     usage: { montaje: plan.usage, juez: judgeUsage },
     shots: outcomes.sort((a, b) => a.order - b.order),
-    qa: { hoja, ...qaCounts },
+    qa: {
+      hoja,
+      ...qaCounts,
+      revisados: new Set(qaDecisions.filter((d) => d.ronda === 0).map((d) => d.sceneId)).size,
+      marcados: qaDecisions.filter((d) => d.malo).length,
+      decisiones: qaDecisions,
+      topes,
+    },
     created_at: new Date().toISOString(),
   };
   const { error } = await supabase.from("video_projects").update({ documental_plan: summary, video_style: style.id }).eq("id", ctx.projectId);
