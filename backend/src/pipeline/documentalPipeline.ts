@@ -34,7 +34,7 @@ import {
   type VisualCandidate,
 } from "../lib/documentalSources.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
-import { downloadYouTubeSegment, searchYouTubeVideos, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
+import { downloadYouTubeSegment, searchYouTubeVideos, subtitleKeywords, subtitleMoments, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
 import type { TranscribedWord } from "../tools/transcribeAudio.tool.js";
 import type { SearchStockInput, SearchStockOutput } from "../tools/searchStock.tool.js";
 import type { GenerateImageInput, GenerateImageOutput } from "../tools/generateImage.tool.js";
@@ -481,7 +481,19 @@ async function materializeYouTube(
   opts: { startFraction?: number; tema?: string } = {}
 ): Promise<VisualCandidate | null> {
   try {
-    const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction);
+    // Primer uso del video: el momento sale de los subtitulos (MaV). Un video
+    // con subtitulos que nunca nombran el sujeto se descarta sin bajarlo.
+    let startSeconds: number | undefined;
+    if (opts.startFraction === undefined) {
+      const keywords = subtitleKeywords([...(row.shot.obligatorio ?? []), row.shot.entidad, row.shot.sujeto]);
+      const subs = await subtitleMoments(pick, keywords, judge.workDir);
+      if (subs.hasSubs && keywords.length > 0 && subs.moments.length === 0) {
+        console.log(`[documental] plano ${row.order}: youtube ${pick.external_id} descartado, los subtitulos nunca nombran ${keywords.join("/")}`);
+        return null;
+      }
+      startSeconds = subs.moments[0];
+    }
+    const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction, startSeconds);
     const clip: VisualCandidate = {
       ...pick,
       url: local,
