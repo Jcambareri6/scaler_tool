@@ -646,7 +646,12 @@ export function showcaseAssignment(style: DocumentalStyle, tramoStarts: number[]
 }
 
 function showcaseNotes(featured: string[]): string {
-  return `VITRINA (primeros 5 minutos del video): el espectador tiene que ver la variedad de animaciones. En ESTE tramo mostra estos tipos de grafico, uno de cada uno, en las frases que den un dato que los justifique: ${featured.join(", ")}. No repitas un tipo en el tramo mientras quede alguno de la lista sin usar. Cada cifra, fecha, lugar, persona o comparacion llamativa va como grafico (no como rotulo).`;
+  return `VITRINA (primeros 5 minutos del video): el espectador tiene que ver que hay variedad de animaciones. Para ESTE tramo, priorizá estos tipos de grafico: ${featured.join(", ")}.
+Es un MENU, no una obligacion. CRITERIO, que es lo principal:
+- Cada grafico tiene que nacer de un dato que la frase DICE y que tiene la forma de ese grafico: big_number = una cifra que impacta; versus = dos cosas que se comparan; timeline = varias fechas en orden; line_chart = una evolucion en el tiempo con varios valores; map_marker/map_globe = un lugar que importa; scale_compare = una escala o equivalencia; rank_reveal/list = un ranking o una enumeracion real. Si el dato no tiene esa forma, ese tipo no va.
+- Mejor un tramo con 3 graficos bien elegidos que 7 forzados. Nunca un grafico de relleno, nunca uno que repita lo que ya dice la imagen.
+- Entre dos tipos que sirven para el mismo dato, elegi el que todavia no aparecio en el video.
+- Cada cifra, fecha, lugar o comparacion llamativa que de verdad aporte va como grafico animado (no como rotulo).`;
 }
 
 // Notas del gancho y del cuerpo (literales de MaV, pp:424-429).

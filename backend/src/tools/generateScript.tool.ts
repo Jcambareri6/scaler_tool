@@ -96,8 +96,15 @@ async function documentalInstruction(projectId: string, userId: string): Promise
   const { data } = await supabase.from("video_projects").select("video_format, video_style").eq("id", projectId).maybeSingle();
   if (effectiveFormat(data?.video_format, userId) !== "documental") return "";
   const style = getDocumentalStyle(data?.video_style);
-  return `\n\nFORMATO DOCUMENTAL (${style.name}): ${style.script.tone}\nEstructura: ${style.script.skeleton}\nNombra siempre a las personas, lugares, objetos, fechas y cifras concretas (el video muestra material real de cada uno). Frases claras de 8 a 25 palabras.`;
+  return `\n\nFORMATO DOCUMENTAL (${style.name}): ${style.script.tone}\nEstructura: ${style.script.skeleton}\nNombra siempre a las personas, lugares, objetos, fechas y cifras concretas (el video muestra material real de cada uno). Frases claras de 8 a 25 palabras.\n${SHOWCASE_SCRIPT_RULE}`;
 }
+
+// Vitrina (primeros 5 minutos, ver montajista.ts): el montajista solo puede
+// animar datos que el guion DICE (modo estricto). Para que el comienzo luzca la
+// biblioteca de graficos, esos minutos tienen que traer datos concretos, pero
+// reales: un dato inventado en pantalla es peor que ninguno.
+const SHOWCASE_SCRIPT_RULE = `PRIMEROS 5 MINUTOS (son la vitrina del video: cada dato concreto se vuelve una animacion en pantalla): carga esos minutos de datos concretos y variados, contados con naturalidad dentro del relato: una cifra que impacte (tamano, cantidad, velocidad, costo), fechas clave en orden, los lugares por su nombre, las personas con su rol, una comparacion entre dos cosas, una evolucion en el tiempo, un ranking o una escala ("tan alto como...", "mas que..."). Variedad antes que cantidad: no repitas el mismo tipo de dato.
+Criterio: solo datos que sabes que son ciertos y que importan para la historia. Si no estas seguro de una cifra, no la pongas o redondeala ("mas de 2.000"). Nunca un dato de relleno ni una lista de numeros sin relato: el dato tiene que servir a la frase, no la frase al dato.`;
 
 function buildLanguageInstruction(language?: string): string {
   const trimmed = language?.trim();
