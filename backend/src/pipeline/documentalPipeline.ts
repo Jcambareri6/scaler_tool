@@ -20,6 +20,7 @@ import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, ty
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
+import { TOPE_MARGIN, capFor, cutPoint, neighbourMax, planExtension } from "./topes.js";
 import {
   NOT_A_PORTRAIT,
   searchArchiveVideos,
@@ -537,6 +538,111 @@ async function shotVisuals(ctx: DocumentalContext): Promise<Map<string, ShotVisu
     });
   }
   return map;
+}
+
+// Tiempo maximo para partir planos por los topes (MaV: PLAN_TOPES_MS, 3 min).
+const TOPES_MS = envInt("DOCUMENTAL_TOPES_MS", 180_000);
+
+// Parte un plano en dos: la segunda parte (desde `cut`) busca otro visual con
+// la cadena de fuentes y el juez; los dos quedan en la misma escena
+// (metadata.sequence 0 y 1, build_timeline reparte por duration_seconds).
+async function splitShot(
+  ctx: DocumentalContext,
+  row: ShotRow,
+  cut: number,
+  words: Phrase[],
+  style: DocumentalStyle,
+  judge: Judge,
+  used: Set<string>,
+  context: JudgeContext | undefined,
+  huellas: HuellaRegistry
+): Promise<boolean> {
+  const { data: current } = await supabase
+    .from("assets")
+    .select("video_project_id, scene_id, type, storage_key, metadata")
+    .eq("scene_id", row.id)
+    .in("type", ["VIDEO", "IMAGE"]);
+  const original = current?.length === 1 ? current[0]! : null;
+  if (!original) return false;
+  const second = words.filter((w) => w.start - 0.12 >= cut);
+  if (second.length === 0) return false;
+  const part: ShotRow = { ...row, text: second.map((w) => w.text).join(" "), start: cut };
+  // fillShot solo persiste si encontro algo: si falla, el original queda.
+  const out = await fillShot(ctx, part, style, judge, used, { queries: [], ...(context ? { context } : {}) }, huellas);
+  if (out.qa !== "ok") return false;
+  const { data: added } = await supabase.from("assets").select("id, metadata").eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
+  const fresh = added?.[0];
+  if (!fresh) return false;
+  await supabase
+    .from("assets")
+    .update({ metadata: { ...(fresh.metadata as Record<string, unknown>), sequence: 1, duration_seconds: row.end - cut, parte: 1 } })
+    .eq("id", fresh.id as string);
+  const { error } = await supabase
+    .from("assets")
+    .insert({ ...original, metadata: { ...(original.metadata as Record<string, unknown>), sequence: 0, duration_seconds: cut - row.start } });
+  if (error) throw new Error(error.message);
+  return true;
+}
+
+// Topes de pantalla (topes.ts): rotulo 3 s, foto de tema 4 s. Primero se
+// parte (si queda tiempo), si no se alargan los vecinos con leadSeconds.
+async function applyScreenCaps(
+  ctx: DocumentalContext,
+  byOrder: ShotRow[],
+  units: Phrase[],
+  style: DocumentalStyle,
+  judge: Judge | null,
+  used: Set<string>,
+  contexts: Map<string, JudgeContext>,
+  huellas: HuellaRegistry,
+  qaDecisions: QaDecision[]
+): Promise<{ partidos: number; alargados: number }> {
+  const visuals = await shotVisuals(ctx);
+  const stockIds = new Set(qaDecisions.filter((d) => d.stock && !d.malo).map((d) => d.sceneId));
+  const capOf = (r: ShotRow) => {
+    const v = visuals.get(r.id);
+    return v ? capFor({ ...v, stock: stockIds.has(r.id) }) : null;
+  };
+  const deadline = Date.now() + TOPES_MS;
+  const counts = { partidos: 0, alargados: 0 };
+  const leadDelta = new Map<string, number>();
+  for (const [i, row] of byOrder.entries()) {
+    const v = visuals.get(row.id);
+    const cap = capOf(row);
+    if (!v || cap === null) continue;
+    const dur = row.end - row.start;
+    if (dur <= cap + TOPE_MARGIN) continue;
+    // 1. Partir con otra imagen (el rotulo ya agoto las fuentes: no se parte).
+    if (judge && v.provider !== "textura" && Date.now() < deadline) {
+      const words = units.slice(row.shot.from, row.shot.to + 1);
+      const cut = cutPoint(words, row.start, row.end, cap);
+      const ok = cut !== null && (await splitShot(ctx, row, cut, words, style, judge, used, contexts.get(row.id), huellas).catch(() => false));
+      if (ok) {
+        counts.partidos += 1;
+        continue;
+      }
+    }
+    // 2. Alargar los vecinos: el siguiente entra antes, el anterior sale despues.
+    const room = (r: ShotRow | undefined) => {
+      if (!r) return 0;
+      const nv = visuals.get(r.id);
+      const max = neighbourMax({ ...(nv ? { type: nv.type } : {}), graphic: !!r.shot.grafico || r.shot.clase === "mapa", cap: capOf(r), ...(nv?.duration ? { clipSeconds: nv.duration } : {}) });
+      return Math.max(0, max - (r.end - r.start));
+    };
+    const next = byOrder[i + 1];
+    const ext = planExtension(dur - cap, i > 0 ? room(byOrder[i - 1]) : 0, room(next));
+    if (!ext) continue;
+    if (ext.next && next) leadDelta.set(next.id, (leadDelta.get(next.id) ?? 0) + ext.next);
+    if (ext.prev) leadDelta.set(row.id, (leadDelta.get(row.id) ?? 0) - ext.prev);
+    counts.alargados += 1;
+  }
+  for (const [id, delta] of leadDelta) {
+    const { data } = await supabase.from("scenes").select("content").eq("id", id).single();
+    const content = (data?.content as Record<string, unknown>) ?? {};
+    const lead = Number(content.leadSeconds ?? 0) + delta;
+    await supabase.from("scenes").update({ content: { ...content, leadSeconds: Math.round(lead * 100) / 100 } }).eq("id", id);
+  }
+  return counts;
 }
 
 // Vias del rescate (persistShotVisual guarda la via en qa.source).
@@ -1090,6 +1196,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   const frames = new Map<string, string | null>();
   const qaCounts = { oscuros: 0, vacios: 0 };
   let qaDecisions: QaDecision[] = [];
+  let topes = { partidos: 0, alargados: 0 };
   let hoja: string | null = null;
   try {
     const idx = new Map(byOrder.map((r, i) => [r.id, i]));
@@ -1126,6 +1233,11 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     }
     await reportJobProgress(ctx.jobId, 88, "Rescatando los planos sin material (otros momentos, fotos del tema)...", { force: true });
     await rescueGaps(ctx, byOrder, outcomes, style, used, judge, toolCtx, huellas);
+    // Topes de pantalla: rotulo 3 s, foto de tema 4 s (partir o alargar vecinos).
+    topes = await applyScreenCaps(ctx, byOrder, plan.units, style, judge, used, contexts, huellas, qaDecisions).catch((err) => {
+      console.warn(`[documental] topes de pantalla fallaron: ${(err as Error).message}`);
+      return { partidos: 0, alargados: 0 };
+    });
     await reportJobProgress(ctx.jobId, 89, "Armando la hoja de contactos...", { force: true });
     hoja = await buildContactSheet(ctx, byOrder, outcomes, workDir, frames).catch((err) => {
       console.warn(`[documental] no se pudo armar la hoja de contactos: ${(err as Error).message}`);
@@ -1149,6 +1261,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
       revisados: new Set(qaDecisions.filter((d) => d.ronda === 0).map((d) => d.sceneId)).size,
       marcados: qaDecisions.filter((d) => d.malo).length,
       decisiones: qaDecisions,
+      topes,
     },
     created_at: new Date().toISOString(),
   };

@@ -62,6 +62,7 @@ export interface QaDecision {
   malo: boolean;
   obra?: string | null;
   lugar?: boolean | null;
+  stock?: boolean;
 }
 
 const SYSTEM = `You are the final QA of a documentary made with real footage. You get several SHOTS of the edited video, each with its frames and what the narration says over it. For EACH shot decide if a viewer would accept that picture under that sentence.
@@ -324,7 +325,7 @@ export async function runQaFinal(
       final = "equivocado";
       por = `obra repetida: ${v.obra}`;
     }
-    decisions.push({ sceneId: item.sceneId, order: item.order, ronda, codigo: v.code, final, por, malo: final !== "ok", obra: v.obra, lugar: v.lugar });
+    decisions.push({ sceneId: item.sceneId, order: item.order, ronda, codigo: v.code, final, por, malo: final !== "ok", obra: v.obra, lugar: v.lugar, stock: v.stock });
   }
   // Solo las obras de lo que quedo bien cuentan para las rondas siguientes.
   const bad = new Set(decisions.filter((d) => d.malo).map((d) => d.order));
