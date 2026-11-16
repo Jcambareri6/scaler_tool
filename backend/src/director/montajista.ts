@@ -608,6 +608,25 @@ Guion en palabras numeradas (numero:palabra). "desde" y "hasta" de cada plano so
 ${numberedWords(units, tramo.desde, tramo.hasta)}`;
 }
 
+// Un plano no termina en "el", "de", "y"...: esa palabra va con la que sigue
+// ("A las 23:40 el | vigia" -> "A las 23:40 | el vigia"). Solo mueve palabras
+// de enlace al plano siguiente, nunca deja un plano vacio.
+const LINK_WORD = /^(el|la|los|las|lo|un|una|unos|unas|de|del|a|al|en|con|por|para|sin|sobre|y|e|o|u|que|su|sus|the|a|an|of|to|in|and|or)$/i;
+
+export function tidyBoundaries(shots: PlannedShot[], units: Phrase[]): number {
+  let moved = 0;
+  for (let i = 0; i < shots.length - 1; i++) {
+    const shot = shots[i]!;
+    const next = shots[i + 1]!;
+    while (shot.to > shot.from && next.from === shot.to + 1 && LINK_WORD.test(units[shot.to]!.text.replace(/[^\p{L}]/gu, ""))) {
+      shot.to -= 1;
+      next.from -= 1;
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
 // Adelanto de la imagen respecto de su primera palabra, por clase (MaV
 // ponerTiempos): el ojo llega antes que la palabra.
 export const LEAD_BY_CLASS: Partial<Record<ShotClass, number>> = { mapa: 1.6, persona: 0.9, cosa: 0.5, lugar: 0.5 };
@@ -689,6 +708,7 @@ export async function directMontaje(input: {
     return { ...verified, units, source: "heuristic", usage, issues: ["montajista sin planos", ...verified.issues] };
   }
   const verified = verifyPlan({ shots: results.flatMap((r) => r.shots), chapters: results.flatMap((r) => r.chapters) }, units, style);
+  tidyBoundaries(verified.shots, units);
   const allReserve = issues.filter((i) => i.includes("reserva")).length === tramos.length;
   return { ...verified, units, source: allReserve ? "heuristic" : "montajista", usage, issues: [`${tramos.length} tramos`, ...issues, ...verified.issues] };
 }

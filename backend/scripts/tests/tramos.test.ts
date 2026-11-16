@@ -67,3 +67,18 @@ for (const s of reserve.shots.slice(0, -1)) {
   assert.ok(d >= 4.5 && d <= 7.5, `reserva ${d}`);
 }
 console.log("palabras, verificador y adelanto OK");
+
+// Un plano no termina en una palabra de enlace.
+{
+  const { tidyBoundaries } = await import("../../src/director/montajista.js");
+  const toks = ["A", "las", "23:40", "el", "vigía", "Fleet", "vio", "el", "iceberg."];
+  const u = toks.map((t, i) => ({ id: String(i + 1), text: t, start: i, end: i + 0.9, words: [{ text: t, start: i, end: i + 0.9 }] }));
+  const shots = [
+    { from: 0, to: 3, clase: "ambiente" as const, sujeto: "", query: "" },
+    { from: 4, to: 7, clase: "persona" as const, sujeto: "", query: "" },
+    { from: 8, to: 8, clase: "cosa" as const, sujeto: "", query: "" },
+  ];
+  assert.equal(tidyBoundaries(shots, u), 2);
+  assert.deepEqual(shots.map((s) => [s.from, s.to]), [[0, 2], [3, 6], [7, 8]]);
+  console.log("bordes OK");
+}
