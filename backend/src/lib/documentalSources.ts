@@ -129,10 +129,15 @@ interface CommonsPage {
   }[];
 }
 
+const BAD_COMMONS_TITLE = /\b(map|mapa|logo|icon|coat of arms|escudo|flag|bandera|diagram|diagrama|chart|graph|poster|cartel|screenshot|signature|firma|seal|stamp|svg)\b/i;
+
 function commonsCandidate(page: CommonsPage, query: string): VisualCandidate | null {
   const info = page.imageinfo?.[0];
   if (!info || !/^image\/(jpeg|png|webp)/.test(info.mime)) return null;
   if (info.width < MIN_IMAGE_WIDTH || info.width / info.height > MAX_ASPECT) return null;
+  // Mapas, diagramas, logos, escudos, banderas, carteles y capturas no son
+  // fotos del tema (MaV: MALO_TITULO).
+  if (BAD_COMMONS_TITLE.test(page.title ?? "")) return null;
   const meta = info.extmetadata ?? {};
   const license = commercialLicense(meta.License?.value ?? meta.LicenseShortName?.value);
   if (!license) return null;
@@ -304,6 +309,18 @@ export async function searchArchiveVideos(query: string, year?: number, entidad?
   return [];
 }
 
+function normTitle(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+export function titleMatchesHalf(title: string, terms: string): boolean {
+  const words = [...new Set(normTitle(terms).split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !ARCHIVE_FILLER.test(w)))];
+  if (words.length === 0) return true;
+  const t = normTitle(title);
+  const hits = words.filter((w) => t.includes(w)).length;
+  return hits >= Math.ceil(words.length / 2);
+}
+
 async function searchArchiveOnce(terms: string, query: string, year: number | undefined, curated: boolean): Promise<VisualCandidate[]> {
   const yearFilter = year ? ` AND year:[${year - 8} TO ${year + 8}]` : "";
   // Relevancia: la busqueda tiene que estar en el titulo o en los temas, no
@@ -323,6 +340,9 @@ async function searchArchiveOnce(terms: string, query: string, year: number | un
     // Remixes, peliculas y videos de fans subidos como "dominio publico" (en
     // la prueba entro el logo de un DJ).
     if (BLOCKED_TITLE.test(`${doc.title ?? ""} ${doc.identifier}`)) continue;
+    // MaV (clipArchivo): el titulo tiene que tener al menos la mitad de las
+    // palabras buscadas; asi no entra un show brasileno buscando el Titanic.
+    if (!titleMatchesHalf(`${doc.title ?? ""} ${doc.identifier.replace(/[-_]/g, " ")}`, terms)) continue;
     const meta = await getJson<{ files?: ArchiveFile[]; metadata?: { creator?: string } }>(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`);
     const mp4 = (meta.files ?? [])
       .filter((f) => /\.mp4$/i.test(f.name) && Number(f.size ?? 0) > 0 && Number(f.size) < ARCHIVE_MAX_BYTES)

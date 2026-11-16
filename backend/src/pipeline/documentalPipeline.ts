@@ -460,11 +460,18 @@ export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | und
 }
 
 function judgeShotOf(row: ShotRow, context: JudgeContext | undefined, rescue?: { tema: string }): JudgeShot {
+  // En el rescate (MaV deTema) el juez no recibe el "tiene que verse" ni el
+  // rotulo de lugar: la pregunta es si es de esta historia, no si es la cosa.
+  let ctx = context;
+  if (rescue && context) {
+    const { obligatorio: _o, lugarRotulo: _l, ...rest } = context;
+    ctx = rest;
+  }
   return {
     frase: row.text,
     clase: row.shot.clase,
     sujeto: row.shot.sujeto,
-    ...(context ?? {}),
+    ...(ctx ?? {}),
     ...(rescue ? { modo: "tema" as const, tema: rescue.tema } : {}),
   };
 }
@@ -910,8 +917,11 @@ const YT_MAX_USES = envInt("DOCUMENTAL_YT_MAX_USES", 3);
 // La tarjeta de capitulo no va en el gancho.
 const CHAPTER_MIN_START = 20;
 // Ultima pasada contra los rotulos: cuantos reemplazos y en que puntos del video.
-const LAST_PASS_MAX = 4;
-const LAST_PASS_FRACTIONS = [0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.1];
+const LAST_PASS_MAX = envInt("DOCUMENTAL_LAST_PASS_MAX", 60);
+const LAST_PASS_ROUNDS = 2;
+// Intentos (fuente + momento) por rotulo en cada ronda.
+const LAST_PASS_TRIES = 3;
+const LAST_PASS_FRACTIONS = [0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 0.1, 0.33, 0.48, 0.63, 0.78, 0.18];
 
 // Una llamada al modelo (una vez por video): 5 busquedas "seguras" del tema
 // para Commons, como temaDelVideo de MaV.
@@ -926,7 +936,7 @@ async function topicQueries(judge: Judge, ctx: DocumentalContext): Promise<strin
       messages: [
         {
           role: "user",
-          content: `Tema del video: ${ctx.videoTopic ?? "(sin titulo)"}\nComienzo del guion: ${ctx.scriptText.slice(0, 1500)}\n\nEscribi 5 busquedas en INGLES de 2 a 4 palabras para encontrar en Wikimedia Commons fotos seguras del tema central (el sujeto principal, su epoca, sus lugares, su gente). Concretas, con nombre propio y con la EPOCA de la historia (anio o decada) para no traer fotos actuales ("RMS Titanic 1912", "White Star Line 1912", "Titanic lifeboats 1912"). Responde SOLO JSON: {"queries": ["...", "..."]}`,
+          content: `Tema del video: ${ctx.videoTopic ?? "(sin titulo)"}\nComienzo del guion: ${ctx.scriptText.slice(0, 1500)}\n\nEscribi 5 busquedas en INGLES de 1 a 3 palabras que SEGURO tengan muchas fotos libres en Wikimedia Commons sobre el tema central (como temaDelVideo de MaV). Cada una es: el lugar, barco, edificio o persona principal ("RMS Titanic"); el TIPO de cosa central ("ocean liner", "Soviet submarine"); o objetos, lugares o gente de la epoca ("Belfast shipyard", "Edwardian passengers"). Cortas y amplias: una busqueda larga o con anio trae pocas fotos. Responde SOLO JSON: {"queries": ["...", "..."]}`,
         },
       ],
     });
@@ -982,6 +992,33 @@ function runFfmpeg(args: string[]): Promise<void> {
 // textura queda sin texto (solo subtitulos), nunca con una frase cortada.
 const EDGE_WORDS = /^(el|la|los|las|un|una|de|del|a|al|en|con|por|para|y|o|que|se|su|sus|lo|pero|como|mas|más|muy|ni)$/i;
 
+// Frase clave sin modelo: de 3 a 5 palabras SEGUIDAS de la frase, sin empezar
+// ni terminar en palabra de enlace, con mas nombres propios y cifras (a
+// igualdad, la mas larga). "" si la frase no da ninguna.
+export function reserveKeyPhrase(text: string, seen: Set<string> = new Set()): string {
+  const words = text
+    .replace(/["«»“”]/g, "")
+    .split(/\s+/)
+    .map((w) => w.replace(/^[¿¡(]+/, "").replace(/[.,;:!?)]+$/, ""))
+    .filter(Boolean);
+  let best = "";
+  let bestScore = -1;
+  for (let size = 5; size >= 3; size--) {
+    for (let i = 0; i + size <= words.length; i++) {
+      const win = words.slice(i, i + size);
+      if (EDGE_WORDS.test(win[0]!) || EDGE_WORDS.test(win[size - 1]!)) continue;
+      const phrase = win.join(" ");
+      if (seen.has(phrase.toLowerCase())) continue;
+      const score = win.filter((w, k) => /\d/.test(w) || (i + k > 0 && /^[A-ZÁÉÍÓÚÑ]/.test(w))).length * 10 + size;
+      if (score > bestScore) {
+        best = phrase;
+        bestScore = score;
+      }
+    }
+  }
+  return best;
+}
+
 async function addKeyPhraseOverlays(rows: ShotRow[], ctx: DocumentalContext, judge: Judge | null, toolCtx: { userId: string; jobId: string }): Promise<number> {
   if (!judge || rows.length === 0) return 0;
   let phrases: Record<string, string> = {};
@@ -1005,16 +1042,21 @@ Responde SOLO JSON: {"rotulos": {"<id>": "<frase clave>"}}`,
     const text = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     phrases = (JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { rotulos?: Record<string, string> }).rotulos ?? {};
   } catch (err) {
-    console.warn(`[documental] frases clave de los rotulos fallaron: ${(err as Error).message}`);
-    return 0;
+    // Sin la llamada, cada rotulo usa la frase de reserva: nunca queda vacio.
+    console.warn(`[documental] frases clave de los rotulos fallaron, uso la reserva: ${(err as Error).message}`);
   }
   const seen = new Set<string>();
   let added = 0;
+  const valid = (p: string) => {
+    const w = p.split(/\s+/).filter(Boolean);
+    return w.length >= 3 && w.length <= 6 && !EDGE_WORDS.test(w[0]!) && !EDGE_WORDS.test(w[w.length - 1]!) && !seen.has(p.toLowerCase());
+  };
   for (const row of rows) {
-    const phrase = (phrases[String(row.order)] ?? "").replace(/["«»“”]/g, "").replace(/[.,;:]+$/, "").trim();
-    const words = phrase.split(/\s+/).filter(Boolean);
+    let phrase = (phrases[String(row.order)] ?? "").replace(/["«»“”]/g, "").replace(/[.,;:]+$/, "").trim();
+    // Reserva (MaV claveDeReserva): el tramo con mas nombres y cifras.
+    if (!valid(phrase)) phrase = reserveKeyPhrase(row.text, seen);
+    if (!valid(phrase)) continue;
     const key = phrase.toLowerCase();
-    if (words.length < 3 || words.length > 6 || EDGE_WORDS.test(words[0]!) || EDGE_WORDS.test(words[words.length - 1]!) || seen.has(key)) continue;
     const { data: current } = await supabase.from("scenes").select("content").eq("id", row.id).single();
     const content = (current?.content as Record<string, unknown>) ?? {};
     if (Array.isArray(content.overlays) && content.overlays.length > 0) continue; // ya tiene grafico o mapa encima
@@ -1133,10 +1175,13 @@ async function rescueGaps(
     const i = byOrder.indexOf(row);
     const context = contexts.get(row.id);
     if (judge && row.shot.clase !== "mapa") {
-      // 1. Otro momento de un YouTube ya usado (rota entre los videos), sin
-      // pasar el tope de usos por video ni repetir el video del plano vecino.
+      // 1. Otro momento de un YouTube ya usado (rota entre los videos, el menos
+      // usado primero). Como MaV rescatar: sin tope de usos (es del tema por
+      // construccion), solo sin repetir el video del plano vecino.
       const near = neighbourOrigins(i);
-      const candidatesYt = ytSources.filter((s) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES && !near.includes(`youtube:${s.external_id}`));
+      const candidatesYt = ytSources
+        .filter((s) => !near.includes(`youtube:${s.external_id}`))
+        .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
       for (let attempt = 0; attempt < Math.min(2, candidatesYt.length); attempt++) {
         const src = candidatesYt[(i + attempt) % candidatesYt.length]!;
         const seen = momentsUsed.get(src.external_id)!;
@@ -1196,7 +1241,7 @@ async function rescueGaps(
         const verdict = await judgeCandidates(
           judge.client,
           judge.model,
-          judgeShotOf(row, context),
+          judgeShotOf(row, context, { tema }),
           fresh,
           judge.workDir,
           judge.usage
@@ -1225,25 +1270,45 @@ async function rescueGaps(
   // Ultima pasada contra los rotulos (MaV, nuncaNiebla): hasta 4 momentos mas
   // de los YouTube ya usados, en puntos lejanos a lo ya usado, siempre con
   // juez y sin pasar el tope de usos ni repetir el video del plano vecino.
+  // Como nuncaNiebla de MaV: el tope de usos por video NO aplica a "otro
+  // momento" (un video que ya dio un plano bueno es del tema por
+  // construccion); solo no se pisan los tramos, no se repite el video del
+  // vecino y un video que falla 3 veces sale. Antes se cortaba toda la pasada
+  // apenas el primer video llegaba a 3 usos (0 rescatados en el Titanic).
   let recovered = 0;
   if (judge) {
-    const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
-    for (const row of leftovers) {
-      if (recovered >= LAST_PASS_MAX) break;
-      const i = byOrder.indexOf(row);
-      const near = neighbourOrigins(i);
-      const src = ytSources.find((s) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES && !near.includes(`youtube:${s.external_id}`));
-      if (!src) break;
-      const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
-      momentsUsed.set(src.external_id, seen);
-      const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
-      if (fraction === undefined) continue;
-      seen.add(fraction);
-      const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
-      if (!clip) continue;
-      if (!(await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima"))) continue;
-      counts.rotulo -= 1;
-      recovered += 1;
+    const fails = new Map<string, number>();
+    for (let round = 0; round < LAST_PASS_ROUNDS; round++) {
+      const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
+      if (leftovers.length === 0) break;
+      for (const row of leftovers) {
+        if (recovered >= LAST_PASS_MAX) break;
+        const i = byOrder.indexOf(row);
+        const near = neighbourOrigins(i);
+        // Menos usado primero; nunca el video del plano de al lado.
+        const sources = ytSources
+          .filter((s) => !near.includes(`youtube:${s.external_id}`) && (fails.get(s.external_id) ?? 0) < 3)
+          .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
+        let attempts = 0;
+        for (const src of sources) {
+          if (attempts >= LAST_PASS_TRIES) break;
+          const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
+          momentsUsed.set(src.external_id, seen);
+          const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
+          if (fraction === undefined) continue;
+          seen.add(fraction);
+          attempts += 1;
+          const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
+          if (!clip) {
+            fails.set(src.external_id, (fails.get(src.external_id) ?? 0) + 1);
+            continue;
+          }
+          if (!(await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima"))) continue;
+          counts.rotulo -= 1;
+          recovered += 1;
+          break;
+        }
+      }
     }
   }
   // Frase clave de los rotulos que quedaron (una sola llamada al modelo).

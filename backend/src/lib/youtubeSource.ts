@@ -302,7 +302,7 @@ async function downloadSection(url: string, start: number, length: number, out: 
       await downloadSectionOnce(url, start, length, out);
       return;
     } catch (err) {
-      if (attempt >= 1 || !/(403|429)/.test((err as Error).message)) throw err;
+      if (attempt >= 1 || !/\b(403|429)\b/.test((err as Error).message)) throw err;
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
