@@ -41,6 +41,8 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   myth_fact: 5.5,
   scale_compare: 5,
   line_chart: 7,
+  // Piramide de poblacion (datos reales): las barras cambian de anio en anio.
+  population_pyramid: 9,
   pivot_question: 3.5,
   card_grid: 7,
   scoreboard: 5,
@@ -144,6 +146,7 @@ const PRIORITY: Record<string, number> = {
   versus: 3,
   milestone: 3,
   line_chart: 3,
+  population_pyramid: 3,
   timeline: 3,
   badge: 2,
   list: 2,

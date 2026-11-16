@@ -20,6 +20,7 @@ import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, ty
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import { correctPlace } from "../lib/geocode.js";
+import { formatValue, poblacion, samplePoints, serie } from "../lib/datosAbiertos.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
 import { TOPE_MARGIN, capFor, cutPoint, neighbourMax, planExtension } from "./topes.js";
 import {
@@ -118,6 +119,60 @@ function toSpec(g: ShotGraphic, basemap?: "satellite" | "dark"): OverlaySpec {
   };
 }
 
+// Graficos con datos reales por plano (attachData).
+const dataSpecs = new WeakMap<PlannedShot, OverlaySpec>();
+
+// Trae las cifras del Banco Mundial de los planos con `datos`. Sin datos (pais
+// sin codigo, region, serie vacia) el plano sigue con su grafico o su visual:
+// "un grafico con una linea inventada es peor que ningun grafico".
+async function attachData(shots: PlannedShot[]): Promise<{ con: number; sin: number }> {
+  const counts = { con: 0, sin: 0 };
+  let last = -Infinity;
+  for (const [i, shot] of shots.entries()) {
+    const d = shot.datos;
+    if (!d) continue;
+    // Como mucho 2 por video y nunca seguidos.
+    if (counts.con >= 2 || i - last < 2) {
+      delete shot.datos;
+      continue;
+    }
+    let spec: OverlaySpec | null = null;
+    if (d.tipo === "serie" && d.indicador) {
+      const s = await serie(d.pais, d.indicador, d.desde ?? 1960, d.hasta ?? new Date().getFullYear()).catch(() => null);
+      if (s) {
+        spec = {
+          type: "line_chart",
+          text: d.titulo || `${s.nombre} · ${s.pais}`,
+          label: s.fuente,
+          source: "data",
+          items: samplePoints(s.puntos, 8).map((p) => ({ label: String(p.anio), text: formatValue(p.valor) })),
+        };
+      }
+    } else if (d.tipo === "piramide") {
+      const years = d.anios?.length ? d.anios : [1960, new Date().getFullYear() - 2, 2050];
+      const p = await poblacion(d.pais, years).catch(() => null);
+      if (p && p.anios.length) {
+        spec = {
+          type: "population_pyramid",
+          text: d.titulo || `Población · ${p.pais}`,
+          label: p.fuente,
+          source: "data",
+          pyramid: { years: p.anios.map((a) => ({ year: a.anio, men: a.hombres, women: a.mujeres })) },
+        };
+      }
+    }
+    if (spec) {
+      dataSpecs.set(shot, spec);
+      counts.con += 1;
+      last = i;
+    } else {
+      delete shot.datos;
+      counts.sin += 1;
+    }
+  }
+  return counts;
+}
+
 // Coordenadas reales (geocode.ts, como MaV): el lugar de cada plano y la
 // coordenada de cada mapa se corrigen si el modelo se equivoco por mas de
 // 25 km o no la dio, y llevan el tamano del sitio (elige el zoom).
@@ -183,6 +238,14 @@ async function validatedOverlays(
     if (shot.rotulo) wanted.push(toSpec(shot.rotulo, basemap));
   }
   const valid: OverlaySpec[] = [];
+  // Datos reales (Banco Mundial): no pasan por el modo estricto (la cifra no
+  // sale del guion, sale de la fuente, que va en pantalla). Reemplazan al grafico.
+  const dataSpec = chapterCard ? undefined : dataSpecs.get(shot);
+  if (dataSpec) {
+    valid.push({ ...dataSpec, anchor: 0 });
+    const i = wanted.findIndex((w) => w.type !== "title_card" && shot.grafico && w.type === shot.grafico.type);
+    if (i >= 0) wanted.splice(i, 1);
+  }
   for (const planned of wanted) {
     try {
       const { overlay } = await runTool<GenerateOverlayInput, GenerateOverlayOutput>(
@@ -1189,6 +1252,9 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     return 0;
   });
   if (placesFixed) console.log(`[documental] ${ctx.projectId}: ${placesFixed} coordenadas corregidas`);
+  // Datos reales del Banco Mundial para los planos que los piden.
+  const data = await attachData(plan.shots);
+  if (data.con || data.sin) console.log(`[documental] ${ctx.projectId}: graficos con datos ${data.con}, sin datos ${data.sin}`);
   // Los planos estan anclados a palabras: las escenas se arman sobre plan.units.
   const rows = await writeShotScenes(ctx, plan.units, plan);
   // Tarjetas de capitulo como MaV (directorV2.ponerCapitulos): solo en

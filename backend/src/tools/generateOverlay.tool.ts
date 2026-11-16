@@ -237,6 +237,10 @@ export const generateOverlayTool: ToolDefinition<
           )
           .map((item) => ({ label: (item.label ?? "").trim(), text: item.text.trim() }))
       : undefined;
+    // La piramide solo existe con datos reales (pipeline documental, source "data").
+    if (overlay.type === "population_pyramid") {
+      throw new Error("population_pyramid solo con datos del Banco Mundial — se descarta");
+    }
     // Mito vs realidad sin la realidad seria solo afirmar el mito.
     if (overlay.type === "myth_fact" && !label) {
       throw new Error("myth_fact sin label (la realidad) literal del guion — se descarta");

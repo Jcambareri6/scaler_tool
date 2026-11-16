@@ -145,6 +145,8 @@ export type OverlayType =
   | "nav_header"
   // Tendencia: `text` = titulo, `label` = fuente, `items` = puntos en orden.
   | "line_chart"
+  // Piramide de poblacion con datos reales (Banco Mundial): `pyramid`.
+  | "population_pyramid"
   // Pregunta sola en pantalla; `label` = palabra clave que se subraya.
   | "pivot_question"
   // Muchos casos a la vez: `text` = titulo, `items` = tarjetas.
@@ -187,7 +189,9 @@ export interface OverlayItem {
 export interface OverlaySpec {
   type: OverlayType;
   text: string;
-  source: "script";
+  // "data": cifras de una fuente abierta (Banco Mundial), no del guion; la
+  // fuente va en `label` y se muestra en pantalla.
+  source: "script" | "data";
   // Titulo/etiqueta corta (tambien literal del guion, ver generate_overlay).
   label?: string;
   items?: OverlayItem[];
@@ -211,6 +215,8 @@ export interface OverlaySpec {
   ref?: { name: string; lat: number; lon: number };
   // Fondo del mapa: "satellite" = teselas satelitales de Esri (MaV).
   basemap?: "satellite" | "dark";
+  // population_pyramid: % del total por grupo de edad (17) y sexo, por anio.
+  pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
 }
 export interface Provider {
   id: string;

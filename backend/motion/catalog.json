@@ -18,6 +18,7 @@
     "cta": { "introSeconds": 1.4, "blur": 0 },
     "nav_header": { "introSeconds": 1.0, "blur": 0 },
     "line_chart": { "introSeconds": 2.0, "blur": 8 },
+    "population_pyramid": { "introSeconds": 9.0, "blur": 10 },
     "pivot_question": { "introSeconds": 1.6, "blur": 12 },
     "card_grid": { "introSeconds": 1.7, "blur": 8 },
     "scoreboard": { "introSeconds": 1.2, "blur": 8 },

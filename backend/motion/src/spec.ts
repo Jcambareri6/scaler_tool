@@ -23,6 +23,8 @@ export interface OverlaySpec {
   ref?: GeoPoint & { name: string };
   // Fondo del mapa: "satellite" = teselas satelitales de Esri.
   basemap?: "satellite" | "dark";
+  // population_pyramid: % del total por grupo de edad (17) y sexo, por anio.
+  pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
 }
 
 export interface GeoPoint {

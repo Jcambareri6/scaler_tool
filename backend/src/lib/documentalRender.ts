@@ -114,6 +114,7 @@ const SFX_BY_OVERLAY: Record<string, SfxCue["kind"]> = {
   versus: "hit",
   data_viz_single: "hit",
   line_chart: "hit",
+  population_pyramid: "hit",
   milestone: "hit",
   kinetic_quote: "paper",
   phrase_swap: "paper",

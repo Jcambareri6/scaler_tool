@@ -1,3 +1,4 @@
+import { INDICATORS } from "../lib/datosAbiertos.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -56,6 +57,20 @@ export interface PlannedShot {
   capitulo?: number;
   // Parte de un plano largo que se partio (para no repetir el mismo visual).
   parte?: number;
+  // Grafico con datos reales del Banco Mundial (lib/datosAbiertos.ts).
+  datos?: ShotData;
+}
+
+export interface ShotData {
+  tipo: "serie" | "piramide";
+  // Alias de la tabla (fertilidad, pib...) o codigo del Banco Mundial.
+  indicador?: string;
+  // ISO3 del pais.
+  pais: string;
+  desde?: number;
+  hasta?: number;
+  anios?: number[];
+  titulo?: string;
 }
 
 export interface MontajeChapter {
@@ -92,6 +107,17 @@ function allowedGraphicTypes(style: DocumentalStyle): string[] {
   return plannableTypes().filter((t) => !style.graphics.forbid.includes(t) && t !== "nav_header" && t !== "title_card");
 }
 
+// Datos reales (como directorV2 de MaV): el modelo elige indicador y pais; el
+// codigo trae las cifras. Sin datos, el grafico se quita.
+const DATA_GUIDE = `
+## Datos reales (campo datos, opcional)
+Cuando el guion habla de la evolucion de un PAIS (poblacion, economia, natalidad...) y una cifra real lo cuenta mejor que un rotulo, pone "datos" en ese plano en vez de "grafico". Las cifras las trae el sistema del Banco Mundial: vos solo elegis que mostrar.
+- tipo "serie": una linea en el tiempo. indicador = uno de estos alias: ${Object.keys(INDICATORS).join(", ")}. desde/hasta = anios (1960-2050).
+- tipo "piramide": piramide de poblacion por edad y sexo. anios = 2-4 anios (ej. 1960, 2024, 2050). El plano dura 8-10 s.
+- pais = codigo ISO3. Solo paises: una ciudad, un estado o una costa no tienen datos (no pongas datos).
+- Como mucho 2 por video y nunca dos seguidos.
+`;
+
 function systemPrompt(style: DocumentalStyle): string {
   const types = allowedGraphicTypes(style);
   const guide = types.map((t) => `- ${t}: ${TYPE_GUIDE[t as keyof typeof TYPE_GUIDE] ?? ""}`).join("\n");
@@ -108,6 +134,7 @@ ${style.description}
 ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.epochHint ? ` (${style.sources.epochHint})` : ""}: pon siempre \`anio\` cuando sea historico.\n` : ""}
 ## Graficos disponibles (campo grafico.type)
 ${guide}
+${style.graphics.favor.includes("line_chart") ? DATA_GUIDE : ""}
 
 - obligatorio: las cosas concretas que nombra la frase y TIENEN que verse (en persona, la persona; en cosa, la cosa; en lugar, el lugar). Vacio en ambiente o si la frase no nombra nada. El juez rechaza la imagen que no lo muestra.
 
@@ -165,6 +192,20 @@ const PLAN_TOOL: Anthropic.Tool = {
             lugar: { type: "object", properties: { nombre: { type: "string" }, lat: { type: "number" }, lon: { type: "number" } }, required: ["nombre", "lat", "lon"] },
             grafico: graphicSchema,
             rotulo: graphicSchema,
+            datos: {
+              type: "object",
+              description: "Grafico con datos REALES del Banco Mundial (solo un pais que el guion trata). Reemplaza al grafico.",
+              properties: {
+                tipo: { type: "string", enum: ["serie", "piramide"] },
+                indicador: { type: "string", description: "Alias de la tabla de indicadores" },
+                pais: { type: "string", description: "Codigo ISO3 del pais (MEX, ARG, JPN...)" },
+                desde: { type: "number" },
+                hasta: { type: "number" },
+                anios: { type: "array", items: { type: "number" }, description: "Piramide: 2-4 anios entre 1960 y 2050" },
+                titulo: { type: "string", description: "Indicador · Pais, en el idioma de la narracion" },
+              },
+              required: ["tipo", "pais"],
+            },
           },
           required: ["desde", "hasta", "clase", "sujeto", "query_en"],
         },
@@ -173,6 +214,26 @@ const PLAN_TOOL: Anthropic.Tool = {
     required: ["chapters", "shots"],
   } as Anthropic.Tool.InputSchema,
 };
+
+function dataOf(raw: unknown): ShotData | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const tipo = r.tipo === "piramide" ? "piramide" : r.tipo === "serie" ? "serie" : null;
+  const pais = str(r.pais).toUpperCase();
+  if (!tipo || !/^[A-Z]{2,3}$/.test(pais)) return undefined;
+  if (tipo === "serie" && !str(r.indicador)) return undefined;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : undefined);
+  const anios = Array.isArray(r.anios) ? (r.anios as unknown[]).map(num).filter((n): n is number => n !== undefined) : undefined;
+  return {
+    tipo,
+    pais,
+    ...(str(r.indicador) ? { indicador: str(r.indicador) } : {}),
+    ...(num(r.desde) ? { desde: num(r.desde)! } : {}),
+    ...(num(r.hasta) ? { hasta: num(r.hasta)! } : {}),
+    ...(anios?.length ? { anios } : {}),
+    ...(str(r.titulo) ? { titulo: str(r.titulo) } : {}),
+  };
+}
 
 function phraseIndex(id: unknown, total: number): number | null {
   const n = typeof id === "string" ? Number(id.replace(/^p/i, "")) : typeof id === "number" ? id : NaN;
@@ -237,6 +298,7 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
         : {}),
       ...(grafico ? { grafico } : {}),
       ...(rotulo ? { rotulo } : {}),
+      ...(dataOf(item.datos) ? { datos: dataOf(item.datos)! } : {}),
     });
   }
   const chapters: MontajeChapter[] = [];
