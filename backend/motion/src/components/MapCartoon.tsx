@@ -329,6 +329,11 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
   // Camara: vuelo desde el plano anterior y despues una deriva suave.
   const cam = e.camara ?? {};
   const vuelo = cam.desde && !cam.desde.mantener ? Math.min(cam.vuelo ?? 1.4, total * 0.6) : 0;
+  // Nivel de satelite del plano y el del final del plano anterior (para el fundido del vuelo).
+  const tilesTo = tileZoom(projectionFor(e.centro, e.km, width, height).scale());
+  const fromEnd = cam.desde ? endOf(cam.desde.centro, cam.desde.km, cam.desde.deriva, cam.desde.zoom, 1) : null;
+  const tilesFrom = cam.desde && fromEnd ? tileZoom(projectionFor(cam.desde.centro, cam.desde.km, width, height).scale()) : null;
+  void fromEnd;
   const from = cam.desde ? endOf(cam.desde.centro, cam.desde.km, cam.desde.deriva, cam.desde.zoom, 1) : null;
   let centro = e.centro;
   let km = e.km;
@@ -350,6 +355,9 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
   const solid = interpolate(km, [900, 2500], [0.16, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const path = geoPath(proj);
   const at = (sec: number | undefined, damping = 14) => (sec === undefined || sec < 0 ? 1 : spring({ frame: frame - sec * fps, fps, config: { damping, stiffness: 170, mass: 0.7 } }));
+  // Lo que no sigue en el plano siguiente se va en los ultimos 0,3 s (cortarlo de
+  // golpe en el ultimo cuadro hacia que cada corte se sintiera entrecortado).
+  const shotEnd = interpolate(t, [Math.max(0, total - 0.3), total], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const fadeOut = (hasta: number | undefined) => (hasta === undefined ? 1 : interpolate(t, [Math.max(0, hasta - 0.45), hasta], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }));
   const font = theme.fontSans;
 
@@ -384,9 +392,11 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
 
   return (
     <AbsoluteFill style={{ background: "#173248", overflow: "hidden" }}>
-      {/* Nivel de teselas fijo por plano (el de su propio encuadre): durante
-          la deriva y el vuelo solo se estiran, no se piden otras a mitad. */}
-      <SatelliteTiles projection={proj} width={width} height={height} opacity={1} zoom={tileZoom(projectionFor(e.centro, e.km, width, height).scale())} />
+      {/* Nivel de teselas fijo por plano (el de su propio encuadre): durante la
+          deriva solo se estiran. En el vuelo, el nivel del plano anterior queda
+          abajo y el nuevo aparece encima: en el corte el satelite no cambia. */}
+      {tilesFrom !== null && tilesFrom !== tilesTo && t < vuelo && <SatelliteTiles projection={proj} width={width} height={height} opacity={1} zoom={tilesFrom} />}
+      <SatelliteTiles projection={proj} width={width} height={height} opacity={tilesFrom !== null && tilesFrom !== tilesTo && t < vuelo ? flightEase(t / vuelo) : 1} zoom={tilesTo} />
       <svg width={width} height={height} style={{ position: "absolute", inset: 0 }}>
         <rect width={width} height={height} fill="rgba(10,14,20,0.18)" />
         {/* Paises: placa en relieve (copia oscura abajo) que sube a su lugar. */}
@@ -413,7 +423,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
           const dash = { pathLength: 1, strokeDasharray: `${prog} 1` };
           if (r.tipo === "tubo") {
             return (
-              <g key={i} fill="none" strokeLinecap="round" strokeLinejoin="round">
+              <g key={i} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={shotEnd}>
                 <path d={d} stroke="#5b5b5b" strokeWidth={13 * k} {...dash} />
                 <path d={d} stroke={color} strokeWidth={8 * k} {...dash} />
                 <path d={d} stroke="rgba(255,255,255,0.7)" strokeWidth={2 * k} {...dash} />
@@ -421,7 +431,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
             );
           }
           return (
-            <g key={i} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={prog > 0 ? 1 : 0}>
+            <g key={i} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={prog > 0 ? shotEnd : 0}>
               <path d={d} stroke="#fff" strokeWidth={13 * k} {...dash} />
               <path d={d} stroke={color} strokeWidth={6 * k} pathLength={1} strokeDasharray={`${prog} 1`} />
               <path d={d} stroke="#fff" strokeWidth={2 * k} pathLength={1} strokeDasharray="0.012 0.02" opacity={0.6 * prog} />
@@ -468,7 +478,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
                 left: pt[0],
                 top: pt[1] + (labelBoxes[i]?.dy ?? 0),
                 transform: `translate(-50%,-50%) rotate(${l.giro ?? 0}deg) scale(${0.7 + 0.3 * s})`,
-                opacity: s,
+                opacity: s * shotEnd,
                 fontFamily: font,
                 fontWeight: 900,
                 fontSize: (l.tam ?? 34) * 1.3 * k,
@@ -492,7 +502,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
         const dx = (left ? -1 : 1) * 46 * k;
         const tilt = ((i * 37) % 7) - 3;
         return (
-          <div key={`l${i}`} style={{ position: "absolute", left: pt[0], top: pt[1], opacity: Math.min(1, s * 2) }}>
+          <div key={`l${i}`} style={{ position: "absolute", left: pt[0], top: pt[1], opacity: Math.min(1, s * 2) * shotEnd }}>
             <svg width={1} height={1} style={{ position: "absolute", overflow: "visible" }}>
               <circle r={9 * k * Math.min(1, s * 2)} fill="#fff" stroke="#000" strokeWidth={3 * k} />
               <path d={`M0,0 L${dx * 0.55 * line},${(-34 * k + (labelBoxes[i]?.dy ?? 0)) * line} L${dx * line},${(-34 * k + (labelBoxes[i]?.dy ?? 0)) * line}`} stroke="#fff" strokeWidth={3.5 * k} fill="none" style={{ filter: `drop-shadow(0 0 ${3 * k}px #000)` }} />
@@ -538,7 +548,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
               // Despues de entrar, flota suave (cada una a su ritmo).
               top: pt[1] + (iconBoxes[i]?.dy ?? 0) + Math.sin(t * 2.2 + i * 1.7) * 5 * k * s,
               transform: `translate(-50%,-50%) scale(${sc}) rotate(${Math.sin(t * 1.6 + i) * 3 * s}deg)`,
-              opacity: s,
+              opacity: s * shotEnd,
             }}
           >
             <Icon tipo={ic.tipo} k={k} />
@@ -556,7 +566,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
             top: 90 * k,
             width: "100%",
             textAlign: "center",
-            opacity: at(e.cifra.en) * fadeOut(e.cifra.hasta),
+            opacity: at(e.cifra.en) * fadeOut(e.cifra.hasta) * shotEnd,
             fontFamily: font,
             fontWeight: 900,
             color: e.cifra.color ?? "#7CE36B",
@@ -578,7 +588,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
             top: 60 * k,
             left: "50%",
             transform: `translateX(-50%) scale(${0.7 + 0.3 * at(e.anio.en)})`,
-            opacity: at(e.anio.en) * fadeOut(e.anio.hasta),
+            opacity: at(e.anio.en) * fadeOut(e.anio.hasta) * shotEnd,
             background: "#fff",
             borderRadius: 18 * k,
             padding: `${10 * k}px ${28 * k}px`,
@@ -604,7 +614,7 @@ export function MapCartoon({ spec, theme }: { spec: OverlaySpec; theme: Theme })
             left: "50%",
             maxWidth: width * 0.7,
             transform: `translateX(-50%) scale(${0.6 + 0.4 * at(e.bocadillo.en)})`,
-            opacity: at(e.bocadillo.en),
+            opacity: at(e.bocadillo.en) * shotEnd,
             background: "#fff",
             borderRadius: 26 * k,
             padding: `${18 * k}px ${34 * k}px`,
