@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchWithTimeout } from "../lib/http.js";
 import { withRetry } from "../lib/retry.js";
 import { WIKIMEDIA_UA, type VisualCandidate } from "../lib/documentalSources.js";
 import type { ShotClass } from "../lib/documentalStyles.js";
 import { epochLine, type ShotEpoch } from "../lib/epoca.js";
+import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
 
 // JUEZ VISUAL del formato documental: mismo criterio que el Revisor de
 // sceneReview.ts (vision + JSON), pero sobre MATERIAL REAL: mira una
@@ -16,8 +16,8 @@ import { epochLine, type ShotEpoch } from "../lib/epoca.js";
 // llama prueba la siguiente fuente si no hay ninguno aprobado.
 // Modelo: provider "anthropic", configuration.juez_model.
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static") as string | null;
+// ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
+const ffmpegPath = ffmpegForNetwork;
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
 

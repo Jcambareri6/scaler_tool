@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
+import { ffmpegForNetwork } from "./ffmpegBin.js";
 
 // HUELLA VISUAL (dHash, como rellenarPlan.js de MaV): dos fuentes distintas
 // suelen traer la MISMA foto (Commons y Openverse, o un clip de stock subido
@@ -8,8 +8,8 @@ import { createRequire } from "node:module";
 // Calibracion de MaV: mismo plano en dos momentos del mismo video 16-19,
 // planos distintos del mismo clip 28+, clips distintos 55+. Umbral 22.
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static") as string | null;
+// ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
+const ffmpegPath = ffmpegForNetwork;
 
 export const HASH_THRESHOLD = 22;
 // Por debajo de esta desviacion el cuadro es casi liso (negro, cielo): su
