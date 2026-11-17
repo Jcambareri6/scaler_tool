@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { uploadPublicFile } from "../lib/storage.js";
 import { WIKIMEDIA_UA } from "../lib/documentalSources.js";
+import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
 
 // QA final del documental (como MaV, qaPlan.js), sin modelo:
 // - medidas de cada plano: brillo medio < 22 = "oscuro", variacion < 5 = "vacio";
@@ -11,8 +11,8 @@ import { WIKIMEDIA_UA } from "../lib/documentalSources.js";
 //   origen, borde rojo en los que conviene revisar. Se sube a R2 y se muestra
 //   en el resumen del documental.
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static") as string | null;
+// ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
+const ffmpegPath = ffmpegForNetwork;
 
 export const DARK_LUMA = 22;
 export const FLAT_RANGE = 5;

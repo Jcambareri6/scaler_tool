@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
+import http from "node:http";
+import https from "node:https";
+import type { AddressInfo } from "node:net";
+import tls from "node:tls";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { uploadPublicFile } from "./storage.js";
 import type { VisualCandidate } from "./documentalSources.js";
+import { ffmpegForNetwork } from "./ffmpegBin.js";
 
 // METRAJE DE YOUTUBE (como MaV, youtubePlano.js): busqueda con yt-dlp, el
 // juez elige por miniatura + titulo, y recien ahi se baja SOLO un tramo del
@@ -13,16 +17,143 @@ import type { VisualCandidate } from "./documentalSources.js";
 // APAGADO salvo DOCUMENTAL_YOUTUBE=on (local, para probar). No habilitar en
 // produccion sin resolver el tema de derechos.
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static") as string | null;
+// ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
+const ffmpegPath = ffmpegForNetwork;
 
 const YTDLP = process.env.YTDLP_PATH?.trim() || "yt-dlp";
 // YouTube bloquea las IPs de datacenter (el worker de Hetzner): con un proxy
 // residencial (ej: http://usuario:clave@pr.oxylabs.io:7777) la busqueda y la
 // descarga salen por IPs de hogares. Sin la variable, conexion directa.
-function proxyArgs(): string[] {
+// Una SESION es una IP fija del proxy residencial durante unos minutos:
+// `{session}` en YTDLP_PROXY se reemplaza por un id nuevo (Oxylabs:
+// customer-USER-cc-US-sessid-{session}-sesstime-10). Sin `{session}`, la URL
+// tal cual (rotativa o de una sola IP).
+export function proxyForSession(session = newSession()): string | null {
   const proxy = process.env.YTDLP_PROXY?.trim();
+  if (!proxy) return null;
+  return proxy.replace(/\{session\}/g, session);
+}
+
+function newSession(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function proxyArgs(): string[] {
+  const proxy = proxyForSession();
   return proxy ? ["--proxy", proxy] : [];
+}
+
+// ---------- Rele local: ffmpeg no puede salir por el proxy ----------
+// ffmpeg no logra bajar https a traves de un proxy (prueba en el worker: "End
+// of file" con -http_proxy o la variable de entorno, mientras curl por el
+// mismo proxy da 200). Entonces ffmpeg lee de un servidor local que baja por
+// el proxy SOLO los bytes que ffmpeg pide (Range): se baja el tramo, no el
+// video entero. La URL de googlevideo esta atada a la IP que la pidio, asi que
+// el rele usa la MISMA sesion que yt-dlp.
+
+function tunnel(proxyUrl: string, host: string): Promise<tls.TLSSocket> {
+  const p = new URL(proxyUrl);
+  const auth = p.username ? `Basic ${Buffer.from(`${decodeURIComponent(p.username)}:${decodeURIComponent(p.password)}`).toString("base64")}` : undefined;
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: p.hostname,
+      port: Number(p.port || 80),
+      method: "CONNECT",
+      path: `${host}:443`,
+      headers: { Host: `${host}:443`, ...(auth ? { "Proxy-Authorization": auth } : {}) },
+      timeout: 30_000,
+    });
+    req.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(new Error(`proxy CONNECT ${res.statusCode}`));
+        return;
+      }
+      const secure = tls.connect({ socket, servername: host }, () => resolve(secure));
+      secure.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error("proxy CONNECT sin respuesta")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+// Levanta el rele en 127.0.0.1 (puerto libre) para una URL directa. Cada pedido
+// de ffmpeg abre su tunel y reenvia el Range. Devuelve la URL local y el cierre.
+export async function startRelay(directUrl: string, proxyUrl: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const target = new URL(directUrl);
+  const server = http.createServer((req, res) => {
+    tunnel(proxyUrl, target.hostname)
+      .then((socket) => {
+        const upstream = https.request(
+          {
+            host: target.hostname,
+            path: target.pathname + target.search,
+            method: req.method === "HEAD" ? "HEAD" : "GET",
+            headers: { ...(req.headers.range ? { Range: req.headers.range } : {}), "User-Agent": "Mozilla/5.0" },
+            createConnection: () => socket,
+            timeout: 60_000,
+          },
+          (up) => {
+            res.writeHead(up.statusCode ?? 502, {
+              ...(up.headers["content-type"] ? { "Content-Type": up.headers["content-type"] } : {}),
+              ...(up.headers["content-length"] ? { "Content-Length": up.headers["content-length"] } : {}),
+              ...(up.headers["content-range"] ? { "Content-Range": up.headers["content-range"] } : {}),
+              "Accept-Ranges": "bytes",
+            });
+            up.pipe(res);
+          }
+        );
+        upstream.on("timeout", () => upstream.destroy(new Error("googlevideo sin respuesta")));
+        upstream.on("error", () => res.destroy());
+        res.on("close", () => upstream.destroy());
+        upstream.end();
+      })
+      .catch(() => {
+        res.writeHead(502);
+        res.end();
+      });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/video.mp4`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+// Tramo por el proxy: hasta 3 sesiones (IPs). En cada una, yt-dlp pide la URL
+// directa del formato (si YouTube pide confirmar que no es un bot, otra IP) y
+// ffmpeg corta el tramo leyendo del rele.
+async function downloadSectionViaRelay(url: string, start: number, length: number, out: string): Promise<void> {
+  if (!ffmpegPath) throw new Error("ffmpeg no resolvio el binario");
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const proxy = proxyForSession()!;
+    let direct: string;
+    try {
+      const got = await run(YTDLP, [url, "-g", "-f", "bv*[height<=720][ext=mp4][protocol=https]/bv*[height<=720][protocol=https]", "--no-warnings", "--no-playlist", "--proxy", proxy], 90_000);
+      direct = got.trim().split(/\r?\n/)[0] ?? "";
+      if (!/^https:\/\//.test(direct)) throw new Error("yt-dlp no devolvio la URL directa");
+    } catch (err) {
+      lastError = err as Error;
+      // Bot check o error de red: otra IP. Otro error (video privado...): no insistir.
+      if (/Sign in to confirm|HTTP Error|timed out|tardo mas|Unable to download|proxy/i.test(lastError.message)) continue;
+      throw lastError;
+    }
+    const relay = await startRelay(direct, proxy);
+    try {
+      await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-ss", start.toFixed(2), "-i", relay.url, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], 180_000);
+      const info = await stat(out);
+      if (info.size >= 50_000) return;
+      lastError = new Error("el tramo bajado esta vacio");
+    } catch (err) {
+      lastError = err as Error;
+    } finally {
+      await relay.close();
+    }
+  }
+  throw lastError ?? new Error("no se pudo bajar el tramo por el proxy");
 }
 const SEARCH_RESULTS = 8;
 const MAX_VIDEO_SECONDS = 3 * 60 * 60;
@@ -297,6 +428,8 @@ function runCapture(cmd: string, args: string[], timeoutMs: number): Promise<str
 // YouTube corta a veces una descarga con 403/429 cuando se bajan muchos tramos
 // seguidos desde la misma IP: un reintento despues de una pausa suele pasar.
 async function downloadSection(url: string, start: number, length: number, out: string): Promise<void> {
+  // Con proxy, por el rele (ffmpeg no sale por el proxy).
+  if (process.env.YTDLP_PROXY?.trim()) return downloadSectionViaRelay(url, start, length, out);
   for (let attempt = 0; ; attempt++) {
     try {
       await downloadSectionOnce(url, start, length, out);

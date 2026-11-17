@@ -15,3 +15,7 @@ Thumbs.db
 
 .vscode/
 .idea/
+
+# Cookies de YouTube (credenciales): nunca al repo
+youtube-cookies.txt
+*cookies*.txt

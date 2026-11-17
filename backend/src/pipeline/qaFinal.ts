@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { shotContext, type JudgeShot } from "../director/visualJudge.js";
 import { WIKIMEDIA_UA } from "../lib/documentalSources.js";
+import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
 
 // QA FINAL CON VISION (como qaPlan.js de MaV): despues de llenar los planos,
 // el juez mira el video ENTERO en tandas (hasta 6 planos o 18 imagenes) con
@@ -14,8 +14,8 @@ import { WIKIMEDIA_UA } from "../lib/documentalSources.js";
 // el resultado en su lugar del video.
 // Falla abierto: si el modelo no contesta, el plano pasa.
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static") as string | null;
+// ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
+const ffmpegPath = ffmpegForNetwork;
 
 export const QA_BATCH_SHOTS = 6;
 export const QA_BATCH_IMAGES = 18;

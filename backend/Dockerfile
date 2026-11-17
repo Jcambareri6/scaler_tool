@@ -29,12 +29,17 @@ FROM node:20-bookworm-slim
 # Las librerias lib* son las que necesita el Chrome Headless Shell de
 # Remotion (motion/); las fuentes de los graficos vienen en su bundle.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends fontconfig fonts-liberation fonts-roboto ca-certificates \
+  && apt-get install -y --no-install-recommends fontconfig fonts-liberation fonts-roboto ca-certificates ffmpeg \
      libnss3 libdbus-1-3 libatk1.0-0 libgbm1 libasound2 libxrandr2 libxkbcommon0 libxfixes3 \
      libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 \
   && rm -rf /var/lib/apt/lists/*
+# ffmpeg de Debian para leer de la RED (juez, huella, QA, rele de YouTube): el
+# estatico de ffmpeg-static se cae con cualquier https en este contenedor
+# (Segmentation fault al resolver nombres). El render sigue con el estatico
+# (archivos locales). Ver src/lib/ffmpegBin.ts.
 ENV NODE_ENV=production \
-    WORK_DIR=/data/work
+    WORK_DIR=/data/work \
+    FFMPEG_NETWORK_PATH=/usr/bin/ffmpeg
 WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
@@ -44,10 +49,10 @@ COPY --from=build /app/motion ./motion
 # skills/montaje-documental/SKILL.md en runtime, ver montajista.ts::skillText).
 COPY skills ./skills
 # yt-dlp para el metraje de YouTube del documental (youtubeSource.ts, solo
-# con DOCUMENTAL_YOUTUBE=on). Binario oficial autonomo, version fijada: el
-# paquete de Debian es viejo y YouTube lo bloquea. Usa el ffmpeg de
-# ffmpeg-static (--ffmpeg-location).
-ADD https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux /usr/local/bin/yt-dlp
+# con DOCUMENTAL_YOUTUBE=on). Binario oficial autonomo, la ULTIMA version en
+# cada build: YouTube cambia sus controles seguido y una version vieja queda
+# bloqueada (MaV lo actualiza a diario). El paquete de Debian es viejo.
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /usr/local/bin/yt-dlp
 RUN chmod 755 /usr/local/bin/yt-dlp && mkdir -p /data/work && chown -R node:node /data
 USER node
 CMD ["node", "dist/worker.js"]
