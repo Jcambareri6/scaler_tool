@@ -36,6 +36,10 @@ import {
   type MotionClip,
 } from "../lib/motion.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
+import { getAudioDurationSeconds } from "../lib/audioDuration.js";
+// Documental: un clip corto se estira como mucho asi (camara lenta) antes
+// de sostener el ultimo cuadro. Nunca loop.
+const MAX_SLOW_MOTION = 1.35;
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
 import { buildWordAss, type CaptionCue } from "../lib/captions.js";
 import { isAdmin } from "../lib/accounts.js";
@@ -588,7 +592,12 @@ export function buildFfmpegArgsForBatch(
   // Formato documental: look del estilo, movimientos sin repetir y cortes de
   // zoom (lib/documentalRender.ts). `firstIndex` = posicion global del primer
   // segmento de la tanda (destello cada N planos, movimiento anterior).
-  documental: { style: DocumentalStyle; firstIndex: number } | null = null
+  documental: { style: DocumentalStyle; firstIndex: number } | null = null,
+  // Duracion REAL de cada clip descargado (null si no se pudo medir). En el
+  // documental un clip mas corto que su plano NUNCA hace loop (se veia el
+  // clip volver a empezar): camara lenta hasta x1,35 y, si igual falta, se
+  // sostiene el ultimo cuadro.
+  clipDurations: (number | null)[] = []
 ): { inputArgs: string[]; filterComplex: string } {
   let previousMotion: Motion | null = documental && documental.firstIndex > 0 ? motionFor(documental.firstIndex - 1, null) : null;
   const inputArgs: string[] = [];
@@ -650,7 +659,26 @@ export function buildFfmpegArgsForBatch(
           `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1${look}[v${i}]`
       );
     } else {
-      inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
+      const clipSeconds = clipDurations[i] ?? null;
+      const short = documental !== null && clipSeconds !== null && clipSeconds > 0.2 && clipSeconds < duration - 0.05;
+      // Sin loop en el documental: el clip entra una sola vez.
+      if (documental) inputArgs.push("-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
+      else inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
+      const slow = short ? Math.min(MAX_SLOW_MOTION, duration / clipSeconds!) : 1;
+      // Camara lenta (antes de fps, que rellena cuadros) y, al final, el
+      // ultimo cuadro sostenido + recorte exacto al largo del plano.
+      const stretch = documental
+        ? {
+            pre: slow > 1.001 ? `setpts=${slow.toFixed(4)}*PTS,` : "",
+            post: `,tpad=stop_mode=clone:stop_duration=${duration.toFixed(3)},trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS`,
+          }
+        : { pre: "", post: "" };
+      if (short) {
+        const frozen = Math.max(0, duration - clipSeconds! * slow);
+        console.log(
+          `[render_video] segmento ${(documental?.firstIndex ?? 0) + i}: clip de ${clipSeconds!.toFixed(2)} s para ${duration.toFixed(2)} s -> camara lenta x${slow.toFixed(2)}${frozen > 0.05 ? ` y ${frozen.toFixed(2)} s del ultimo cuadro` : ""} (sin loop)`
+        );
+      }
       // flags=lanczos (en vez del default bilineal de ffmpeg): sin esto, un
       // clip de stock con resolucion nativa menor a la de salida sale
       // notoriamente mas blando que sus escenas vecinas al escalarlo hacia
@@ -665,8 +693,8 @@ export function buildFfmpegArgsForBatch(
         docChain = `${cuts},${lookFilter(documental.style.look, documental.firstIndex + i)}`;
       }
       filterParts.push(
-        `[${i}:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
-          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${docChain}[v${i}]`
+        `[${i}:v]${stretch.pre}scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
+          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${docChain}${stretch.post}[v${i}]`
       );
     }
   });
@@ -1224,13 +1252,18 @@ async function realRender(
         return clipPath;
       });
       if (downloadError) throw downloadError;
+      // Duracion real de cada clip (documental): para no hacer loop nunca.
+      const clipDurations = documentalStyle
+        ? await Promise.all(batchSegments.map((segment, j) => (segment.isImage ? Promise.resolve(null) : getAudioDurationSeconds(batchClipPaths[j]!))))
+        : [];
 
       const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(
         batchSegments,
         batchClipPaths,
         transitionsEnabled,
         outputSize,
-        documentalStyle ? { style: documentalStyle, firstIndex: batchStart } : null
+        documentalStyle ? { style: documentalStyle, firstIndex: batchStart } : null,
+        clipDurations
       );
       const batchOutputPath = path.join(workDir, `batch-${b}.mp4`);
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchWithTimeout } from "../lib/http.js";
@@ -8,6 +8,7 @@ import { WIKIMEDIA_UA, type VisualCandidate } from "../lib/documentalSources.js"
 import type { ShotClass } from "../lib/documentalStyles.js";
 import { epochLine, type ShotEpoch } from "../lib/epoca.js";
 import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
+import { youtubeContactSheet } from "../lib/youtubeSource.js";
 
 // JUEZ VISUAL del formato documental: mismo criterio que el Revisor de
 // sceneReview.ts (vision + JSON), pero sobre MATERIAL REAL: mira una
@@ -20,6 +21,25 @@ import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
 const ffmpegPath = ffmpegForNetwork;
 
 export const JUDGE_MODEL = "claude-sonnet-5-5";
+// Reserva del juez y del QA (MaV: el 429 pasa a otro modelo, el 404 al alias):
+// si Sonnet esta saturado, limitado o retirado, Opus. Solo Claude. Sin esto,
+// con Sonnet caido no entraba ningun YouTube y el QA dejaba pasar todo.
+export const JUDGE_FALLBACK_MODEL = process.env.DOCUMENTAL_JUDGE_FALLBACK?.trim() || "claude-opus-5-5";
+
+function retriable(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  return status === 429 || status === 404 || status === 500 || status === 503 || status === 529 || /overloaded|rate limit|not_found/i.test(String((err as Error).message));
+}
+
+export async function claudeJudge(client: Anthropic, params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
+  try {
+    return await client.messages.stream(params).finalMessage();
+  } catch (err) {
+    if (!retriable(err) || params.model === JUDGE_FALLBACK_MODEL) throw err;
+    console.warn(`[juez] ${params.model} fallo (${(err as { status?: number }).status ?? "?"}): pasa a ${JUDGE_FALLBACK_MODEL}`);
+    return await client.messages.stream({ ...params, model: JUDGE_FALLBACK_MODEL }).finalMessage();
+  }
+}
 
 export type QaCode = "ok" | "generico" | "equivocado" | "persona" | "epoca" | "texto" | "oscuro" | "marca_agua" | "ficcion" | "sin_ver";
 
@@ -37,21 +57,37 @@ export interface JudgeShot {
   obligatorio?: string[];
   lugarRotulo?: string;
   epoca?: ShotEpoch;
+  // Donde pasa la historia del video ("Baja California, México"), una vez por
+  // video (documentalPipeline.ts::storyPlace). Sin esto el juez aceptaba
+  // Alabama Hills o una roca de Islandia como "ambiente" de un video de México.
+  lugarHistoria?: string;
   // "tema": rescate (como MaV): acepta material del tema del video si el
   // lugar, el pais y la epoca son los de la historia; no rechaza por generico.
   modo?: "tema";
   tema?: string;
 }
 
+export type LogoCorner = "tl" | "tr" | "bl" | "br";
+
 export interface CandidateVerdict {
   index: number;
   code: QaCode;
   reason: string;
+  // YouTube con hoja de cuadros: el cuadro (1-16) que mejor muestra la frase.
+  frame?: number;
+  // Logo CHICO de canal en una esquina: se recorta (MaV, crop al 84 %).
+  logoCorner?: LogoCorner;
+  // Todos los cuadros de la hoja que muestran lo de la frase (MaV: nota por
+  // cuadro). Si el primero no da un tramo limpio se prueba el siguiente, y el
+  // rescate saca de aca "otro momento" en vez de probar a ciegas.
+  goodFrames?: number[];
 }
 
 export interface JudgeResult {
   chosen: number | null;
   verdicts: CandidateVerdict[];
+  // Por que eligio ese (o ninguno), en palabras del juez: se guarda en el asset.
+  justification?: string;
 }
 
 const CODES: QaCode[] = ["ok", "generico", "equivocado", "persona", "epoca", "texto", "oscuro", "marca_agua", "ficcion"];
@@ -81,7 +117,11 @@ Una foto MODERNA de producto, catalogo, estudio o stock sobre un hecho HISTORICO
 "Era" y "TODAY": usalos para el codigo epoca. Sin linea Era, no marques epoca. Antes del cine (la linea lo dice) valen ruinas, estatuas, cuadros de la epoca y reconstrucciones si no se ve nada de hoy; actores con ropa de epoca en una reconstruccion documental no son epoca.
 No apruebes por cortesia: si ninguno sirve, "elegido": null.
 
-Responde SOLO con JSON: {"elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto"}]}`;
+En CADA candidato contesta dos chequeos, mirando todos sus cuadros: "camara": true si alguien mira, posa o habla a camara (vlogger, selfie, presentador, turista posando, youtuber); "marca": true si hay una MARCA DE AGUA de verdad: de una agencia de stock, un logo o texto semitransparente encima de la imagen, un logo grande o en el centro, o el nombre de un canal escrito sobre la imagen. Cualquiera de los dos en true descarta el candidato. "logo_esquina": si lo UNICO que hay es un logo CHICO de canal (menos de un sexto del ancho) en UNA esquina, la esquina: "tl" (arriba izquierda), "tr" (arriba derecha), "bl" (abajo izquierda) o "br" (abajo derecha); si no, null. Ese logo se recorta y el clip sirve: no lo cuentes como marca.
+
+Antes de los veredictos escribi "justificacion": 1 o 2 frases con el POR QUE de tu decision (por que elegiste ese candidato frente a los otros, o por que ninguno sirve y que tendria que mostrar la imagen). Queda guardada para revisar el video.
+
+Responde SOLO con JSON: {"justificacion": "...", "elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto", "camara": true|false, "marca": true|false, "logo_esquina": null|"tl"|"tr"|"bl"|"br", "cuadro": numero, "cuadros_ok": [numeros] (estos dos solo en hojas de cuadros de YouTube)}]}`;
 
 // JUEZ DE TEMA (rescate, como el prompt "tema" de fotoTema en MaV): el plano
 // ya no tiene una imagen especifica, asi que la pregunta CAMBIA: no "¿es la
@@ -101,9 +141,16 @@ Codigos por candidato:
 - persona: se ve claramente a otra persona presentada como protagonista.
 - oscuro: muy oscuro, borroso o de muy baja calidad.
 - generico: SOLO si no tiene nada que ver con la historia (una oficina moderna cualquiera, un paisaje de otro lado).
-Rechaza mapas, diagramas y escenas modernas sin relacion. Si ninguno pertenece a la historia, "elegido": null.
+Rechaza mapas, diagramas y escenas modernas sin relacion.
+Rechaza (persona) gente hablando o posando a camara: vloggers, selfies, presentadores, turistas como protagonistas. Un documental no muestra a los youtubers del video de origen.
+Rechaza (equivocado) OTRO sitio aunque sea de la misma zona: si la frase nombra un lugar o una cosa concreta (Campo Alaska, la cuesta, las cruces), unas ruinas, una mina, un tunel o un edificio que NO son eso no sirven. Material del tema sirve solo cuando la frase no nombra nada concreto.
+Si ninguno pertenece a la historia, "elegido": null.
 
-Responde SOLO con JSON: {"elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto"}]}`;
+En CADA candidato contesta dos chequeos, mirando todos sus cuadros: "camara": true si alguien mira, posa o habla a camara (vlogger, selfie, presentador, turista posando, youtuber); "marca": true si hay una MARCA DE AGUA de verdad: de una agencia de stock, un logo o texto semitransparente encima de la imagen, un logo grande o en el centro, o el nombre de un canal escrito sobre la imagen. Cualquiera de los dos en true descarta el candidato. "logo_esquina": si lo UNICO que hay es un logo CHICO de canal (menos de un sexto del ancho) en UNA esquina, la esquina: "tl" (arriba izquierda), "tr" (arriba derecha), "bl" (abajo izquierda) o "br" (abajo derecha); si no, null. Ese logo se recorta y el clip sirve: no lo cuentes como marca.
+
+Antes de los veredictos escribi "justificacion": 1 o 2 frases con el POR QUE de tu decision (por que elegiste ese candidato frente a los otros, o por que ninguno sirve y que tendria que mostrar la imagen). Queda guardada para revisar el video.
+
+Responde SOLO con JSON: {"justificacion": "...", "elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto", "camara": true|false, "marca": true|false, "logo_esquina": null|"tl"|"tr"|"bl"|"br", "cuadro": numero, "cuadros_ok": [numeros] (estos dos solo en hojas de cuadros de YouTube)}]}`;
 
 // Tope por ffmpeg: leyendo un clip remoto, si el CDN deja de responder
 // (paso con cdn.pixabay.com) ffmpeg espera para siempre y traba el plano.
@@ -131,10 +178,43 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
+// Duracion de un video local (linea "Duration" de ffmpeg).
+function localDuration(file: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (!ffmpegPath) return resolve(null);
+    const proc = spawn(ffmpegPath, ["-hide_banner", "-i", file], { windowsHide: true });
+    let err = "";
+    proc.stderr.on("data", (c) => (err += c.toString()));
+    proc.on("error", () => resolve(null));
+    proc.on("close", () => {
+      const m = err.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+      resolve(m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null);
+    });
+  });
+}
+
 // Miniatura JPEG de 480 px de ancho: la del proveedor si hay, si no tres
 // cuadros del video (20/50/80% de los primeros segundos) en una tira.
 export async function candidateThumbnail(candidate: VisualCandidate, workDir: string, key: string): Promise<string | null> {
   const out = path.join(workDir, `${key}.jpg`);
+  // YouTube: 16 cuadros reales del video (no la tapa). Si no se puede (bot
+  // check, video sin formato chico), la miniatura de siempre.
+  // Video de la biblioteca: la hoja ya esta armada (no se vuelve a escanear).
+  if (candidate.sheet_path && candidate.sheet_times?.length) {
+    const copied = await copyFile(candidate.sheet_path, out).then(() => true).catch(() => false);
+    if (copied) return out;
+  }
+  if (candidate.provider === "youtube" && /youtube.com|youtu.be/.test(candidate.url)) {
+    const sheet = await youtubeContactSheet(candidate, workDir, key).catch((err) => {
+      console.warn(`[juez] sin hoja de cuadros para youtube:${candidate.external_id}: ${(err as Error).message.slice(0, 160)}`);
+      return null;
+    });
+    if (sheet) {
+      candidate.sheet_times = sheet.times;
+      return sheet.path;
+    }
+    delete candidate.sheet_times;
+  }
   try {
     const primary = candidate.thumb_url ?? (candidate.type === "IMAGE" ? candidate.url : null);
     if (primary) {
@@ -156,9 +236,29 @@ export async function candidateThumbnail(candidate: VisualCandidate, workDir: st
       await rm(raw, { force: true });
       return out;
     }
-    // Video sin miniatura: cuadros a 1, 3 y 6 s (o repartidos en la duracion).
-    const span = Math.min(candidate.duration_seconds ?? 8, 8);
     const remote = /^https?:\/\//.test(candidate.url);
+    // Clip LOCAL ya cortado (tramo de YouTube, 2da revision): 4 cuadros al 3,
+    // 35, 65 y 97 % del clip ENTERO (MaV). Antes miraba solo los primeros 8 s
+    // y en un tramo de 12 s no veia el final.
+    if (!remote) {
+      const dur = await localDuration(candidate.url);
+      if (dur && dur > 0.5) {
+        const parts: string[] = [];
+        for (const [k, f] of [0.03, 0.35, 0.65, 0.97].entries()) {
+          const part = path.join(workDir, `${key}-v${k}.jpg`);
+          await runFfmpeg(["-y", "-ss", (dur * f).toFixed(2), "-i", candidate.url, "-frames:v", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2", "-q:v", "4", part]).catch(() => undefined);
+          if (await stat(part).then((s) => s.size > 500).catch(() => false)) parts.push(part);
+        }
+        if (parts.length >= 2) {
+          await runFfmpeg(["-y", ...parts.flatMap((p) => ["-i", p]), "-filter_complex", `${parts.map((_, i) => `[${i}:v]`).join("")}hstack=inputs=${parts.length}`, "-frames:v", "1", "-q:v", "4", out]);
+          await Promise.all(parts.map((p) => rm(p, { force: true })));
+          return out;
+        }
+        await Promise.all(parts.map((p) => rm(p, { force: true })));
+      }
+    }
+    // Video remoto sin miniatura: cuadros a 1, 3 y 6 s (o repartidos en la duracion).
+    const span = Math.min(candidate.duration_seconds ?? 8, 8);
     await runFfmpeg([
       "-y",
       // Corta la lectura si el servidor no manda nada en 15 s (microsegundos).
@@ -207,14 +307,28 @@ export function parseVerdict(raw: Record<string, unknown>, count: number, seen: 
     const index = Number(v.i) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= count) continue;
     const code = (CODES as string[]).includes(String(v.codigo)) ? (String(v.codigo) as QaCode) : "generico";
-    verdicts.push({ index, code, reason: String(v.motivo ?? "").slice(0, 200) });
+    // Chequeos que hace cumplir el codigo: el modelo los marcaba y elegia igual.
+    if (v.camara === true) { verdicts.push({ index, code: "persona", reason: `alguien a camara (vlogger/selfie/presentador): ${String(v.motivo ?? "").slice(0, 150)}` }); continue; }
+    if (v.marca === true) { verdicts.push({ index, code: "marca_agua", reason: `marca de agua o logo de canal: ${String(v.motivo ?? "").slice(0, 150)}` }); continue; }
+    const corner = ["tl", "tr", "bl", "br"].includes(String(v.logo_esquina)) ? (String(v.logo_esquina) as LogoCorner) : undefined;
+    const frame = Number(v.cuadro);
+    const goodFrames = Array.isArray(v.cuadros_ok) ? [...new Set((v.cuadros_ok as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 16))] : [];
+    verdicts.push({
+      index,
+      code,
+      reason: String(v.motivo ?? "").slice(0, 200),
+      ...(Number.isInteger(frame) && frame >= 1 && frame <= 16 ? { frame } : {}),
+      ...(goodFrames.length ? { goodFrames } : {}),
+      ...(corner ? { logoCorner: corner } : {}),
+    });
   }
   const chosenRaw = raw.elegido;
   let chosen = chosenRaw === null || chosenRaw === undefined ? null : Number(chosenRaw) - 1;
   // Solo vale un candidato que el juez vio y no rechazo.
   if (chosen !== null && (!Number.isInteger(chosen) || chosen < 0 || chosen >= count || !seen.has(chosen))) chosen = null;
   if (chosen !== null && verdicts.some((v) => v.index === chosen && v.code !== "ok")) chosen = null;
-  return { chosen, verdicts };
+  const justification = typeof raw.justificacion === "string" ? raw.justificacion.trim().slice(0, 400) : "";
+  return { chosen, verdicts, ...(justification ? { justification } : {}) };
 }
 
 function clip(text: string, max: number): string {
@@ -228,6 +342,11 @@ function clip(text: string, max: number): string {
 export function shotContext(shot: JudgeShot): string {
   const lines: string[] = [];
   if (shot.titulo) lines.push(`Documental: "${clip(shot.titulo, 120)}".`);
+  if (shot.lugarHistoria) {
+    lines.push(
+      `La historia pasa en: ${clip(shot.lugarHistoria, 120)}. Una imagen de OTRO pais o region (paisaje, ciudad, gente, carteles de otro lado) es "equivocado", aunque se parezca, salvo que la frase hable justamente de ese otro lugar.`
+    );
+  }
   lines.push(`Plano: clase ${shot.clase}. Sujeto: ${shot.sujeto || "(sin sujeto)"}.`);
   if (shot.obligatorio?.length) lines.push(`Tiene que verse: ${shot.obligatorio.join(", ")}.`);
   if (shot.lugarRotulo) lines.push(`Rotulo de lugar en pantalla: "${shot.lugarRotulo}".`);
@@ -262,16 +381,34 @@ export async function judgeCandidates(
   for (const [i, thumb] of thumbs.entries()) {
     if (!thumb) continue;
     const c = candidates[i]!;
-    content.push({ type: "text", text: `Candidato ${i + 1} (${c.type === "VIDEO" ? "video" : "foto"}, ${c.provider}${c.title ? `, "${c.title.slice(0, 80)}"` : ""}):` });
+    const youtubeNote =
+      c.provider !== "youtube" || !/youtube.com|youtu.be/.test(c.url)
+        ? ""
+        : c.sheet_times?.length
+          ? `. Es una HOJA de ${c.sheet_times.length} cuadros REALES del video, en orden de tiempo (de izquierda a derecha y de arriba abajo). Si lo elegis, pone en "cuadro" el numero del cuadro que mejor muestra lo que dice la voz (el clip arranca ahi) y en "cuadros_ok" TODOS los cuadros que tambien lo muestran, sin gente a camara ni marcas`
+          : ". Es la MINIATURA (la tapa) del video: puede tener titulos, flechas o montajes que el video no tiene; no lo rechaces por el texto de la tapa, juzga si el video muestra el sujeto";
+    content.push({ type: "text", text: `Candidato ${i + 1} (${c.type === "VIDEO" ? "video" : "foto"}, ${c.provider}${c.title ? `, "${c.title.slice(0, 80)}"` : ""}${youtubeNote}):` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await readFile(thumb)).toString("base64") } });
   }
   content.push({ type: "text", text: shotContext(shot) });
   try {
-    const message = await client.messages.stream({ model, max_tokens: 8000, system: shot.modo === "tema" ? SYSTEM_TEMA : SYSTEM, messages: [{ role: "user", content }] }).finalMessage();
+    const message = await claudeJudge(client, { model, max_tokens: 8000, system: shot.modo === "tema" ? SYSTEM_TEMA : SYSTEM, messages: [{ role: "user", content }] });
     usage.input = (usage.input ?? 0) + message.usage.input_tokens;
     usage.output = (usage.output ?? 0) + message.usage.output_tokens;
     const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
     const result = parseVerdict(parseJson(text), candidates.length, seen);
+    // El logo de esquina solo se puede recortar en un video de YouTube que
+    // todavia no se bajo. En una foto, un stock o el clip ya cortado (2da
+    // revision): es una marca y se descarta.
+    for (const v of result.verdicts) {
+      const c = candidates[v.index];
+      const croppable = c?.provider === "youtube" && /youtube.com|youtu.be/.test(c.url);
+      if (v.logoCorner && !croppable) {
+        v.code = "marca_agua";
+        v.reason = `logo de canal en la esquina: ${v.reason}`.slice(0, 200);
+        if (result.chosen === v.index) result.chosen = null;
+      }
+    }
     // Los que no se pudieron ver quedan marcados.
     for (const i of candidates.keys()) {
       if (!seen.has(i)) result.verdicts.push({ index: i, code: "sin_ver", reason: "no se pudo ver" });

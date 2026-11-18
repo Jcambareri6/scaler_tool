@@ -11,6 +11,7 @@ import { envInt } from "./lib/env.js";
 import { forgetJobProgress, reportJobProgress } from "./lib/jobProgress.js";
 import type { JobQueueName } from "./lib/jobQueue.js";
 import type { Job } from "./types/shared/typeShared.js";
+import { updateYtDlp, youtubeEnabled } from "./lib/youtubeSource.js";
 
 // Worker de la cola de trabajos pesados (ver migracion-worker-render.md).
 // Corre en el servidor de render (Docker, ver docker-compose.worker.yml),
@@ -370,6 +371,10 @@ async function main() {
   await cleanLeftoverWorkDirs();
   await pruneToolExecutions();
   setInterval(() => void pruneToolExecutions(), 86_400_000).unref();
+  if (youtubeEnabled()) {
+    void updateYtDlp();
+    setInterval(() => void updateYtDlp(), 86_400_000).unref();
+  }
   await recoverOwnJobs();
   await Promise.all([pollQueue("render"), pollQueue("pre_render"), staleLoop()]);
 }

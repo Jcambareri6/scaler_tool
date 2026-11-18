@@ -30,3 +30,18 @@ for (const id of ["documental", "nocturno"]) {
   console.log(`${id}: OK duracion ${probe} (esperada 00:00:14)`);
 }
 console.log(dir);
+
+// Clip de 5 s en un plano de 7 s: NUNCA loop (camara lenta y ultimo cuadro).
+// Con loop, el cuadro de los 5,5 s es igual al de los 0,5 s (PSNR infinito).
+{
+  const one: RenderSegment[] = [{ storageKey: "b", start: 0, end: 7, duration: 7, isImage: false }];
+  for (const [label, durations] of [["sin medir (loop viejo)", []], ["medido", [5]]] as const) {
+    const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(one, [path.join(dir, "b.mp4")], false, { width: 640, height: 360 }, { style: getDocumentalStyle("documental"), firstIndex: 0 }, [...durations]);
+    const out = path.join(dir, `corto-${durations.length}.mp4`);
+    run([...inputArgs, "-filter_complex", filterComplex, "-map", "[outv]", "-c:v", "libx264", "-preset", "ultrafast", "-y", out]);
+    const dur = spawnSync(ffmpeg, ["-i", out], { encoding: "utf-8" }).stderr.match(/Duration: ([\d:.]+)/)?.[1];
+    const psnr = spawnSync(ffmpeg, ["-hide_banner", "-ss", "0.5", "-i", out, "-ss", "5.5", "-i", out, "-frames:v", "1", "-lavfi", "psnr", "-f", "null", "-"], { encoding: "utf-8" }).stderr.match(/average:(\S+)/)?.[1];
+    console.log(`clip corto ${label}: duracion ${dur}, PSNR 0,5s vs 5,5s = ${psnr}`);
+    if (durations.length && psnr === "inf") throw new Error("hizo loop");
+  }
+}

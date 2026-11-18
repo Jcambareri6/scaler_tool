@@ -87,28 +87,45 @@ export interface ShotEpoch {
 // Epoca de cada plano, en orden del video. `texts[i]` es lo que dice la voz
 // en el plano i; `planYears[i]`, el anio que escribio el montajista (si hay).
 // Regla: el anio de la frase; si no dice, el del plan (si es historico y no
-// cae muy despues del relato); si no, el ultimo anio dicho antes; si no, el
-// primero que se dice despues. "Hoy" gana y deja el plano sin anio.
+// cae muy despues del relato); si no, el ultimo anio dicho hace POCOS planos;
+// si no, el que se dice en los planos INMEDIATOS de despues. "Hoy" gana y
+// deja el plano sin anio. Sin anio cerca, el plano queda SIN epoca: el juez
+// no marca "epoca". Antes el anio se arrastraba sin limite (La Rumorosa: los
+// 23 primeros planos, que hablan de hoy, quedaron "Era: 1915" porque recien
+// el plano 26 decia 1915, y el juez rechazo tomas actuales por epoca).
+export const INHERIT_BACK = 4;
+// 0: un plano NUNCA toma el anio que se dice DESPUES (Caminito del Rey: "una
+// pasarela de un metro que atraviesa el desfiladero" quedo 1901 y el QA
+// rechazo tomas actuales que servian). Solo hereda el ultimo anio ya dicho.
+export const INHERIT_AHEAD = 0;
 export function shotEpochs(texts: string[], planYears: (number | undefined)[] = []): ShotEpoch[] {
   const own = texts.map((t) => yearOf(t));
   const firstAfter: (number | undefined)[] = new Array(texts.length);
-  let next: number | undefined;
-  for (let i = texts.length - 1; i >= 0; i--) {
-    firstAfter[i] = next;
-    if (own[i] !== undefined) next = own[i];
+  for (let i = 0; i < texts.length; i++) {
+    for (let j = i + 1; j <= i + INHERIT_AHEAD && j < texts.length; j++) {
+      if (own[j] !== undefined) {
+        firstAfter[i] = own[j];
+        break;
+      }
+    }
   }
   const out: ShotEpoch[] = [];
   let lastSaid: number | undefined;
+  let lastSaidAt = -Infinity;
   texts.forEach((text, i) => {
     const hoy = isToday(text);
     let anio: number | undefined;
     if (!hoy) {
       const plan = planYears[i];
-      const story = lastSaid ?? firstAfter[i];
+      const recent = i - lastSaidAt <= INHERIT_BACK ? lastSaid : undefined;
+      const story = recent ?? firstAfter[i];
       const planOk = plan !== undefined && plan < HISTORIC_BEFORE && (story === undefined || plan - story <= PLAN_EPOCH_MAX_AHEAD);
-      anio = own[i] ?? (planOk ? plan : undefined) ?? lastSaid ?? firstAfter[i];
+      anio = own[i] ?? (planOk ? plan : undefined) ?? recent ?? firstAfter[i];
     }
-    if (own[i] !== undefined) lastSaid = own[i];
+    if (own[i] !== undefined) {
+      lastSaid = own[i];
+      lastSaidAt = i;
+    }
     out.push({
       ...(anio !== undefined ? { anio } : {}),
       hoy,

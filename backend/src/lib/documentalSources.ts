@@ -31,6 +31,16 @@ export interface VisualCandidate {
   duration_seconds?: number;
   // YouTube: duracion del video original (el rescate baja otros momentos).
   video_seconds?: number;
+  // YouTube: segundos de cada cuadro de la hoja que vio el juez (16 cuadros
+  // reales del video, como el escaneo de MaV). El juez elige el cuadro y el
+  // tramo se baja desde ahi.
+  sheet_times?: number[];
+  // YouTube: segundo del video original donde arranca el tramo (credito con &t=).
+  yt_start?: number;
+  // YouTube de la biblioteca del video: la hoja de 16 cuadros ya armada.
+  sheet_path?: string;
+  // YouTube: esquina con un logo chico de canal; el tramo se recorta sin ella.
+  logo_corner?: "tl" | "tr" | "bl" | "br";
   width?: number;
   height?: number;
   title?: string;
@@ -46,6 +56,12 @@ export interface VisualCandidate {
 export const WIKIMEDIA_UA = "ScalerTool/1.0 (https://github.com/jcambareri6/scaler_tool)";
 const RESULTS = envInt("DOCUMENTAL_RESULTS_PER_SOURCE", 4);
 const MIN_IMAGE_WIDTH = 900;
+// La foto PRINCIPAL de una entidad en Wikidata (P18), casi siempre el retrato
+// de la persona: sin el minimo de 900 px (MaV no pone minimo). Los retratos
+// de Esteban Cantu (609 px) y Abelardo L. Rodriguez (196 px) se descartaban y
+// el plano de la persona terminaba en niebla o en otra cosa. El render la
+// muestra entera sobre su copia desenfocada.
+const MIN_ENTITY_IMAGE_WIDTH = 150;
 // Mas ancho que esto es una panoramica: en 16:9 queda una franja.
 const MAX_ASPECT = 2.4;
 // archive.org: archivos de mas de esto no se usan (descarga y copia lentas).
@@ -131,10 +147,10 @@ interface CommonsPage {
 
 const BAD_COMMONS_TITLE = /\b(map|mapa|logo|icon|coat of arms|escudo|flag|bandera|diagram|diagrama|chart|graph|poster|cartel|screenshot|signature|firma|seal|stamp|svg)\b/i;
 
-function commonsCandidate(page: CommonsPage, query: string): VisualCandidate | null {
+function commonsCandidate(page: CommonsPage, query: string, minWidth = MIN_IMAGE_WIDTH): VisualCandidate | null {
   const info = page.imageinfo?.[0];
   if (!info || !/^image\/(jpeg|png|webp)/.test(info.mime)) return null;
-  if (info.width < MIN_IMAGE_WIDTH || info.width / info.height > MAX_ASPECT) return null;
+  if (info.width < minWidth || info.width / info.height > MAX_ASPECT) return null;
   // Mapas, diagramas, logos, escudos, banderas, carteles y capturas no son
   // fotos del tema (MaV: MALO_TITULO).
   if (BAD_COMMONS_TITLE.test(page.title ?? "")) return null;
@@ -185,7 +201,7 @@ export async function searchCommonsImages(query: string): Promise<VisualCandidat
     .slice(0, RESULTS);
 }
 
-async function commonsFile(fileName: string, query: string): Promise<VisualCandidate | null> {
+async function commonsFile(fileName: string, query: string, minWidth = MIN_IMAGE_WIDTH): Promise<VisualCandidate | null> {
   const params = new URLSearchParams({
     action: "query",
     format: "json",
@@ -198,7 +214,7 @@ async function commonsFile(fileName: string, query: string): Promise<VisualCandi
   });
   const data = await wikimediaJson<{ query?: { pages?: CommonsPage[] } }>(`${COMMONS_API}?${params}`);
   const page = data.query?.pages?.[0];
-  return page ? commonsCandidate(page, query) : null;
+  return page ? commonsCandidate(page, query, minWidth) : null;
 }
 
 // ---------- Wikidata (foto de una persona, cosa o lugar con nombre propio) ----------
@@ -217,7 +233,7 @@ export async function searchWikidataImage(entity: string, language = "es"): Prom
     );
     const file = claims.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
     if (!file) continue;
-    const candidate = await commonsFile(file, entity);
+    const candidate = await commonsFile(file, entity, MIN_ENTITY_IMAGE_WIDTH);
     if (candidate) results.push({ ...candidate, provider: "wikidata", external_id: hit.id });
     if (results.length >= 2) break;
   }

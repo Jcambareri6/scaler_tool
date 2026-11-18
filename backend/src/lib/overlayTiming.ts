@@ -203,7 +203,7 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
       if (supportedTypes && !supportedTypes.includes(spec.type)) continue;
       const narrated = spec.start_seconds ?? sceneStart + (spec.anchor ?? 0) * (sceneEnd - sceneStart);
       const { start_seconds: _s, anchor: _a, ...clean } = spec as TimedOverlay;
-      if (FULL_SCENE_TYPES.includes(spec.type)) {
+      if (FULL_SCENE_TYPES.includes(spec.type) || spec.full) {
         fullScene.push({ spec: clean, start: sceneStart, end: sceneEnd });
         continue;
       }

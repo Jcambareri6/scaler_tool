@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
-import { shotContext, type JudgeShot } from "../director/visualJudge.js";
+import { claudeJudge, shotContext, type JudgeShot } from "../director/visualJudge.js";
 import { WIKIMEDIA_UA } from "../lib/documentalSources.js";
 import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
+import { mapWithConcurrency } from "../lib/concurrency.js";
+import { envInt } from "../lib/env.js";
+const QA_PARALLEL = envInt("DOCUMENTAL_QA_PARALLEL", 3);
 
 // QA FINAL CON VISION (como qaPlan.js de MaV): despues de llenar los planos,
 // el juez mira el video ENTERO en tandas (hasta 6 planos o 18 imagenes) con
@@ -49,6 +52,10 @@ export interface QaVerdict {
   hoy: boolean | null;
   habla: boolean | null;
   lugar: boolean | null;
+  // Chequeos que el CODIGO hace cumplir (el modelo ignoraba las reglas):
+  // alguien a camara (vlogger, selfie, presentador) o marca de agua / logo.
+  camara: boolean | null;
+  marca: boolean | null;
   por: string;
 }
 
@@ -87,10 +94,12 @@ Extra fields per shot:
 - sitio: true if obra is a place/building, false if it is an object.
 - hoy: true if something clearly from today is visible (tourists, railings, cars, phones...).
 - habla: true if someone talks to camera or sits on a set with microphones.
+- camara: true if ANY frame shows a person looking, posing or talking to the camera: a vlogger, a selfie, a host, a tourist posing, a youtuber. Never allowed in this documentary.
+- marca: true if ANY frame has a watermark (a stock agency mark, a semi-transparent logo or text over the picture) or a TV / YouTube channel logo or name. Never allowed.
 - lugar: ONLY if the shot has a "Place label": true if a viewer could recognise THAT place in the picture; anything that could be anywhere (open water, waves, an underwater scene, a generic street) is false. Otherwise null.
 
 Answer ONLY with a JSON array, one object per shot:
-[{"plano": <number>, "codigo": "ok|generico|equivocado|persona|epoca|presentador|texto|oscuro|roto|borroso|vacio", "stock": false, "obra": null, "sitio": false, "hoy": false, "habla": false, "lugar": null, "por": "<max 12 words>"}]`;
+[{"plano": <number>, "codigo": "ok|generico|equivocado|persona|epoca|presentador|texto|oscuro|roto|borroso|vacio", "stock": false, "obra": null, "sitio": false, "hoy": false, "habla": false, "camara": false, "marca": false, "lugar": null, "por": "<max 12 words>"}]`;
 
 function ffmpeg(args: string[], timeoutMs = 45_000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -114,6 +123,10 @@ function ffmpeg(args: string[], timeoutMs = 45_000): Promise<void> {
   });
 }
 
+async function written(file: string): Promise<boolean> {
+  return stat(file).then((s) => s.size > 500).catch(() => false);
+}
+
 // Cuadros del plano: 1 de una foto (512 px), 3 de un clip (15/50/85 %, 448 px).
 export async function qaFrames(item: QaItem, workDir: string): Promise<string[]> {
   const remote = /^https?:\/\//.test(item.url);
@@ -122,7 +135,7 @@ export async function qaFrames(item: QaItem, workDir: string): Promise<string[]>
   if (item.type === "IMAGE") {
     const out = `${base}.jpg`;
     await ffmpeg(["-y", "-loglevel", "error", ...net, "-i", item.url, "-frames:v", "1", "-vf", "scale=512:512:force_original_aspect_ratio=decrease", "-q:v", "5", out]);
-    return [out];
+    return (await written(out)) ? [out] : [];
   }
   const span = Math.max(1, item.durationSeconds ?? 6);
   const outs: string[] = [];
@@ -130,7 +143,9 @@ export async function qaFrames(item: QaItem, workDir: string): Promise<string[]>
     const out = `${base}-${i}.jpg`;
     try {
       await ffmpeg(["-y", "-loglevel", "error", ...net, "-ss", (f * span).toFixed(2), "-i", item.url, "-frames:v", "1", "-vf", "scale=448:-2", "-q:v", "5", out]);
-      outs.push(out);
+      // ffmpeg sale con 0 sin escribir nada si el -ss cae despues del final
+      // del clip: ese archivo inexistente tiraba la tanda entera (ENOENT).
+      if (await written(out)) outs.push(out);
     } catch {
       // un cuadro que no se pudo leer no frena a los otros
     }
@@ -181,6 +196,8 @@ export function parseQaVerdicts(raw: Record<string, unknown>[], orders: number[]
       hoy: boolOrNull(r.hoy),
       habla: boolOrNull(r.habla),
       lugar: boolOrNull(r.lugar),
+      camara: boolOrNull(r.camara),
+      marca: boolOrNull(r.marca),
       por: String(r.por ?? "").slice(0, 160),
     });
   }
@@ -190,6 +207,9 @@ export function parseQaVerdicts(raw: Record<string, unknown>[], orders: number[]
 // Ajustes en codigo al veredicto (qaPlan.js:451-470 de MaV).
 export function adjustVerdict(v: QaVerdict, item: QaItem): QaFinalCode {
   const e = item.shot.epoca;
+  // Lo que NUNCA entra, sin importar el codigo que puso el modelo.
+  if (v.camara === true) return "presentador";
+  if (v.marca === true) return "texto";
   let code = v.code;
   // epoca solo vale si el plano tiene linea Era; antes del cine, solo si se ve algo de hoy.
   if (code === "epoca" && !e?.historico) code = "ok";
@@ -201,6 +221,14 @@ export function adjustVerdict(v: QaVerdict, item: QaItem): QaFinalCode {
   // Foto de stock moderna en un plano historico.
   if (code === "ok" && v.stock && item.type === "IMAGE" && e?.historico) code = "epoca";
   return code;
+}
+
+// Comparten un NOMBRE PROPIO (no una palabra generica): "Iguazu Falls" y
+// "Cataratas del Iguazu" son el mismo tema aunque esten en otro idioma.
+const GENERIC_WORDS = new Set(["falls", "cataratas", "river", "lake", "lago", "mountain", "montana", "bridge", "puente", "tower", "torre", "church", "iglesia", "museum", "museo", "castle", "castillo", "palace", "palacio", "house", "casa", "building", "edificio", "park", "parque", "national", "nacional", "city", "ciudad", "desert", "desierto", "road", "camino", "canyon", "valley", "valle", "island", "isla", "beach", "playa", "salt", "flat", "argentina", "brasil", "brazil", "mexico", "espana", "spain", "bolivia"]);
+export function sharesProperName(a: string, b: string): boolean {
+  const wb = words(b);
+  return [...words(a)].some((w) => w.length >= 5 && !GENERIC_WORDS.has(w) && wb.has(w));
 }
 
 function words(name: string): Set<string> {
@@ -227,11 +255,15 @@ export function sameWork(a: string, b: string): boolean {
 // Planos a rechazar por repetir obra (en orden del video; se queda el primero).
 // Vuelve si la frase la nombra y esta a >= 12 planos; un sitio puede repetirse
 // cerca (<= 3 planos) hasta 3 usos.
-export function repeatedWorks(entries: { order: number; obra: string | null; sitio: boolean; text: string }[]): Set<number> {
+// `mainSubjects`: el tema del video y el lugar de la historia. Esa obra NO
+// cuenta como repetida: en un documental SOBRE el Caminito del Rey todos los
+// planos lo muestran (el piloto perdio 10 planos buenos por "obra repetida").
+export function repeatedWorks(entries: { order: number; obra: string | null; sitio: boolean; text: string }[], mainSubjects: string[] = []): Set<number> {
   const reject = new Set<number>();
   const seen: { obra: string; orders: number[]; sitio: boolean }[] = [];
   for (const e of [...entries].sort((a, b) => a.order - b.order)) {
     if (!e.obra) continue;
+    if (mainSubjects.some((s) => s && (sameWork(e.obra!, s) || sharesProperName(e.obra!, s)))) continue;
     const prev = seen.find((s) => sameWork(s.obra, e.obra!));
     if (!prev) {
       seen.push({ obra: e.obra, orders: [e.order], sitio: e.sitio });
@@ -263,9 +295,7 @@ export async function judgeBatch(
       content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await readFile(f)).toString("base64") } });
     }
   }
-  const message = await client.messages
-    .stream({ model, max_tokens: 6000 + 800 * batch.length, system: SYSTEM, messages: [{ role: "user", content }] })
-    .finalMessage();
+  const message = await claudeJudge(client, { model, max_tokens: 6000 + 800 * batch.length, system: SYSTEM, messages: [{ role: "user", content }] });
   usage.input = (usage.input ?? 0) + message.usage.input_tokens;
   usage.output = (usage.output ?? 0) + message.usage.output_tokens;
   const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
@@ -281,7 +311,8 @@ export async function runQaFinal(
   workDir: string,
   usage: Record<string, number>,
   ronda: number,
-  previous: { order: number; obra: string | null; sitio: boolean; text: string }[] = []
+  previous: { order: number; obra: string | null; sitio: boolean; text: string }[] = [],
+  mainSubjects: string[] = []
 ): Promise<{ decisions: QaDecision[]; obras: { order: number; obra: string | null; sitio: boolean; text: string }[] }> {
   const withFrames: { item: QaItem; frames: string[]; images: number }[] = [];
   const decisions: QaDecision[] = [];
@@ -295,13 +326,16 @@ export async function runQaFinal(
   }
   const verdicts = new Map<number, QaVerdict>();
   try {
-    for (const batch of batches(withFrames)) {
-      const got = await judgeBatch(client, model, batch, usage).catch((err) => {
+    // Tandas EN PARALELO (de a QA_PARALLEL): antes una detras de otra. La obra
+    // repetida se calcula al final con todas, asi que el orden no importa.
+    await mapWithConcurrency(batches(withFrames), QA_PARALLEL, async (batch) => {
+      // Un error tecnico se reintenta una vez antes de dejar la tanda sin revisar.
+      const got = await judgeBatch(client, model, batch, usage).catch(() => judgeBatch(client, model, batch, usage)).catch((err) => {
         console.warn(`[qa-final] tanda de ${batch.length} planos sin respuesta: ${(err as Error).message}`);
         return [] as QaVerdict[];
       });
       for (const v of got) verdicts.set(v.order, v);
-    }
+    });
   } finally {
     await Promise.all(withFrames.flatMap((w) => w.frames.map((f) => rm(f, { force: true }).catch(() => undefined))));
   }
@@ -312,7 +346,7 @@ export async function runQaFinal(
       return { order: item.order, obra: v?.obra ?? null, sitio: v?.sitio ?? false, text: item.shot.frase };
     }),
   ];
-  const repeated = repeatedWorks(obras);
+  const repeated = repeatedWorks(obras, mainSubjects);
   for (const { item } of withFrames) {
     const v = verdicts.get(item.order);
     if (!v) {
@@ -326,6 +360,7 @@ export async function runQaFinal(
       por = `obra repetida: ${v.obra}`;
     }
     decisions.push({ sceneId: item.sceneId, order: item.order, ronda, codigo: v.code, final, por, malo: final !== "ok", obra: v.obra, lugar: v.lugar, stock: v.stock });
+    if (final !== "ok") console.log(`[qa-final] ronda ${ronda}: plano ${item.order} rechazado (${final}): ${por}`);
   }
   // Solo las obras de lo que quedo bien cuentan para las rondas siguientes.
   const bad = new Set(decisions.filter((d) => d.malo).map((d) => d.order));

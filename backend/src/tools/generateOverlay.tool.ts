@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "./tool.types.js";
 import type { OverlaySpec, OverlayType } from "../types/shared/typeShared.js";
 import { supportedOverlayIcons } from "../lib/motion.js";
+import { numerizar } from "../lib/numerosEs.js";
 
 export interface GenerateOverlayInput {
   scene_id: string;
@@ -95,6 +96,66 @@ function isLatLon(value: unknown): value is { lat: number; lon: number } {
     Math.abs(v.lon) <= 180
   );
 }
+
+// Casi literal (como MaV, que no valida citas ni titulos): las palabras del
+// grafico en el MISMO orden que en el guion, salteando como mucho 2 palabras
+// del guion (muletillas: "La Rumorosa es, literalmente, la que murmura" ->
+// "La Rumorosa es la que murmura"). Las cifras se comparan como numeros:
+// "170 accidentes" vale si la voz dice "ciento setenta accidentes".
+const MAX_SALTEADAS = 2;
+function words(text: string): string[] {
+  return numerizar(text, 0)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/(\d)[.,](?=\d{3}\b)/g, "$1")
+    .split(/[^a-z0-9ñ]+/)
+    .filter(Boolean);
+}
+export function nearLiteral(script: string, text: string | undefined): boolean {
+  const needle = text ? words(text) : [];
+  if (needle.length === 0) return false;
+  const hay = words(script);
+  for (let start = 0; start < hay.length; start++) {
+    if (hay[start] !== needle[0]) continue;
+    let k = 1;
+    let skipped = 0;
+    let j = start + 1;
+    while (k < needle.length && j < hay.length && skipped <= MAX_SALTEADAS) {
+      if (hay[j] === needle[k]) k += 1;
+      else skipped += 1;
+      j += 1;
+    }
+    if (k === needle.length && skipped <= MAX_SALTEADAS) return true;
+  }
+  return false;
+}
+// Literal o casi literal.
+export function matchesScript(script: string, text: string | undefined): boolean {
+  return appearsIn(normalize(script), text) || nearLiteral(script, text);
+}
+
+// Titulos (de una lista, una linea de tiempo, una ficha): MaV no los valida.
+// Aca: cortos, sin cifras (las cifras siempre dichas) y con la mayoria de sus
+// palabras con sentido presentes en el guion ("El camino de La Rumorosa").
+const TITLE_TYPES: OverlayType[] = ["list", "timeline", "profile_card", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram", "title_card", "person_card", "lower_third", "line_chart", "data_viz_single", "versus", "scoreboard"];
+const MAX_PALABRAS_TITULO_LIBRE = 7;
+export function titleFromScript(fullScript: string, text: string | undefined): boolean {
+  const t = text?.trim() ?? "";
+  if (!t || /\d/.test(numerizar(t, 0))) return false;
+  const ws = words(t);
+  if (ws.length === 0 || ws.length > MAX_PALABRAS_TITULO_LIBRE) return false;
+  const content = ws.filter((w) => w.length > 3);
+  if (content.length === 0) return false;
+  const stem = (w: string) => w.slice(0, Math.max(4, w.length - 2));
+  const hay = words(fullScript);
+  const hayStems = new Set(hay.map(stem));
+  const found = content.filter((w) => hayStems.has(stem(w))).length;
+  return found / content.length >= 0.6;
+}
+
+// Graficos que muestran cifras: ahi hasta el "tres" va en digitos.
+const NUMERIC_TYPES: OverlayType[] = ["big_number", "number_phrase", "data_viz_single", "versus", "scoreboard", "line_chart", "scale_compare", "rank_reveal", "milestone", "timeline"];
 
 export function appearsIn(haystack: string, needle: string | undefined): boolean {
   const n = needle ? normalize(needle) : "";
@@ -216,7 +277,12 @@ export const generateOverlayTool: ToolDefinition<
       throw new Error(`milestone sin fecha ("${text}"): un hito necesita un anio, un mes o un dia`);
     }
 
-    if (!shortLabelOk && !appearsIn(normalizedScript, text)) {
+    const fullScript = full_text ?? script_text;
+    const textOk =
+      shortLabelOk ||
+      matchesScript(script_text, text) ||
+      (TITLE_TYPES.includes(overlay.type) && (matchesScript(fullScript, text) || titleFromScript(fullScript, text)));
+    if (!textOk) {
       throw new Error(
         `overlay.text ("${text}") no aparece literalmente en el guion — modo estricto lo prohibe`
       );
@@ -225,14 +291,17 @@ export const generateOverlayTool: ToolDefinition<
     // Label e items tambien tienen que salir del guion; los que no, se
     // descartan (el overlay sigue siendo valido sin ellos) en vez de
     // tirar el overlay entero.
-    const label = appearsIn(normalizedFull, overlay.label) ? overlay.label!.trim() : undefined;
+    const label =
+      matchesScript(fullScript, overlay.label) || (TITLE_TYPES.includes(overlay.type) && titleFromScript(fullScript, overlay.label))
+        ? overlay.label!.trim()
+        : undefined;
     const items = MULTI_ITEM_TYPES.includes(overlay.type)
       ? (overlay.items ?? [])
           .filter(
             (item) =>
-              appearsIn(normalizedScript, item.text) &&
-              (!NUMERIC_ITEM_TYPES.includes(overlay.type) || /\d/.test(item.text)) &&
-              (appearsIn(normalizedFull, item.label) ||
+              (matchesScript(script_text, item.text) || matchesScript(fullScript, item.text)) &&
+              (!NUMERIC_ITEM_TYPES.includes(overlay.type) || /\d/.test(numerizar(item.text, 0))) &&
+              (matchesScript(fullScript, item.label) || titleFromScript(fullScript, item.label) ||
                 (OPTIONAL_ITEM_LABEL_TYPES.includes(overlay.type) && !item.label?.trim()))
           )
           .map((item) => ({ label: (item.label ?? "").trim(), text: item.text.trim() }))
@@ -278,15 +347,22 @@ export const generateOverlayTool: ToolDefinition<
     if (overlay.type === "scoreboard" && items!.length !== 2) {
       throw new Error("scoreboard necesita exactamente 2 lados");
     }
-    legible(overlay.type, text, items, icon);
+    // En pantalla las cifras van en digitos ("ciento setenta accidentes" ->
+    // "170 accidentes"); la voz y el guion no cambian. En los graficos de
+    // cifras, desde el 0; en el resto, desde el 10 ("los dos hermanos" queda).
+    const min = NUMERIC_TYPES.includes(overlay.type) ? 0 : 10;
+    const shown = numerizar(text, min);
+    const shownLabel = label ? numerizar(label, min) : undefined;
+    const shownItems = items?.map((item) => ({ label: numerizar(item.label, min), text: numerizar(item.text, min) }));
+    legible(overlay.type, shown, shownItems, icon);
 
     return {
       overlay: {
         type: overlay.type,
-        text,
+        text: shown,
         source: "script",
-        ...(label ? { label } : {}),
-        ...(items?.length ? { items } : {}),
+        ...(shownLabel ? { label: shownLabel } : {}),
+        ...(shownItems?.length ? { items: shownItems } : {}),
         ...(icon ? { icon } : {}),
         ...(geo ? { geo } : {}),
         ...(ref ? { ref } : {}),

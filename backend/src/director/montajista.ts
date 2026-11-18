@@ -1,4 +1,5 @@
 import { INDICATORS } from "../lib/datosAbiertos.js";
+import { yearOf } from "../lib/epoca.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -59,6 +60,12 @@ export interface PlannedShot {
   parte?: number;
   // Grafico con datos reales del Banco Mundial (lib/datosAbiertos.ts).
   datos?: ShotData;
+  // 1-2 busquedas de RESPALDO (MaV: fuente + respaldo[]): otro angulo filmable
+  // de la misma frase. Se prueban antes del rescate.
+  respaldo?: string[];
+  // Busqueda para YouTube en el idioma del LUGAR de la historia (un tema de
+  // Mexico tiene mucho mas metraje en castellano: "bajada La Rumorosa").
+  queryLocal?: string;
 }
 
 export interface ShotData {
@@ -136,6 +143,11 @@ ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.ep
 ${guide}
 ${style.graphics.favor.includes("line_chart") ? DATA_GUIDE : ""}
 
+- query_en y respaldo_en describen algo que se puede FOTOGRAFIAR o FILMAR: un lugar, una persona, un objeto, una accion, gente de la epoca. NUNCA una estadistica ("accidents per year"), una linea de tiempo ("history timeline"), un concepto, un llamado a comentar ("comment call to action") ni una leyenda como tal ("woman in white legend"). Si la frase da una cifra o una fecha, la cifra va en el grafico y la imagen muestra el lugar u objeto del que habla (170 accidentes en la cuesta -> "Rumorosa highway trucks"). Una leyenda: el lugar real donde se cuenta. El cierre o el llamado a comentar: el lugar o el objeto principal del video.
+- query_local: la busqueda para YouTube en el idioma del LUGAR de la historia (castellano para Mexico: "bajada de La Rumorosa camiones"); la gente que filma un lugar lo titula en su idioma. Vacio si el lugar habla ingles.
+- respaldo_en: 1 o 2 busquedas en ingles de RESPALDO con otro angulo de la misma frase que tambien se pueda mostrar (persona -> "Esteban Cantu Baja California governor", el lugar donde actuo; edificio -> el pueblo o el paisaje donde esta). Se usan si la busqueda principal no trae nada que sirva.
+- anio: SOLO si la imagen TIENE que ser de esa epoca (una persona de 1915, un edificio recien construido en 1923, un hecho historico). Si la frase habla de un nombre, un origen, un paisaje o es una transicion ("por eso los primeros viajeros bautizaron este tramo como..."), muestra el lugar o la cosa de la que se habla y NO pongas anio: unas rocas o una sierra se ven igual hoy, y con anio el juez rechaza las tomas actuales que si sirven.
+- clase mapa: SOLO si la frase nombra lugares, una ruta, una distancia o una frontera ("conecta Tecate con Mexicali"). Si la frase habla de para que servia algo, de personas o de hechos ("pensado para albergar tropas"), no es mapa: es la cosa, el lugar o la persona.
 - obligatorio: las cosas concretas que nombra la frase y TIENEN que verse (en persona, la persona; en cosa, la cosa; en lugar, el lugar). Vacio en ambiente o si la frase no nombra nada. El juez rechaza la imagen que no lo muestra.
 
 Entrega UNA sola vez con submit_shot_plan. Los planos van en orden, sin huecos, y cubren de la primera a la ultima palabra del tramo. desde/hasta son numeros de palabra.`;
@@ -181,7 +193,9 @@ const PLAN_TOOL: Anthropic.Tool = {
             hasta: { type: "string", description: "Numero de la ultima palabra (inclusive)" },
             clase: { type: "string", enum: SHOT_CLASSES },
             sujeto: { type: "string", description: "Que se ve, en castellano" },
-            query_en: { type: "string", description: "Busqueda en ingles, 2-6 palabras" },
+            query_en: { type: "string", description: "Busqueda en ingles, 2-6 palabras, de algo que se puede fotografiar o filmar" },
+            respaldo_en: { type: "array", items: { type: "string" }, description: "1-2 busquedas de respaldo en ingles, otro angulo filmable de la misma frase" },
+            query_local: { type: "string", description: "La misma busqueda en el idioma del LUGAR de la historia, para YouTube (castellano si pasa en Mexico o Argentina). Vacio si es el ingles" },
             entidad: { type: "string", description: "Nombre propio exacto (persona/cosa/lugar) como en Wikipedia" },
             obligatorio: {
               type: "array",
@@ -265,6 +279,20 @@ function graphicOf(raw: unknown): ShotGraphic | undefined {
   };
 }
 
+// Busquedas que no traen imagenes (una estadistica, una linea de tiempo, el
+// llamado a comentar): en La Rumorosa terminaron todas en niebla. Si el plan
+// igual las escribe, se usa el respaldo como busqueda principal.
+export const ABSTRACT_QUERY = /\b(per (year|day|month)|statistics?|stats|timeline|chart|graph|infographic|call to action|comment|subscribe|like button|concept|abstract|data|percentage|rate of|number of)\b/i;
+export function queriesOf(main: string, respaldoRaw: unknown): { query: string; respaldo?: string[] } {
+  const respaldo = (Array.isArray(respaldoRaw) ? respaldoRaw : []).map(str).filter((q) => q && q.toLowerCase() !== main.toLowerCase()).slice(0, 2);
+  const concrete = respaldo.filter((q) => !ABSTRACT_QUERY.test(q));
+  if (ABSTRACT_QUERY.test(main) && concrete.length) {
+    const [first, ...rest] = concrete;
+    return { query: first!, respaldo: rest };
+  }
+  return { query: main, ...(concrete.length ? { respaldo: concrete } : {}) };
+}
+
 export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phrase[]): { shots: PlannedShot[]; chapters: MontajeChapter[] } {
   const total = phrases.length;
   const shots: PlannedShot[] = [];
@@ -287,7 +315,8 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
       to: Math.max(from, to),
       clase,
       sujeto: str(item.sujeto),
-      query: str(item.query_en) || str(item.sujeto),
+      ...queriesOf(str(item.query_en) || str(item.sujeto), item.respaldo_en),
+      ...(str(item.query_local) && !ABSTRACT_QUERY.test(str(item.query_local)) ? { queryLocal: str(item.query_local) } : {}),
       ...(str(item.entidad) ? { entidad: str(item.entidad) } : {}),
       ...(Array.isArray(item.obligatorio) && item.obligatorio.some((o) => str(o))
         ? { obligatorio: (item.obligatorio as unknown[]).map(str).filter(Boolean).slice(0, 5) }
@@ -309,7 +338,20 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
     const animo = (MUSIC_MOODS as string[]).includes(str(item.animo)) ? (str(item.animo) as MusicMood) : "documental";
     chapters.push({ titulo, desde, animo });
   }
+  dropUnsaidYears(shots, phrases);
   return { shots, chapters };
+}
+
+// El anio del plan vale solo si la voz dice un anio cerca (este plano o los 2
+// de cada lado) o si es una persona (su retrato es de su epoca). En codigo, no
+// solo en el prompt: el montajista le puso 1900 a "los primeros viajeros
+// bautizaron este tramo" y el juez rechazo las tomas actuales que servian.
+export function dropUnsaidYears(shots: PlannedShot[], phrases: Phrase[]): void {
+  const said = shots.map((s) => yearOf(phrases.slice(s.from, s.to + 1).map((p) => p.text).join(" ")) !== undefined);
+  shots.forEach((s, i) => {
+    if (!s.anio || s.clase === "persona") return;
+    if (!said.slice(Math.max(0, i - 2), i + 3).some(Boolean)) delete s.anio;
+  });
 }
 
 // ---------- Verificador (codigo) ----------
