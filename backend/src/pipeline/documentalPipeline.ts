@@ -16,7 +16,7 @@ import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { buildPhrases, type Phrase } from "../director/phrases.js";
 import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
-import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeShot, type QaCode } from "../director/visualJudge.js";
+import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeResult, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import { correctPlace, haversineKm } from "../lib/geocode.js";
@@ -35,7 +35,10 @@ import {
   type VisualCandidate,
 } from "../lib/documentalSources.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
-import { downloadYouTubeSegment, searchYouTubeVideos, subtitleKeywords, subtitleMoments, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
+import { downloadYouTubeSegment, prewarmYouTubeSearches, searchYouTubeVideos, subtitleKeywords, subtitleMoments, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
+import { clasificar, frenoYoutube } from "../lib/youtubeGuard.js";
+import { cachedShot, forgetShot, shotCacheKey, storeShot } from "../lib/documentalCache.js";
+import { buildLibrary, libraryCandidates, type LibraryVideo } from "../lib/documentalLibrary.js";
 import type { TranscribedWord } from "../tools/transcribeAudio.tool.js";
 import type { SearchStockInput, SearchStockOutput } from "../tools/searchStock.tool.js";
 import type { GenerateImageInput, GenerateImageOutput } from "../tools/generateImage.tool.js";
@@ -55,7 +58,111 @@ import type { ContentPolicy, OverlaySpec, OverlayType } from "../types/shared/ty
 //   5. Graficos y rotulos: los del plan, validados en modo estricto
 //      (generate_overlay, texto literal del guion), como siempre.
 
-const SHOT_CONCURRENCY = envInt("DOCUMENTAL_SHOT_CONCURRENCY", 4);
+// 6 planos a la vez (antes 4): YouTube tiene su propio semaforo (youtubeGuard).
+const SHOT_CONCURRENCY = envInt("DOCUMENTAL_SHOT_CONCURRENCY", 6);
+const RESCUE_CONCURRENCY = envInt("DOCUMENTAL_RESCUE_CONCURRENCY", 5);
+// Presupuestos: busqueda max(14 min, 35 s por plano); rescate max(6 min, 12 s por plano rescatado).
+const SEARCH_BUDGET_MS = envInt("DOCUMENTAL_SEARCH_BUDGET_MS", 14 * 60_000);
+const SEARCH_MS_PER_SHOT = 35_000;
+const RESCUE_BUDGET_MS = envInt("DOCUMENTAL_RESCUE_BUDGET_MS", 6 * 60_000);
+const RESCUE_MS_PER_SHOT = 12_000;
+// Dos momentos del mismo video, como minimo esta separacion.
+const MOMENT_GAP_SECONDS = 20;
+
+// Encuadres del mapa de reserva: distancia (km de alto) y un corrimiento
+// chico del centro, para que dos planos de mapa seguidos no se vean iguales.
+const SATELLITE_FRAMES = [
+  { km: 4, dLat: 0, dLon: 0 },
+  { km: 14, dLat: 0.01, dLon: -0.015 },
+  { km: 45, dLat: -0.03, dLon: 0.03 },
+  { km: 2, dLat: 0.004, dLon: 0.006 },
+  { km: 25, dLat: -0.012, dLon: -0.02 },
+];
+
+// Reemplaza el rotulo sobre niebla por el mapa satelital del lugar: el del
+// plano si tiene uno, si no el lugar de la historia. Devuelve cuantos cambio.
+async function satelliteFallback(ctx: DocumentalContext, rows: ShotRow[], trailOf: (row: ShotRow) => string[], all: ShotRow[] = rows): Promise<number> {
+  if (rows.length === 0) return 0;
+  let story: { lat: number; lon: number } | null = null;
+  let storyName = ctx.storyPlace?.split(",")[0]?.trim() ?? "";
+  if (ctx.storyPlace) {
+    story = await correctPlace(ctx.storyPlace, undefined).catch(() => null);
+    if (!story && storyName) story = await correctPlace(storyName, undefined).catch(() => null);
+  }
+  // Sin lugar de la historia: el primer lugar del plan, y si no, el titulo.
+  if (!story) {
+    const planned = all.find((r) => r.shot.lugar)?.shot.lugar;
+    if (planned) {
+      story = { lat: planned.lat, lon: planned.lon };
+      storyName = planned.nombre;
+    } else if (ctx.videoTopic) {
+      story = await correctPlace(ctx.videoTopic, undefined).catch(() => null);
+      storyName = ctx.videoTopic;
+    }
+  }
+  let changed = 0;
+  for (const [k, row] of rows.entries()) {
+    const own = row.shot.lugar;
+    const center = own ? { lat: own.lat, lon: own.lon } : story;
+    const name = (own?.nombre ?? storyName).trim();
+    if (!center || !name) continue;
+    const f = SATELLITE_FRAMES[k % SATELLITE_FRAMES.length]!;
+    const spec: OverlaySpec = {
+      type: "map_marker",
+      text: name,
+      source: "script",
+      geo: { lat: center.lat + f.dLat, lon: center.lon + f.dLon, km: own?.km ?? f.km },
+      basemap: "satellite",
+      full: true,
+      anchor: 0,
+    };
+    const { data: current } = await supabase.from("scenes").select("content").eq("id", row.id).single();
+    const content = (current?.content as Record<string, unknown>) ?? {};
+    // Un plano de clase mapa que ya tiene su mapa: se deja como esta.
+    const overlays = Array.isArray(content.overlays) ? (content.overlays as { type?: string }[]) : [];
+    if (row.shot.clase === "mapa" && overlays.some((o) => /^map_/.test(o.type ?? ""))) continue;
+    // Solo el mapa: dos animaciones a la vez se pisan.
+    await supabase.from("scenes").update({ content: { ...content, overlays: [spec], overlay: spec } }).eq("id", row.id);
+    trailOf(row).push(`sin imagen: mapa satelital de ${name} (nunca niebla)`);
+    console.log(`[documental] plano ${row.order}: sin imagen -> mapa satelital de ${name}`);
+    (ctx.satelliteScenes ??= new Set()).add(row.id);
+    changed += 1;
+  }
+  return changed;
+}
+
+// El tema del video y el lugar de la historia: el QA no los cuenta como obra repetida.
+function mainSubjectsOf(ctx: DocumentalContext): string[] {
+  return [ctx.videoTopic, ctx.storyPlace, ...(ctx.storyPlace?.split(",") ?? [])].map((s) => s?.trim() ?? "").filter(Boolean);
+}
+
+function shotKeyOf(ctx: DocumentalContext, row: ShotRow): string {
+  return shotCacheKey([ctx.videoTopic, ctx.storyPlace, row.shot.clase, row.shot.query, row.text, Math.round(row.end - row.start)]);
+}
+
+function rememberGoodMoments(ctx: DocumentalContext, source: VisualCandidate, times: number[]): void {
+  ctx.goodMoments ??= new Map();
+  const e = ctx.goodMoments.get(source.external_id) ?? { times: [], used: [] };
+  if (!e.source) {
+    const { sheet_times: _times, ...rest } = source;
+    e.source = rest;
+  }
+  for (const t of times) if (!e.times.some((x) => Math.abs(x - t) < 3)) e.times.push(t);
+  ctx.goodMoments.set(source.external_id, e);
+}
+
+function markMomentUsed(ctx: DocumentalContext, videoId: string, at: number | undefined): void {
+  if (at === undefined) return;
+  ctx.goodMoments ??= new Map();
+  const e = ctx.goodMoments.get(videoId) ?? { times: [], used: [] };
+  e.used.push(at);
+  ctx.goodMoments.set(videoId, e);
+}
+
+function nextGoodMoment(ctx: DocumentalContext, videoId: string): number | undefined {
+  const e = ctx.goodMoments?.get(videoId);
+  return e?.times.find((t) => e.used.every((u) => Math.abs(u - t) >= MOMENT_GAP_SECONDS));
+}
 // Rondas de juez por plano (cada una = una fuente con candidatos nuevos).
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -64,6 +171,8 @@ const MAX_JUDGE_ROUNDS = envInt("DOCUMENTAL_JUDGE_ROUNDS", 3);
 // Rondas extra del juez para las busquedas amplias (sujeto simplificado y
 // busquedas de los planos vecinos) antes de reusar el plano vecino.
 const BROAD_JUDGE_ROUNDS = envInt("DOCUMENTAL_BROAD_ROUNDS", 2);
+// Rondas extra del juez para las busquedas de respaldo del plan.
+const RESPALDO_JUDGE_ROUNDS = envInt("DOCUMENTAL_RESPALDO_ROUNDS", 2);
 
 export interface DocumentalContext {
   projectId: string;
@@ -76,6 +185,21 @@ export interface DocumentalContext {
   styleId?: string | null;
   contentPolicy?: ContentPolicy;
   channelLanguage?: string | null;
+  // Donde pasa la historia (storyPlace, una vez por video): va al juez.
+  storyPlace?: string;
+  // Presupuestos de tiempo (MaV): pasado el de la busqueda, lo que falta va
+  // al rescate; pasado el del rescate, directo al rotulo.
+  searchDeadline?: number;
+  rescueDeadline?: number;
+  // Momentos buenos de cada video de YouTube (cuadros que el juez aprobo en
+  // la hoja) y los ya usados: "otro momento" sale de aca, no a ciegas.
+  goodMoments?: Map<string, { source?: VisualCandidate; times: number[]; used: number[] }>;
+  // Planos sin imagen que muestran el mapa satelital del lugar (nunca niebla).
+  satelliteScenes?: Set<string>;
+  // Biblioteca del video (YouTube escaneado y descrito una sola vez).
+  library?: LibraryVideo[];
+  // Fotos que el juez rechazo solo por genericas: reserva antes del mapa.
+  nearMiss?: { candidate: VisualCandidate; order: number; reason: string }[];
 }
 
 interface ShotRow {
@@ -94,6 +218,11 @@ interface ShotOutcome {
   qa: QaCode | "seguro";
   provider?: string;
   rejected: number;
+  // Cada candidato rechazado en la busqueda (fuente, codigo y motivo): el
+  // rescate los guarda en el asset final para saber POR QUE quedo niebla.
+  rejections?: CandidateVerdict[];
+  // Justificacion del juez en cada ronda de la busqueda.
+  juicios?: string[];
 }
 
 function phraseText(phrases: Phrase[], shot: PlannedShot): string {
@@ -262,7 +391,9 @@ async function validatedOverlays(
         continue;
       }
       const at = sceneText.toLowerCase().indexOf(overlay.text.toLowerCase());
-      valid.push({ ...overlay, anchor: at >= 0 && sceneText.length > 0 ? at / sceneText.length : 0 });
+      // Plano de mapa: el mapa tapa el plano entero (la base es textura).
+      const full = shot.clase === "mapa" && MAP_OVERLAYS.has(overlay.type);
+      valid.push({ ...overlay, anchor: at >= 0 && sceneText.length > 0 ? at / sceneText.length : 0, ...(full ? { full: true } : {}) });
     } catch (err) {
       console.warn(`[documental] ${planned.type} descartado: ${(err as Error).message}`);
     }
@@ -299,6 +430,8 @@ async function writeShotScenes(ctx: DocumentalContext, phrases: Phrase[], plan: 
           ...(shot.lugar ? { lugar: shot.lugar } : {}),
           ...(shot.capitulo ? { capitulo: shot.capitulo } : {}),
           ...(shot.parte !== undefined ? { parte: shot.parte } : {}),
+          ...(shot.respaldo?.length ? { respaldo: shot.respaldo } : {}),
+          ...(shot.queryLocal ? { queryLocal: shot.queryLocal } : {}),
         },
       },
     };
@@ -366,6 +499,16 @@ async function aiImageCandidate(shot: PlannedShot, style: DocumentalStyle, ctx: 
   };
 }
 
+// YouTube con la busqueda LOCAL (idioma del lugar: "bajada La Rumorosa") y
+// la de ingles; primero la local. Solo dos busquedas de yt-dlp, sin modelo.
+async function youtubeCandidatesFor(shot: PlannedShot): Promise<VisualCandidate[]> {
+  const local = shot.queryLocal && shot.queryLocal.toLowerCase() !== shot.query.toLowerCase() ? shot.queryLocal : null;
+  if (!local) return searchYouTubeVideos(shot.query);
+  const [a, b] = await Promise.all([searchYouTubeVideos(local).catch(() => [] as VisualCandidate[]), searchYouTubeVideos(shot.query).catch(() => [] as VisualCandidate[])]);
+  const seen = new Set<string>();
+  return [...a, ...b].filter((c) => !seen.has(c.external_id) && !!seen.add(c.external_id));
+}
+
 async function sourceCandidates(
   source: SourceName,
   shot: PlannedShot,
@@ -389,7 +532,17 @@ async function sourceCandidates(
     case "archive":
       return searchArchiveVideos(shot.query, shot.anio, shot.entidad);
     case "youtube":
-      return searchYouTubeVideos(shot.query);
+      {
+        // Primero la biblioteca del video (ya escaneada): los videos cuyos
+        // cuadros describen lo que dice el plano. Si no hay, busqueda en vivo.
+        if (ctx.library?.length) {
+          const excluded = new Set(exclude);
+          const text = [shot.sujeto, shot.entidad, ...(shot.obligatorio ?? []), shot.queryLocal, shot.query].filter(Boolean).join(" ");
+          const lib = libraryCandidates(ctx.library, text, (c) => excluded.has(`youtube:${c.external_id}`) || excluded.has(c.url));
+          if (lib.length) return lib;
+        }
+        return youtubeCandidatesFor(shot);
+      }
     case "stock":
       return stockCandidates(shot.query, minDuration, exclude, ctx);
     case "ai_image": {
@@ -403,7 +556,7 @@ async function persistShotVisual(
   ctx: DocumentalContext,
   row: ShotRow,
   candidate: VisualCandidate,
-  qa: { code: QaCode | "seguro"; reason?: string; rejected: CandidateVerdict[]; source: string }
+  qa: { code: QaCode | "seguro"; reason?: string; rejected: CandidateVerdict[]; source: string; rescate?: string[]; juicios?: string[] }
 ): Promise<void> {
   const { error: deleteError } = await supabase.from("assets").delete().eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
   if (deleteError) throw new Error(deleteError.message);
@@ -427,7 +580,19 @@ async function persistShotVisual(
       duration_seconds: row.end - row.start,
       ...(candidate.duration_seconds ? { source_duration_seconds: candidate.duration_seconds } : {}),
       ...(candidate.video_seconds ? { video_seconds: candidate.video_seconds } : {}),
-      qa: { code: qa.code, ...(qa.reason ? { reason: qa.reason } : {}), source: qa.source, rejected: qa.rejected.slice(0, 8) },
+      // YouTube: desde que segundo del original (credito con &t=).
+      ...(candidate.yt_start !== undefined ? { start_seconds: Math.round(candidate.yt_start), source_url_t: `${candidate.source_page}&t=${Math.round(candidate.yt_start)}s` } : {}),
+      // Hasta 30 rechazos y el recorrido del rescate: con 8 (y el rescate
+      // guardando []) no se podia saber por que un plano quedo en niebla.
+      qa: {
+        code: qa.code,
+        ...(qa.reason ? { reason: qa.reason } : {}),
+        source: qa.source,
+        rejected: qa.rejected.slice(0, 30),
+        ...(qa.rescate?.length ? { rescate: qa.rescate.slice(0, 20) } : {}),
+        // Justificacion del juez en cada ronda ("archive: ninguno muestra...").
+        ...(qa.juicios?.length ? { juicios: qa.juicios.slice(0, 20) } : {}),
+      },
     },
   });
   if (error) throw new Error(error.message);
@@ -438,7 +603,7 @@ async function persistShotVisual(
 // la epoca (lib/epoca.ts, por reglas). Lo arma el codigo, sin otra llamada.
 export type JudgeContext = Omit<JudgeShot, "frase" | "clase" | "sujeto" | "modo" | "tema">;
 
-export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | undefined): Map<string, JudgeContext> {
+export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | undefined, storyPlace?: string): Map<string, JudgeContext> {
   const epochs = shotEpochs(
     byOrder.map((r) => r.text),
     byOrder.map((r) => r.shot.anio)
@@ -452,6 +617,7 @@ export function shotContexts(byOrder: ShotRow[], videoTopic: string | null | und
         ...(byOrder[i - 1]?.text ? { fraseAnterior: byOrder[i - 1]!.text } : {}),
         ...(byOrder[i + 1]?.text ? { fraseSiguiente: byOrder[i + 1]!.text } : {}),
         ...(videoTopic ? { titulo: videoTopic } : {}),
+        ...(storyPlace ? { lugarHistoria: storyPlace } : {}),
         ...(r.shot.obligatorio?.length ? { obligatorio: r.shot.obligatorio } : {}),
         ...(r.shot.lugar?.nombre ? { lugarRotulo: r.shot.lugar.nombre } : {}),
       };
@@ -486,13 +652,14 @@ async function materializeYouTube(
   pick: VisualCandidate,
   judge: { client: Anthropic; model: string; workDir: string; usage: Record<string, number> },
   context: JudgeContext | undefined,
-  opts: { startFraction?: number; tema?: string } = {}
+  opts: { startFraction?: number; atSeconds?: number; alternatives?: number[]; tema?: string; log?: string[] } = {}
 ): Promise<VisualCandidate | null> {
+  const where = `youtube ${pick.external_id}${opts.startFraction !== undefined ? `@${opts.startFraction}` : opts.atSeconds !== undefined ? `@${Math.round(opts.atSeconds)}s` : ""}`;
   try {
     // Primer uso del video: el momento sale de los subtitulos (MaV). Un video
     // con subtitulos que nunca nombran el sujeto se descarta sin bajarlo.
-    let startSeconds: number | undefined;
-    if (opts.startFraction === undefined) {
+    let startSeconds: number | undefined = opts.atSeconds;
+    if (opts.startFraction === undefined && opts.atSeconds === undefined) {
       // En castellano (obligatorio, sujeto) Y en ingles (la busqueda del plano):
       // muchos videos tienen los subtitulos en ingles y con solo castellano se
       // descartaban videos que servian.
@@ -500,11 +667,34 @@ async function materializeYouTube(
       const subs = await subtitleMoments(pick, keywords, judge.workDir);
       if (subs.hasSubs && keywords.length > 0 && subs.moments.length === 0) {
         console.log(`[documental] plano ${row.order}: youtube ${pick.external_id} descartado, los subtitulos nunca nombran ${keywords.join("/")}`);
+        opts.log?.push(`${where}: subtitulos sin ${keywords.slice(0, 6).join("/")}`);
         return null;
       }
       startSeconds = subs.moments[0];
     }
-    const local = await downloadYouTubeSegment(pick, row.end - row.start, judge.workDir, opts.startFraction, startSeconds);
+    // Con margen: el plano se puede alargar despues (topes, union con el
+    // vecino) y un tramo justo terminaba en loop o en cuadro congelado.
+    const planned = row.end - row.start;
+    const wanted = Math.min(Math.max(planned * 1.5, planned + 3), 20);
+    // Hasta 3 instantes buenos de la hoja (MaV: tramoLimpio prueba varios): si
+    // el primero no tiene un tramo limpio (cortes, imagen fija), el siguiente,
+    // sin gastar otra llamada al juez.
+    const instants = startSeconds !== undefined ? [startSeconds, ...(opts.alternatives ?? [])].slice(0, 3) : [undefined];
+    let local: string | null = null;
+    let lastError: Error | null = null;
+    let usedAt: number | undefined;
+    for (const at of instants) {
+      try {
+        local = await downloadYouTubeSegment(pick, wanted, judge.workDir, opts.startFraction, at);
+        usedAt = at;
+        break;
+      } catch (err) {
+        lastError = err as Error;
+        // Bloqueo o red: no insistir con otro instante del mismo video.
+        if (clasificar(err) !== "roto" || frenoYoutube.abierto()) break;
+      }
+    }
+    if (!local) throw lastError ?? new Error("sin tramo");
     const clip: VisualCandidate = {
       ...pick,
       url: local,
@@ -512,6 +702,8 @@ async function materializeYouTube(
       video_seconds: pick.video_seconds ?? pick.duration_seconds ?? 0,
     };
     delete clip.thumb_url;
+    delete clip.sheet_times;
+    delete clip.sheet_path;
     const check = await judgeCandidates(
       judge.client,
       judge.model,
@@ -521,14 +713,17 @@ async function materializeYouTube(
       judge.usage
     );
     if (check.chosen !== 0) {
+      const v = check.verdicts[0];
+      opts.log?.push(`${where}: tramo rechazado (${v ? `${v.code}: ${v.reason}` : "sin veredicto"})${check.justification ? `. Juez: ${check.justification}` : ""}`);
       await rm(local, { force: true }).catch(() => undefined);
       return null;
     }
     const url = await uploadYouTubeSegment(local, pick, ctx.projectId);
     await rm(local, { force: true }).catch(() => undefined);
-    return { ...clip, url };
+    return { ...clip, url, ...(usedAt !== undefined ? { yt_start: usedAt } : {}) };
   } catch (err) {
     console.warn(`[documental] plano ${row.order}: youtube ${pick.external_id} fallo: ${(err as Error).message}`);
+    opts.log?.push(`${where}: fallo (${(err as Error).message.slice(0, 120)})`);
     return null;
   }
 }
@@ -548,16 +743,45 @@ async function fillShot(
   const minDuration = Math.max(1, row.end - row.start);
   const chain = sourceChain({ clase: shot.clase, query: shot.query, ...(shot.entidad ? { entidad: shot.entidad } : {}), ...(shot.anio ? { anio: shot.anio } : {}) }, style.sources.archiveFirst, youtubeEnabled());
   const rejected: CandidateVerdict[] = [];
+  // La justificacion del juez en cada ronda (se guarda con el plano).
+  const juicios: string[] = [];
   let rounds = 0;
   const key = (c: VisualCandidate) => `${c.provider}:${c.external_id}`;
+
+  // Cache por frase (MaV, 14 dias): la misma frase del mismo tema ya tuvo
+  // material aprobado (regenerar, relanzar tras un fallo): se reusa sin
+  // buscar ni juzgar. El QA final lo revisa igual.
+  const cacheKey = shotKeyOf(ctx, row);
+  if (judge && shot.clase !== "mapa") {
+    const hit = await cachedShot(cacheKey);
+    const c = hit?.candidate;
+    if (c && !used.has(key(c)) && !used.has(c.url)) {
+      used.add(key(c));
+      used.add(c.url);
+      const dup = huellas.claim(key(c), await fingerprint(c.url, c.type, c.duration_seconds));
+      if (!dup) {
+        juicios.push(`cache: material ya aprobado para esta frase (${hit!.source ?? "?"})`);
+        await persistShotVisual(ctx, row, c, { code: "ok", reason: `cache: ${hit!.reason ?? "aprobado antes"}`, rejected, source: "cache", juicios });
+        console.log(`[documental] plano ${row.order}: material de la cache (${c.provider})`);
+        return { sceneId: row.id, order: row.order, source: (hit!.source ?? "commons") as SourceName, qa: "ok", provider: c.provider, rejected: 0 };
+      }
+    }
+  }
 
   // Una ronda: buscar en una fuente y que el juez elija. Devuelve el
   // resultado si alguno paso; null para seguir con la siguiente.
   const tryRound = async (source: SourceName, search: PlannedShot, maxRounds: number): Promise<ShotOutcome | null> => {
     if (rounds >= maxRounds) return null;
+    // Freno de YouTube abierto (bloqueo): ni se intenta, pasa a otra fuente.
+    if (source === "youtube" && frenoYoutube.abierto()) return null;
+    // Presupuesto de la busqueda (MaV): pasado el tope, lo que falta va al
+    // rescate en vez de seguir esperando fuentes.
+    if (ctx.searchDeadline && Date.now() > ctx.searchDeadline) return null;
     let found: VisualCandidate[] = [];
     try {
       found = (await sourceCandidates(source, search, minDuration, [...used], style, ctx)).filter((c) => !used.has(key(c)) && !used.has(c.url));
+      // YouTube: como mucho 3 videos por ronda (MaV), cada uno con su hoja de 16 cuadros.
+      if (source === "youtube") found = found.slice(0, YT_PER_ROUND);
     } catch (err) {
       console.warn(`[documental] plano ${row.order}: fuente ${source} fallo: ${(err as Error).message}`);
       return null;
@@ -571,24 +795,74 @@ async function fillShot(
       return { sceneId: row.id, order: row.order, source, qa: "ok", provider: pick.provider, rejected: 0 };
     }
     rounds += 1;
-    const verdict = await judgeCandidates(
-      judge.client,
-      judge.model,
-      judgeShotOf(row, neighbours.context),
-      found,
-      judge.workDir,
-      judge.usage
-    ).catch((err) => {
-      console.warn(`[documental] plano ${row.order}: el juez fallo: ${(err as Error).message}`);
+    const judgeOnce = () =>
+      judgeCandidates(judge.client, judge.model, judgeShotOf(row, neighbours.context), found, judge.workDir, judge.usage).catch((err) => {
+        console.warn(`[documental] plano ${row.order}: el juez fallo: ${(err as Error).message}`);
+        return null;
+      });
+    // Un error tecnico del juez (red, JSON cortado) se reintenta una vez.
+    const verdict = (await judgeOnce()) ?? (await judgeOnce());
+    if (!verdict) {
+      // Falla abierto (MaV): si el juez no pudo contestar dos veces, el plano
+      // no termina en niebla por un error tecnico. Va el primer candidato que
+      // no es YouTube (YouTube necesita el juez para elegir el tramo); el QA
+      // final lo revisa igual.
+      const pick = found.find((c) => c.provider !== "youtube" && !used.has(key(c)) && !used.has(c.url));
+      if (pick) {
+        used.add(key(pick));
+        used.add(pick.url);
+        juicios.push(`${source} "${search.query}": el juez fallo 2 veces, se acepto sin juzgar (lo revisa el QA final)`);
+        await persistShotVisual(ctx, row, pick, { code: "ok", reason: "juez caido: aceptado sin juzgar", rejected, source, juicios });
+        return { sceneId: row.id, order: row.order, source, qa: "ok", provider: pick.provider, rejected: rejected.length };
+      }
       return null;
-    });
+    }
+    if (verdict?.justification) juicios.push(`${source} "${search.query}" (${found.length} candidatos): ${verdict.justification}`);
+    // Cuadros buenos de cada hoja de YouTube (aunque no se elija ese video): el
+    // rescate saca de aca "otro momento" en vez de probar a ciegas.
+    for (const v of verdict.verdicts) {
+      const c = found[v.index];
+      const times = c?.sheet_times;
+      if (!c || c.provider !== "youtube" || !times || v.code !== "ok") continue;
+      const good = [...new Set([v.frame, ...(v.goodFrames ?? [])].filter((n): n is number => n !== undefined))].map((n) => times[n - 1]).filter((t): t is number => t !== undefined);
+      if (good.length) rememberGoodMoments(ctx, v.logoCorner ? { ...c, logo_corner: v.logoCorner } : c, good);
+    }
+    // Fotos "casi buenas": el juez las rechazo solo por GENERICAS (son del tema
+    // y del lugar, pero no lo exacto de la frase). Antes del mapa satelital,
+    // el rescate las usa para no repetir mapas; el QA del rescate las revisa.
+    for (const v of verdict.verdicts) {
+      const c = found[v.index];
+      if (!c || v.code !== "generico" || c.provider === "youtube" || c.type !== "IMAGE") continue;
+      (ctx.nearMiss ??= []).push({ candidate: c, order: row.order, reason: v.reason });
+    }
     if (verdict && verdict.chosen !== null) {
       let pick = found[verdict.chosen]!;
       // YouTube: el juez eligio por miniatura y titulo. Recien ahora se baja
       // el tramo y se revisa con cuadros reales (2da revision, como MaV).
       if (pick.provider === "youtube") {
+        // Candado por video (sincronico): si otro plano en paralelo ya tomo
+        // este video mientras el juez pensaba, no se usa dos veces.
+        if (used.has(key(pick))) {
+          rejected.push({ index: verdict.chosen, code: "equivocado", reason: `youtube: otro plano ya tomo este video (${pick.external_id})` });
+          return null;
+        }
         used.add(key(pick));
-        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.context);
+        // El cuadro de la hoja que eligio el juez: el tramo arranca ahi (sin
+        // filtro de subtitulos: el juez ya vio el contenido real). Si no da un
+        // tramo limpio, los otros cuadros buenos.
+        const chosenVerdict = verdict.verdicts.find((v) => v.index === verdict.chosen);
+        // Logo chico de canal en una esquina: el tramo se baja recortado.
+        if (chosenVerdict?.logoCorner) {
+          pick = { ...pick, logo_corner: chosenVerdict.logoCorner };
+          juicios.push(`youtube ${pick.external_id}: logo de canal en la esquina ${chosenVerdict.logoCorner}, se recorta`);
+        }
+        const frames = [...new Set([chosenVerdict?.frame, ...(chosenVerdict?.goodFrames ?? [])].filter((n): n is number => n !== undefined))];
+        const times = frames.map((n) => pick.sheet_times?.[n - 1]).filter((t): t is number => t !== undefined);
+        const clip = await materializeYouTube(ctx, row, pick, judge, neighbours.context, {
+          log: juicios,
+          ...(times.length ? { atSeconds: times[0]!, alternatives: times.slice(1) } : {}),
+        });
+        if (clip) markMomentUsed(ctx, pick.external_id, clip.yt_start);
         if (!clip) {
           rejected.push({ index: verdict.chosen, code: "equivocado", reason: `youtube: el tramo bajado no muestra el sujeto (${pick.title ?? pick.external_id})` });
           return null;
@@ -608,7 +882,8 @@ async function fillShot(
         used.add(key(pick));
         used.add(pick.url);
         const reason = verdict.verdicts.find((v) => v.index === verdict.chosen)?.reason;
-        await persistShotVisual(ctx, row, pick, { code: "ok", ...(reason ? { reason } : {}), rejected, source });
+        await persistShotVisual(ctx, row, pick, { code: "ok", ...(reason ? { reason } : {}), rejected, source, juicios });
+        await storeShot(cacheKey, pick, reason, source);
         return { sceneId: row.id, order: row.order, source, qa: "ok", provider: pick.provider, rejected: rejected.length };
       }
     }
@@ -625,13 +900,24 @@ async function fillShot(
   // Mapa: sin busqueda; reuseNeighbourVisuals le pone el material vecino.
   if (shot.clase === "mapa") return { sceneId: row.id, order: row.order, source: "none", qa: "seguro", rejected: 0 };
 
+  // 1b. Respaldos del plan (MaV: fuente + respaldo[]): otro angulo filmable de
+  // la misma frase que escribio el montajista, por la misma cadena de fuentes.
+  for (const query of shot.respaldo ?? []) {
+    for (const source of chain) {
+      const { queryLocal: _ql, ...plain } = shot;
+      const out = await tryRound(source, { ...plain, query }, MAX_JUDGE_ROUNDS + RESPALDO_JUDGE_ROUNDS);
+      if (out) return out;
+    }
+  }
+  const afterRespaldo = MAX_JUDGE_ROUNDS + (shot.respaldo?.length ? RESPALDO_JUDGE_ROUNDS : 0);
+
   // 2. Busquedas amplias (como MaV): el sujeto simplificado y las busquedas
   // de los planos vecinos, en stock y archive.org.
   const broad =[...new Set([shot.entidad, shot.sujeto?.split(/[,;(]/)[0]?.split(/\s+/).slice(0, 3).join(" "), ...neighbours.queries].map((q) => q?.trim()).filter((q): q is string => !!q && q.toLowerCase() !== shot.query.toLowerCase()))].slice(0, 3);
   for (const query of broad) {
     // Sin stock: el stock queda para el final del rescate.
     for (const source of ["archive", "commons"] as SourceName[]) {
-      const out = await tryRound(source, { ...shot, query }, MAX_JUDGE_ROUNDS + BROAD_JUDGE_ROUNDS);
+      const out = await tryRound(source, { ...shot, query }, afterRespaldo + BROAD_JUDGE_ROUNDS);
       if (out) return out;
     }
   }
@@ -639,7 +925,53 @@ async function fillShot(
   // 3. Nada paso el juez: NO se pone un clip rechazado. El plano queda sin
   // visual y reuseNeighbourVisuals le pone el material de un plano vecino
   // (con sus graficos y rotulos encima), como hace MaV.
-  return { sceneId: row.id, order: row.order, source: "none", qa: "seguro", rejected: rejected.length };
+  console.log(
+    `[documental] plano ${row.order}: sin imagen tras ${rejected.length} rechazos (${summarizeRejections(rejected)}) -> rescate`
+  );
+  return { sceneId: row.id, order: row.order, source: "none", qa: "seguro", rejected: rejected.length, rejections: rejected, juicios };
+}
+
+// "stock: 3 candidatos, rechazados: equivocado (nubes en el cielo); ...": una
+// linea del recorrido del rescate.
+function verdictNote(label: string, candidates: VisualCandidate[], verdict: JudgeResult | null): string {
+  if (!verdict) return `${label}: ${candidates.length} candidatos, el juez fallo`;
+  const parts = verdict.verdicts.slice(0, 4).map((v) => `${v.code} (${v.reason.slice(0, 90)})`);
+  return `${label}: ${candidates.length} candidatos${verdict.justification ? `. Juez: ${verdict.justification}` : ""}. Rechazados: ${parts.join("; ") || "sin veredictos"}`;
+}
+
+// Donde pasa la historia, UNA llamada corta por video (Haiku): el juez la
+// usa para rechazar material de otro pais o region. null si la historia no
+// tiene un lugar (un tema global) o si falla: el juez sigue como antes.
+export const STORY_PLACE_MODEL = "claude-haiku-5-5";
+// Haiku primero; si contesta cortado o falla, el modelo del juez. Con 200
+// tokens la respuesta salia cortada ("Unexpected end of JSON input") y el
+// video quedaba sin lugar: sin control de pais y sin mapa de reserva.
+async function storyPlace(judge: Judge, ctx: DocumentalContext): Promise<string | undefined> {
+  const prompt = `Titulo: ${ctx.videoTopic ?? "(sin titulo)"}\nGuion: ${ctx.scriptText.slice(0, 3000)}\n\n¿En que lugar del mundo pasa esta historia? Responde la region y el pais, de lo mas chico a lo mas grande ("Baja California, Mexico"; "Cataratas del Iguazu, Misiones, Argentina y Parana, Brasil"). Si pasa en varios paises, nombralos. Si no tiene un lugar (un tema global o abstracto), responde "". Responde SOLO JSON: {"lugar": "..."}`;
+  for (const model of [STORY_PLACE_MODEL, judge.model]) {
+    try {
+      const message = await judge.client.messages.create({ model, max_tokens: 2000, messages: [{ role: "user", content: prompt }] });
+      judge.usage.place_input = (judge.usage.place_input ?? 0) + message.usage.input_tokens;
+      judge.usage.place_output = (judge.usage.place_output ?? 0) + message.usage.output_tokens;
+      const text = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+      const a = text.indexOf("{");
+      const b = text.lastIndexOf("}");
+      if (a < 0 || b <= a) throw new Error(`sin JSON (${message.stop_reason})`);
+      const parsed = JSON.parse(text.slice(a, b + 1)) as { lugar?: unknown };
+      const lugar = typeof parsed.lugar === "string" ? parsed.lugar.trim().slice(0, 160) : "";
+      return lugar || undefined;
+    } catch (err) {
+      console.warn(`[documental] lugar de la historia fallo con ${model}: ${(err as Error).message}`);
+    }
+  }
+  return undefined;
+}
+
+// "epoca x5, texto x3, equivocado x2": para el log de cada plano sin imagen.
+export function summarizeRejections(rejected: CandidateVerdict[]): string {
+  const counts = new Map<string, number>();
+  for (const r of rejected) counts.set(r.code, (counts.get(r.code) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([code, n]) => `${code} x${n}`).join(", ") || "ningun candidato";
 }
 
 type Judge = { client: Anthropic; model: string; workDir: string; usage: Record<string, number> };
@@ -729,6 +1061,9 @@ async function applyScreenCaps(
   const visuals = await shotVisuals(ctx);
   const stockIds = new Set(qaDecisions.filter((d) => d.stock && !d.malo).map((d) => d.sceneId));
   const capOf = (r: ShotRow) => {
+    // Un plano de mapa (de clase mapa o el mapa satelital que reemplaza a la
+    // niebla) no es un rotulo: no se acorta ni se estira al vecino.
+    if (r.shot.clase === "mapa" || ctx.satelliteScenes?.has(r.id)) return null;
     const v = visuals.get(r.id);
     return v ? capFor({ ...v, stock: stockIds.has(r.id) }) : null;
   };
@@ -775,7 +1110,7 @@ async function applyScreenCaps(
 }
 
 // Vias del rescate (persistShotVisual guarda la via en qa.source).
-const RESCUE_VIAS = new Set(["youtube_momento", "commons_tema", "youtube_tema", "stock_ultimo", "youtube_ultima"]);
+const RESCUE_VIAS = new Set(["youtube_momento", "commons_tema", "youtube_tema", "stock_ultimo", "youtube_ultima", "casi_buena"]);
 // Reintentos del QA final por plano (MaV: PLAN_QA_REINTENTOS = 2).
 const QA_RETRIES = envInt("DOCUMENTAL_QA_RETRIES", 2);
 
@@ -814,7 +1149,7 @@ async function finalQa(
         },
       ];
     });
-    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, ronda, obras);
+    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, ronda, obras, mainSubjectsOf(ctx));
     obras = kept;
     all.push(...decisions);
     const badRows = decisions.filter((d) => d.malo).flatMap((d) => byOrder.filter((r) => r.id === d.sceneId));
@@ -822,6 +1157,7 @@ async function finalQa(
     if (badRows.length === 0) break;
     await mapWithConcurrency(badRows, SHOT_CONCURRENCY, async (row) => {
       await supabase.from("assets").delete().eq("scene_id", row.id).in("type", ["VIDEO", "IMAGE"]);
+      await forgetShot(shotKeyOf(ctx, row));
       const o = outcomeOf.get(row.id)!;
       if (ronda === QA_RETRIES) {
         // Sin mas reintentos: queda para el rescate.
@@ -914,7 +1250,19 @@ const RESCUE_FRACTIONS = [0.15, 0.45, 0.6, 0.75, 0.9, 0.05];
 const RESCUE_YT_TOPIC_MAX = envInt("DOCUMENTAL_RESCUE_YT_TOPIC", 3);
 // Usos maximos de un mismo video de YouTube en todo el documental (en la
 // prueba del Titanic uno aparecia 7 veces).
+// Ronda con la que se guarda el QA de lo rescatado (despues de las del QA final).
+const QA_RESCUE_RONDA = 9;
+const YT_PER_ROUND = 3;
 const YT_MAX_USES = envInt("DOCUMENTAL_YT_MAX_USES", 3);
+// Un video corto (un vuelo de drone de 29 s) da como mucho 2 planos: en La
+// Rumorosa 10 de 41 planos salieron de 2 videos y se veian iguales.
+const YT_SHORT_SECONDS = 90;
+const YT_SHORT_MAX_USES = 2;
+// El mismo video no vuelve hasta YT_NEAR planos despues (antes: solo el vecino).
+const YT_NEAR = 3;
+export function ytMaxUses(videoSeconds: number | undefined): number {
+  return (videoSeconds ?? Infinity) < YT_SHORT_SECONDS ? YT_SHORT_MAX_USES : YT_MAX_USES;
+}
 // La tarjeta de capitulo no va en el gancho.
 const CHAPTER_MIN_START = 20;
 // Ultima pasada contra los rotulos: cuantos reemplazos y en que puntos del video.
@@ -1097,6 +1445,7 @@ async function rescueGaps(
   const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
   const gaps = byOrder.filter((r) => outcomeOf.get(r.id)?.qa !== "ok");
   if (gaps.length === 0) return;
+  ctx.rescueDeadline = Date.now() + Math.max(RESCUE_BUDGET_MS, gaps.length * RESCUE_MS_PER_SHOT);
   const key = (c: VisualCandidate) => `${c.provider}:${c.external_id}`;
   const tema = ctx.videoTopic ?? "";
 
@@ -1124,6 +1473,11 @@ async function rescueGaps(
       query: "rescate",
     });
   }
+  // Videos cuya hoja de cuadros el juez aprobo aunque no se hayan usado: tienen
+  // momentos buenos ya vistos (MaV: fuentes buenas para "otro momento").
+  for (const [id, e] of ctx.goodMoments ?? []) {
+    if (!ytSources.some((s) => s.external_id === id) && e.source && e.times.length) ytSources.push({ ...e.source, query: "rescate" });
+  }
   const momentsUsed = new Map(ytSources.map((s) => [s.external_id, new Set<number>([0.3])]));
 
   // Video de origen de cada plano (para no repetir en planos seguidos) y
@@ -1142,29 +1496,44 @@ async function rescueGaps(
     originOf.set(r.scene_id as string, base);
     usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
   }
-  const neighbourOrigins = (i: number) => [byOrder[i - 1], byOrder[i + 1]].map((r) => (r ? originOf.get(r.id) : undefined));
-  const contexts = shotContexts(byOrder, ctx.videoTopic);
+  const neighbourOrigins = (i: number) =>
+    byOrder.slice(Math.max(0, i - YT_NEAR), i + YT_NEAR + 1).filter((r) => r !== byOrder[i]).map((r) => originOf.get(r.id));
+  // Tope de usos por video en TODO el documental, tambien en el rescate.
+  const ytRoom = (s: VisualCandidate) => (usesOf.get(`youtube:${s.external_id}`) ?? 0) < ytMaxUses(s.video_seconds ?? s.duration_seconds);
+  const contexts = shotContexts(byOrder, ctx.videoTopic, ctx.storyPlace);
   const queries = judge ? await topicQueries(judge, ctx) : [];
+  // Recorrido del rescate por plano (que se probo y por que no sirvio): se
+  // guarda en el asset final junto con los rechazos de la busqueda.
+  const trails = new Map<string, string[]>();
+  const trailOf = (row: ShotRow): string[] => {
+    let t = trails.get(row.id);
+    if (!t) trails.set(row.id, (t = []));
+    return t;
+  };
+  const rejectionsOf = (row: ShotRow): CandidateVerdict[] => outcomeOf.get(row.id)?.rejections ?? [];
   const commonsPool: VisualCandidate[] = [];
   let commonsLoaded = 0;
   let ytTopicLeft = youtubeEnabled() ? RESCUE_YT_TOPIC_MAX : 0;
   let texture: string | null = null;
-  const counts = { youtube_momento: 0, commons_tema: 0, youtube_tema: 0, stock_ultimo: 0, rotulo: 0 };
+  const counts = { youtube_momento: 0, commons_tema: 0, youtube_tema: 0, stock_ultimo: 0, casi_buena: 0, rotulo: 0 };
 
   // Devuelve false si la imagen ya esta en el video (dHash): el rescate sigue
   // con la proxima opcion.
-  const save = async (row: ShotRow, pick: VisualCandidate, via: string): Promise<boolean> => {
+  // `reserved`: el uso del video ya se reservo antes del await (tope por video
+  // con 3 planos en paralelo: antes se leia usesOf antes de bajar y se pasaba).
+  const save = async (row: ShotRow, pick: VisualCandidate, via: string, reserved = false): Promise<boolean> => {
     used.add(key(pick));
     const dup = huellas.claim(key(pick), await fingerprint(pick.url, pick.type, pick.duration_seconds));
     if (dup) {
       console.log(`[documental] plano ${row.order}: rescate ${via} descartado, repetido de ${dup}`);
+      trailOf(row).push(`${via}: repetido de ${dup}`);
       return false;
     }
     used.add(pick.url);
     const base = `${pick.provider}:${pick.external_id.split("@")[0]}`;
     originOf.set(row.id, base);
-    usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
-    await persistShotVisual(ctx, row, pick, { code: "ok", reason: `rescate: ${via}`, rejected: [], source: via });
+    if (!reserved) usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
+    await persistShotVisual(ctx, row, pick, { code: "ok", reason: `rescate: ${via}`, rejected: rejectionsOf(row), source: via, rescate: trailOf(row), juicios: outcomeOf.get(row.id)?.juicios ?? [] });
     const o = outcomeOf.get(row.id)!;
     o.source = "fallback";
     o.qa = "ok";
@@ -1172,28 +1541,50 @@ async function rescueGaps(
     return true;
   };
 
-  await mapWithConcurrency(gaps, 3, async (row) => {
+  await mapWithConcurrency(gaps, RESCUE_CONCURRENCY, async (row) => {
     const i = byOrder.indexOf(row);
     const context = contexts.get(row.id);
-    if (judge && row.shot.clase !== "mapa") {
-      // 1. Otro momento de un YouTube ya usado (rota entre los videos, el menos
-      // usado primero). Como MaV rescatar: sin tope de usos (es del tema por
-      // construccion), solo sin repetir el video del plano vecino.
+    // Presupuesto del rescate (MaV): pasado el tope, directo al rotulo.
+    const late = !!ctx.rescueDeadline && Date.now() > ctx.rescueDeadline;
+    if (late) trailOf(row).push("rescate: se paso el presupuesto de tiempo");
+    if (judge && !late && row.shot.clase !== "mapa") {
+      // 1. Otro momento de un YouTube ya usado o aprobado (rota entre los
+      // videos, el menos usado primero). CON tope de usos por video (ytRoom) y
+      // sin el video de los planos cercanos. El momento sale de los cuadros
+      // buenos de su hoja; solo si no hay, a ciegas.
       const near = neighbourOrigins(i);
       const candidatesYt = ytSources
-        .filter((s) => !near.includes(`youtube:${s.external_id}`))
+        .filter((s) => !near.includes(`youtube:${s.external_id}`) && ytRoom(s))
         .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
+      if (candidatesYt.length === 0) trailOf(row).push("otro momento: ningun YouTube usado para probar");
       for (let attempt = 0; attempt < Math.min(2, candidatesYt.length); attempt++) {
         const src = candidatesYt[(i + attempt) % candidatesYt.length]!;
-        const seen = momentsUsed.get(src.external_id)!;
-        const fraction = RESCUE_FRACTIONS.find((f) => !seen.has(f));
-        if (fraction === undefined) continue;
-        seen.add(fraction);
-        const clip = await materializeYouTube(ctx, row, src, judge, context, { startFraction: fraction, tema });
-        if (clip && (await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_momento"))) {
+        if (!ytRoom(src)) continue;
+        const good = nextGoodMoment(ctx, src.external_id);
+        let tag: string;
+        let at: { startFraction: number } | { atSeconds: number };
+        if (good !== undefined) {
+          markMomentUsed(ctx, src.external_id, good);
+          tag = `t${Math.round(good)}`;
+          at = { atSeconds: good };
+        } else {
+          const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
+          momentsUsed.set(src.external_id, seen);
+          const fraction = RESCUE_FRACTIONS.find((f) => !seen.has(f));
+          if (fraction === undefined) continue;
+          seen.add(fraction);
+          tag = String(fraction);
+          at = { startFraction: fraction };
+        }
+        // Reserva el uso ANTES del await (3+ planos en paralelo).
+        const base = `youtube:${src.external_id}`;
+        usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
+        const clip = await materializeYouTube(ctx, row, src, judge, context, { ...at, tema, log: trailOf(row) });
+        if (clip && (await save(row, { ...clip, external_id: `${src.external_id}@${tag}` }, "youtube_momento", true))) {
           counts.youtube_momento += 1;
           return;
         }
+        usesOf.set(base, Math.max(0, (usesOf.get(base) ?? 1) - 1));
       }
       // 2. Fotos del tema en Commons (hasta 4 por plano, juez en modo tema).
       while (commonsPool.filter((c) => !used.has(key(c))).length < 4 && commonsLoaded < queries.length) {
@@ -1212,10 +1603,13 @@ async function rescueGaps(
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? photos[verdict.chosen] : undefined;
+        if (!pick) trailOf(row).push(verdictNote("fotos del tema", photos, verdict));
         if (pick && !used.has(key(pick)) && (await save(row, pick, "commons_tema"))) {
           counts.commons_tema += 1;
           return;
         }
+      } else {
+        trailOf(row).push("fotos del tema: ninguna foto libre");
       }
       // 3. YouTube con una busqueda del tema (tope por video).
       if (ytTopicLeft > 0 && queries.length) {
@@ -1224,7 +1618,7 @@ async function rescueGaps(
         const found = (await searchYouTubeVideos(q).catch(() => [] as VisualCandidate[])).filter((c) => !used.has(key(c)));
         if (found[0]) {
           used.add(key(found[0]));
-          const clip = await materializeYouTube(ctx, row, found[0], judge, context, { tema });
+          const clip = await materializeYouTube(ctx, row, found[0], judge, context, { tema, log: trailOf(row) });
           if (clip && (await save(row, clip, "youtube_tema"))) {
             counts.youtube_tema += 1;
             ytSources.push(found[0]);
@@ -1235,7 +1629,7 @@ async function rescueGaps(
       }
     }
     // 3b. ULTIMO RECURSO antes del rotulo: stock (solo Pexels), con juez.
-    if (judge && row.shot.clase !== "mapa") {
+    if (judge && !late && row.shot.clase !== "mapa") {
       const stock = await stockCandidates(row.shot.query, Math.max(1, row.end - row.start), [...used], ctx).catch(() => [] as VisualCandidate[]);
       const fresh = stock.filter((c) => !used.has(key(c)) && !used.has(c.url)).slice(0, 3);
       if (fresh.length) {
@@ -1248,8 +1642,25 @@ async function rescueGaps(
           judge.usage
         ).catch(() => null);
         const pick = verdict && verdict.chosen !== null ? fresh[verdict.chosen] : undefined;
+        if (!pick) trailOf(row).push(verdictNote("stock", fresh, verdict));
         if (pick && !used.has(key(pick)) && (await save(row, pick, "stock_ultimo"))) {
           counts.stock_ultimo += 1;
+          return;
+        }
+      } else {
+        trailOf(row).push("stock: sin resultados");
+      }
+    }
+    // 3c. Foto "casi buena" (rechazada solo por generica), la de un plano mas
+    // cercano primero: del tema y del lugar. Antes del mapa satelital.
+    if (judge && !late && row.shot.clase !== "mapa") {
+      const pool = (ctx.nearMiss ?? [])
+        .filter((n) => !used.has(key(n.candidate)) && !used.has(n.candidate.url))
+        .sort((a, b) => Math.abs(a.order - row.order) - Math.abs(b.order - row.order));
+      for (const n of pool.slice(0, 3)) {
+        if (await save(row, n.candidate, "casi_buena")) {
+          trailOf(row).push(`foto casi buena del plano ${n.order} (${n.reason.slice(0, 80)})`);
+          counts.casi_buena += 1;
           return;
         }
       }
@@ -1261,23 +1672,24 @@ async function rescueGaps(
       ctx,
       row,
       { provider: "textura", external_id: `textura-${row.order}`, type: "IMAGE", url: texture, license: "Propia", source_page: "", query: "rotulo" },
-      { code: "seguro", reason: "ningun candidato paso el juez: rotulo sobre textura", rejected: [], source: "rotulo" }
+      { code: "seguro", reason: "ningun candidato paso el juez: rotulo sobre textura", rejected: rejectionsOf(row), source: "rotulo", rescate: trailOf(row), juicios: outcomeOf.get(row.id)?.juicios ?? [] }
+    );
+    console.log(
+      row.shot.clase === "mapa"
+        ? `[documental] plano ${row.order}: mapa (el mapa animado tapa la textura)`
+        : `[documental] plano ${row.order}: NIEBLA. Busqueda: ${summarizeRejections(rejectionsOf(row))}. Rescate: ${trailOf(row).join(" | ") || "nada para probar"}`
     );
     counts.rotulo += 1;
     const o = outcomeOf.get(row.id)!;
     o.source = "fallback";
     o.provider = "textura";
   });
-  // Ultima pasada contra los rotulos (MaV, nuncaNiebla): hasta 4 momentos mas
-  // de los YouTube ya usados, en puntos lejanos a lo ya usado, siempre con
-  // juez y sin pasar el tope de usos ni repetir el video del plano vecino.
-  // Como nuncaNiebla de MaV: el tope de usos por video NO aplica a "otro
-  // momento" (un video que ya dio un plano bueno es del tema por
-  // construccion); solo no se pisan los tramos, no se repite el video del
-  // vecino y un video que falla 3 veces sale. Antes se cortaba toda la pasada
-  // apenas el primer video llegaba a 3 usos (0 rescatados en el Titanic).
+  // Ultima pasada contra los rotulos (MaV, nuncaNiebla): momentos mas de los
+  // YouTube ya usados o aprobados, siempre con juez, CON el tope de usos por
+  // video (ytRoom) y sin el video de los planos cercanos; un video que falla
+  // 3 veces sale. Primero los cuadros buenos de su hoja, despues a ciegas.
   let recovered = 0;
-  if (judge) {
+  if (judge && !(ctx.rescueDeadline && Date.now() > ctx.rescueDeadline)) {
     const fails = new Map<string, number>();
     for (let round = 0; round < LAST_PASS_ROUNDS; round++) {
       const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
@@ -1288,23 +1700,41 @@ async function rescueGaps(
         const near = neighbourOrigins(i);
         // Menos usado primero; nunca el video del plano de al lado.
         const sources = ytSources
-          .filter((s) => !near.includes(`youtube:${s.external_id}`) && (fails.get(s.external_id) ?? 0) < 3)
+          .filter((s) => !near.includes(`youtube:${s.external_id}`) && ytRoom(s) && (fails.get(s.external_id) ?? 0) < 3)
           .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
         let attempts = 0;
         for (const src of sources) {
           if (attempts >= LAST_PASS_TRIES) break;
-          const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
-          momentsUsed.set(src.external_id, seen);
-          const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
-          if (fraction === undefined) continue;
-          seen.add(fraction);
+          if (ctx.rescueDeadline && Date.now() > ctx.rescueDeadline) break;
+          const good = nextGoodMoment(ctx, src.external_id);
+          let tag: string;
+          let at: { startFraction: number } | { atSeconds: number };
+          if (good !== undefined) {
+            markMomentUsed(ctx, src.external_id, good);
+            tag = `t${Math.round(good)}`;
+            at = { atSeconds: good };
+          } else {
+            const seen = momentsUsed.get(src.external_id) ?? new Set<number>();
+            momentsUsed.set(src.external_id, seen);
+            const fraction = LAST_PASS_FRACTIONS.find((f) => ![...seen].some((u) => Math.abs(u - f) < 0.08));
+            if (fraction === undefined) continue;
+            seen.add(fraction);
+            tag = String(fraction);
+            at = { startFraction: fraction };
+          }
           attempts += 1;
-          const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { startFraction: fraction, tema });
+          const base = `youtube:${src.external_id}`;
+          usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
+          const clip = await materializeYouTube(ctx, row, src, judge, contexts.get(row.id), { ...at, tema, log: trailOf(row) });
           if (!clip) {
+            usesOf.set(base, Math.max(0, (usesOf.get(base) ?? 1) - 1));
             fails.set(src.external_id, (fails.get(src.external_id) ?? 0) + 1);
             continue;
           }
-          if (!(await save(row, { ...clip, external_id: `${src.external_id}@${fraction}` }, "youtube_ultima"))) continue;
+          if (!(await save(row, { ...clip, external_id: `${src.external_id}@${tag}` }, "youtube_ultima", true))) {
+            usesOf.set(base, Math.max(0, (usesOf.get(base) ?? 1) - 1));
+            continue;
+          }
           counts.rotulo -= 1;
           recovered += 1;
           break;
@@ -1312,10 +1742,69 @@ async function rescueGaps(
       }
     }
   }
-  // Frase clave de los rotulos que quedaron (una sola llamada al modelo).
+  // QA DE LO RESCATADO (MaV: juez de rescate): el QA final corria ANTES del
+  // rescate y lo rescatado entraba sin revision (asi entraron dos youtubers
+  // en selfie y el tunel de una mina). Todo lo que puso el rescate pasa por el
+  // mismo QA; lo que no pasa NO entra: rotulo sobre la textura con su frase.
+  let qaRescue = 0;
+  if (judge && process.env.DOCUMENTAL_QA_FINAL !== "off") {
+    const rescued = byOrder.filter((r) => {
+      const o = outcomeOf.get(r.id);
+      return o?.source === "fallback" && !!o.provider && o.provider !== "textura";
+    });
+    if (rescued.length) {
+      const visuals = await shotVisuals(ctx);
+      const items: QaItem[] = rescued.flatMap((r) => {
+        const v = visuals.get(r.id);
+        if (!v || v.provider === "textura") return [];
+        return [
+          {
+            sceneId: r.id,
+            order: r.order,
+            shot: judgeShotOf(r, contexts.get(r.id)),
+            url: v.url,
+            type: v.type,
+            ...(v.duration ? { durationSeconds: v.duration } : {}),
+            ...(v.title ? { sourceTitle: v.title } : {}),
+            rescue: true,
+          },
+        ];
+      });
+      const { decisions } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, QA_RESCUE_RONDA, [], mainSubjectsOf(ctx)).catch((err) => {
+        console.warn(`[documental] QA del rescate fallo: ${(err as Error).message}`);
+        return { decisions: [] as QaDecision[] };
+      });
+      for (const d of decisions.filter((x) => x.malo)) {
+        const row = byOrder.find((r) => r.id === d.sceneId);
+        if (!row) continue;
+        texture ??= await textureUrl(style, ctx, judge.workDir);
+        trailOf(row).push(`QA del rescate: ${d.codigo} (${d.por}) -> no entra`);
+        await persistShotVisual(
+          ctx,
+          row,
+          { provider: "textura", external_id: `textura-${row.order}`, type: "IMAGE", url: texture, license: "Propia", source_page: "", query: "rotulo" },
+          { code: "seguro", reason: `QA del rescate rechazo lo rescatado: ${d.codigo}`, rejected: rejectionsOf(row), source: "rotulo", rescate: trailOf(row), juicios: outcomeOf.get(row.id)?.juicios ?? [] }
+        );
+        const o = outcomeOf.get(row.id)!;
+        o.provider = "textura";
+        o.qa = "seguro";
+        qaRescue += 1;
+        console.log(`[documental] plano ${row.order}: QA del rescate lo rechazo (${d.codigo}: ${d.por}) -> rotulo`);
+      }
+      console.log(`[documental] ${ctx.projectId}: QA del rescate: ${items.length} planos, ${qaRescue} rechazados`);
+    }
+  }
+  // NUNCA NIEBLA: un plano que se quedo sin imagen despues de todo el rescate
+  // muestra el LUGAR real desde el satelite (el mapa tapa el plano entero),
+  // con su nombre y un encuadre distinto cada vez para no repetir. Siempre
+  // existe, nunca es una imagen equivocada y no estira al vecino.
+  // Incluye los planos de clase mapa SIN mapa encima (el plan no les dio lugar):
+  // si no, quedaban en niebla (Uyuni, plano 9: "el lago Minchin y luego el Tauca").
+  const satellite = await satelliteFallback(ctx, byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura"), trailOf, byOrder);
+  // Frase clave de los rotulos que quedaron (sin lugar para el mapa).
   const textured = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
   const withText = await addKeyPhraseOverlays(textured, ctx, judge, toolCtx);
-  console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, rotulos_con_texto: withText })}`);
+  console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, mapa_satelital: satellite, rotulos_con_texto: withText })}`);
 }
 
 // ESTILO MAPA INTERACTIVO (como el directorMapa de MaV): el video entero es un
@@ -1508,7 +1997,43 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   try {
     const idx = new Map(byOrder.map((r, i) => [r.id, i]));
     // Contexto del juez por plano (frases de alrededor, titulo, epoca por reglas...).
-    const contexts = shotContexts(byOrder, ctx.videoTopic);
+    // Donde pasa la historia (una llamada corta): el juez rechaza otro pais.
+    if (judge && !ctx.storyPlace) {
+      const place = await storyPlace(judge, ctx);
+      if (place) ctx.storyPlace = place;
+      console.log(`[documental] ${ctx.projectId}: la historia pasa en ${place ?? "(sin lugar)"}`);
+    }
+    const contexts = shotContexts(byOrder, ctx.videoTopic, ctx.storyPlace);
+    ctx.searchDeadline = Date.now() + Math.max(SEARCH_BUDGET_MS, rows.length * SEARCH_MS_PER_SHOT);
+    // Todas las busquedas de YouTube del video, adelantadas y en cache.
+    const ytQueries = rows.filter((r) => r.shot.clase !== "mapa").flatMap((r) => [r.shot.queryLocal ?? "", r.shot.query]);
+    if (youtubeEnabled()) prewarmYouTubeSearches(ytQueries);
+    // BIBLIOTECA DEL VIDEO: los videos de esas busquedas, escaneados y descritos
+    // UNA vez. Cada plano elige de aca; el rescate usa sus cuadros aptos.
+    if (youtubeEnabled() && judge && process.env.DOCUMENTAL_BIBLIOTECA !== "off") {
+      await reportJobProgress(ctx.jobId, 30, "Armando la biblioteca del video (metraje de YouTube)...", { force: true });
+      const t0 = Date.now();
+      ctx.library = await buildLibrary({
+        client: judge.client,
+        model: judge.model,
+        usage: judge.usage,
+        workDir: judge.workDir,
+        queries: ytQueries,
+        topic: ctx.videoTopic ?? "",
+        place: ctx.storyPlace ?? "",
+        shots: rows.length,
+      }).catch((err) => {
+        console.warn(`[biblioteca] fallo: ${(err as Error).message.slice(0, 200)}`);
+        return [];
+      });
+      for (const v of ctx.library) {
+        const good = v.frames.filter((f) => f.ok).map((f) => f.t);
+        if (good.length) rememberGoodMoments(ctx, v.logoCorner ? { ...v.candidate, logo_corner: v.logoCorner } : v.candidate, good);
+      }
+      const frames = ctx.library.reduce((n, v) => n + v.frames.filter((f) => f.ok).length, 0);
+      console.log(`[documental] ${ctx.projectId}: biblioteca de ${ctx.library.length} videos y ${frames} cuadros aptos en ${Math.round((Date.now() - t0) / 1000)} s`);
+      ctx.searchDeadline = Date.now() + Math.max(SEARCH_BUDGET_MS, rows.length * SEARCH_MS_PER_SHOT);
+    }
     await mapWithConcurrency(rows, SHOT_CONCURRENCY, async (row) => {
       const i = idx.get(row.id) ?? 0;
       const context = contexts.get(row.id);
@@ -1527,6 +2052,8 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     });
     // QA sin modelo (MaV): planos oscuros o vacios pasan a rescatarse.
     await reportJobProgress(ctx.jobId, 87, "Revisando que ningún plano esté oscuro o vacío...", { force: true });
+    // El presupuesto era de la busqueda: el QA final rellena sin el.
+    delete ctx.searchDeadline;
     const flagged = await brightnessQa(ctx, byOrder, outcomes, workDir, frames);
     qaCounts.oscuros = flagged.oscuros;
     qaCounts.vacios = flagged.vacios;

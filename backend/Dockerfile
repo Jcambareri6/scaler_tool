@@ -53,6 +53,7 @@ COPY skills ./skills
 # cada build: YouTube cambia sus controles seguido y una version vieja queda
 # bloqueada (MaV lo actualiza a diario). El paquete de Debian es viejo.
 ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /usr/local/bin/yt-dlp
-RUN chmod 755 /usr/local/bin/yt-dlp && mkdir -p /data/work && chown -R node:node /data
+# Del usuario node: el worker lo actualiza solo (yt-dlp -U) al arrancar y cada 24 h.
+RUN chmod 755 /usr/local/bin/yt-dlp && chown node:node /usr/local/bin/yt-dlp && mkdir -p /data/work && chown -R node:node /data
 USER node
 CMD ["node", "dist/worker.js"]

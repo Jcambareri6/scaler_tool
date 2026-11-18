@@ -34,9 +34,20 @@ assert.equal(e[2]!.hoy, true);
 assert.equal(e[2]!.anio, undefined, "hoy deja el plano sin anio");
 assert.equal(e[3]!.anio, 1912);
 assert.ok(e[0]!.historico && !e[0]!.preCine);
-// Sin anio antes: el primero que se dice despues.
+// Sin anio antes: NO toma el que se dice despues.
 const f = shotEpochs(["El barco era enorme.", "En 1912 zarpó."]);
-assert.equal(f[0]!.anio, 1912);
+assert.equal(f[0]!.anio, undefined);
+// Pero no uno que se dice mucho despues (La Rumorosa: 23 planos de hoy
+// quedaban "Era: 1915"), ni uno dicho hace muchos planos.
+const presente = ["La cuesta es peligrosa.", "Hay cruces al costado.", "Los camiones vuelcan.", "Nacieron leyendas.", "Entre 1915 y 1920 se abrió el camino.", "Era de terracería.", "Unió tres ciudades.", "Era estrecho.", "Y polvoriento.", "Hoy es autopista.", "Esta montaña murmura.", "Comentá abajo."];
+const r = shotEpochs(presente);
+assert.equal(r[0]!.anio, undefined, "4 planos antes del anio: sin epoca");
+assert.equal(r[1]!.anio, undefined, "3 planos antes: sin epoca");
+assert.equal(r[2]!.anio, undefined, "2 planos antes: tampoco");
+assert.equal(r[3]!.anio, undefined, "ni el inmediato anterior");
+assert.equal(r[8]!.anio, 1915, "4 planos despues del anio: todavia lo arrastra");
+assert.equal(r[10]!.anio, undefined, "6 planos despues: ya no");
+assert.equal(r[11]!.anio, undefined);
 // El anio del plan vale si es historico y no cae lejos del relato.
 const g = shotEpochs(["Nadie sabía nada.", "Las tribus vivían ahí."], [1850, 2020]);
 assert.equal(g[0]!.anio, 1850);

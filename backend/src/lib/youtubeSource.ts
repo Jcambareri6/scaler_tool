@@ -3,11 +3,13 @@ import http from "node:http";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import tls from "node:tls";
-import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { uploadPublicFile } from "./storage.js";
 import type { VisualCandidate } from "./documentalSources.js";
 import { ffmpegForNetwork } from "./ffmpegBin.js";
+import { frenoYoutube, limpiar, sheetSlots, ytdlpSlots } from "./youtubeGuard.js";
+import { cachedSearch, storeSearch } from "./documentalCache.js";
 
 // METRAJE DE YOUTUBE (como MaV, youtubePlano.js): busqueda con yt-dlp, el
 // juez elige por miniatura + titulo, y recien ahi se baja SOLO un tramo del
@@ -21,6 +23,7 @@ import { ffmpegForNetwork } from "./ffmpegBin.js";
 const ffmpegPath = ffmpegForNetwork;
 
 const YTDLP = process.env.YTDLP_PATH?.trim() || "yt-dlp";
+const GOOGLEVIDEO_IDLE_MS = 10_000;
 // YouTube bloquea las IPs de datacenter (el worker de Hetzner): con un proxy
 // residencial (ej: http://usuario:clave@pr.oxylabs.io:7777) la busqueda y la
 // descarga salen por IPs de hogares. Sin la variable, conexion directa.
@@ -92,7 +95,8 @@ export async function startRelay(directUrl: string, proxyUrl: string): Promise<{
             method: req.method === "HEAD" ? "HEAD" : "GET",
             headers: { ...(req.headers.range ? { Range: req.headers.range } : {}), "User-Agent": "Mozilla/5.0" },
             createConnection: () => socket,
-            timeout: 60_000,
+            // Sin bytes 10 s: se corta (MaV: 8 s). Antes 60 s por IP lenta.
+            timeout: GOOGLEVIDEO_IDLE_MS,
           },
           (up) => {
             res.writeHead(up.statusCode ?? 502, {
@@ -143,7 +147,7 @@ async function downloadSectionViaRelay(url: string, start: number, length: numbe
     }
     const relay = await startRelay(direct, proxy);
     try {
-      await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-ss", start.toFixed(2), "-i", relay.url, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], 180_000);
+      await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-ss", start.toFixed(2), "-i", relay.url, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], 90_000);
       const info = await stat(out);
       if (info.size >= 50_000) return;
       lastError = new Error("el tramo bajado esta vacio");
@@ -155,29 +159,129 @@ async function downloadSectionViaRelay(url: string, start: number, length: numbe
   }
   throw lastError ?? new Error("no se pudo bajar el tramo por el proxy");
 }
+
+// ---------- Hoja de cuadros (MaV: youtube_plano_escaneo, 16 cuadros) ----------
+// El juez elegia YouTube por la MINIATURA (la tapa, con titulos y montajes
+// que el video no tiene) y rechazaba videos utiles por "texto quemado". Ahora
+// ve 16 cuadros REALES repartidos en el video, en una hoja de 4x4, y dice cual
+// muestra lo que dice la voz: el tramo se baja desde ese cuadro.
+export const SHEET_FRAMES = 16;
+export function sheetTimes(total: number): number[] {
+  const from = total < 60 ? 1 : Math.min(30, Math.max(10, total * 0.06));
+  const to = Math.max(from + 1, total * 0.95);
+  return Array.from({ length: SHEET_FRAMES }, (_, i) => from + ((to - from) * i) / (SHEET_FRAMES - 1));
+}
+
+// URL directa de un video chico (360p) para leer cuadros sueltos con ffmpeg.
+// Con proxy: por el rele (ffmpeg no sale por el proxy), hasta 3 IPs.
+async function lowResSource(url: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const format = "bv*[height<=360][ext=mp4][protocol=https]/bv*[height<=480][protocol=https]/worst[protocol=https]";
+  const proxyOn = !!process.env.YTDLP_PROXY?.trim();
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < (proxyOn ? 3 : 1); attempt++) {
+    const proxy = proxyOn ? proxyForSession()! : null;
+    try {
+      const got = await run(YTDLP, [url, "-g", "-f", format, "--no-warnings", "--no-playlist", ...(proxy ? ["--proxy", proxy] : [])], 90_000);
+      const direct = got.trim().split(/\r?\n/)[0] ?? "";
+      if (!/^https:\/\//.test(direct)) throw new Error("yt-dlp no devolvio la URL directa");
+      if (!proxy) return { url: direct, close: async () => undefined };
+      const relay = await startRelay(direct, proxy);
+      return { url: relay.url, close: () => relay.close() };
+    } catch (err) {
+      lastError = err as Error;
+      if (!/Sign in to confirm|HTTP Error|timed out|tardo mas|Unable to download|proxy/i.test(lastError.message)) break;
+    }
+  }
+  throw lastError ?? new Error("sin URL directa");
+}
+
+export async function youtubeContactSheet(candidate: VisualCandidate, workDir: string, key: string): Promise<{ path: string; times: number[] } | null> {
+  if (!ffmpegPath) return null;
+  const total = candidate.video_seconds ?? candidate.duration_seconds;
+  if (!total || total < 8) return null;
+  const times = sheetTimes(total);
+  const source = await frenoYoutube.correr(() => lowResSource(candidate.url));
+  try {
+    const frames = await Promise.all(
+      times.map(async (t, k) => {
+        const file = path.join(workDir, `${key}-c${String(k).padStart(2, "0")}.jpg`);
+        try {
+          await sheetSlots.con(() => run(
+            ffmpegPath,
+            ["-y", "-hide_banner", "-loglevel", "error", "-ss", t.toFixed(2), "-i", source.url, "-frames:v", "1",
+              "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2", "-q:v", "5", file],
+            45_000
+          ));
+          return (await stat(file)).size > 1500 ? { file, t } : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    const ok = frames.filter((f): f is { file: string; t: number } => f !== null);
+    if (ok.length < SHEET_FRAMES / 2) return null;
+    // Renombrados en orden para el patron de ffmpeg (los que fallaron no dejan hueco).
+    const seq = path.join(workDir, `${key}-s%02d.jpg`);
+    await Promise.all(ok.map((f, i) => copyFile(f.file, seq.replace("%02d", String(i + 1).padStart(2, "0")))));
+    const out = path.join(workDir, `${key}-hoja.jpg`);
+    await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-start_number", "1", "-i", seq, "-vf", "tile=4x4", "-frames:v", "1", "-q:v", "4", out], 60_000);
+    await Promise.all(ok.flatMap((f, i) => [rm(f.file, { force: true }), rm(seq.replace("%02d", String(i + 1).padStart(2, "0")), { force: true })])).catch(() => undefined);
+    return { path: out, times: ok.map((f) => f.t) };
+  } finally {
+    await source.close().catch(() => undefined);
+  }
+}
+
 const SEARCH_RESULTS = 8;
 const MAX_VIDEO_SECONDS = 3 * 60 * 60;
-const MIN_VIDEO_SECONDS = 20;
+// MaV: 60 s a 3 h (menos de un minuto: shorts, clips sueltos).
+const MIN_VIDEO_SECONDS = 60;
+// Canales de charla (MaV: CANAL_CHARLA): podcasts, programas de plato, vlogs.
+export const BLOCKED_CHANNEL = /\b(podcast|clips|highlights|show|talks?|radio|interviews?|entrevistas?|v?logs?|vlogger|live|studio|tertulia|charlas?|reacts?|reacciones)\b/i;
 
 // Lo que MaV descarta por titulo: reacciones, recopilaciones, podcasts,
 // shorts, directos, gameplay, memes, "stock footage" y videos hechos con IA.
 // Mas peliculas, ficcion, simulaciones y videos de fans: en la prueba del
 // Titanic entraron escenas de la pelicula de 1997 y un simulador.
 export const BLOCKED_TITLE =
-  /\b(react(ion|s|ing)?|reaccion|compilation|recopilaci[oó]n|podcast|#?shorts?|live|en vivo|directo|stream|gameplay|let'?s play|meme|stock footage|ai generated|generad[oa] con ia|midjourney|sora|tiktok|movie|film scene|scene|escena|trailer|tr[aá]iler|1997|cameron|dicaprio|winslet|hollywood|pel[ií]cula|series|episode|cgi|3d|animation|animated|animaci[oó]n|cartoon|simulat\w*|simulador|sandbox|game|juego|roblox|minecraft|remix|music video|amv|edit|fan ?made|tribute|lyrics|legend goes on)\b/i;
+  /\b(react(ion|s|ing)?|reaccion|compilation|recopilaci[oó]n|podcast|#?shorts?|live|en vivo|directo|stream|gameplay|let'?s play|meme|stock footage|ai generated|generad[oa] con ia|midjourney|sora|tiktok|movie|film scene|scene|escena|trailer|tr[aá]iler|1997|cameron|dicaprio|winslet|hollywood|pel[ií]cula|series|episode|cgi|3d|animation|animated|animaci[oó]n|cartoon|simulat\w*|simulador|sandbox|game|juego|roblox|minecraft|remix|music video|amv|edit|fan ?made|tribute|lyrics|legend goes on|v?logs?|vlogger|vlogging|selfie|storytime|q ?& ?a|preguntas y respuestas|unboxing|my trip|our trip|mi viaje|nuestro viaje|day in the life|un d[ií]a (en|conmigo)|ven conmigo|come with me|conmigo|mysteries|misterios?|hidden|shutterstock|getty ?images|alamy|pond5|storyblocks|istock|dreamstime|watermark|marca de agua)\b/i;
+// Videos de vloggers y con marca de agua NUNCA entran (regla del cliente,
+// 17/11/2026): por titulo antes del juez, y despues el juez y el QA contestan
+// "camara" y "marca" por separado y el codigo descarta (visualJudge, qaFinal).
+
+// yt-dlp al dia (MaV lo actualiza a diario): YouTube cambia sus controles y
+// una version vieja queda bloqueada. Al arrancar el worker y cada 24 h.
+export async function updateYtDlp(): Promise<void> {
+  try {
+    const out = await runNow(YTDLP, ["-U"], 120_000);
+    console.log(`[youtube] yt-dlp: ${out.trim().split(/\r?\n/).pop() ?? "ok"}`);
+  } catch (err) {
+    console.warn(`[youtube] no se pudo actualizar yt-dlp: ${limpiar((err as Error).message).slice(0, 200)}`);
+  }
+}
 
 export function youtubeEnabled(): boolean {
   return process.env.DOCUMENTAL_YOUTUBE?.trim().toLowerCase() === "on";
 }
 
 function run(cmd: string, args: string[], timeoutMs: number): Promise<string> {
+  // yt-dlp: de a YT_PARALELO a la vez en todo el proceso.
+  // Con --socket-timeout: una conexion colgada no se lleva todo el timeout.
+  if (cmd === YTDLP) {
+    const net = args.includes("-U") ? [] : ["--socket-timeout", "15", "--retries", "2"];
+    return ytdlpSlots.con(() => runNow(cmd, [...args, ...net], timeoutMs));
+  }
+  return runNow(cmd, args, timeoutMs);
+}
+
+function runNow(cmd: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { windowsHide: true });
     let out = "";
     let err = "";
     const timer = setTimeout(() => {
       proc.kill("SIGKILL");
-      reject(new Error(`${cmd} tardo mas de ${Math.round(timeoutMs / 1000)} s`));
+      reject(new Error(`${path.basename(cmd)} tardo mas de ${Math.round(timeoutMs / 1000)} s`));
     }, timeoutMs);
     proc.stdout.on("data", (c) => (out += c.toString()));
     proc.stderr.on("data", (c) => (err += c.toString()));
@@ -188,7 +292,8 @@ function run(cmd: string, args: string[], timeoutMs: number): Promise<string> {
     proc.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve(out);
-      else reject(new Error(`${cmd} ${code}: ${err.slice(-300)}`));
+      // Sin la clave del proxy: el mensaje termina en los logs y en la base.
+      else reject(new Error(limpiar(`${path.basename(cmd)} ${code}: ${err.slice(-300)}`)));
     });
   });
 }
@@ -202,18 +307,71 @@ interface FlatEntry {
   live_status?: string;
 }
 
-export async function searchYouTubeVideos(query: string): Promise<VisualCandidate[]> {
-  const raw = await run(YTDLP, [`ytsearch${SEARCH_RESULTS}:${query}`, "--flat-playlist", "-J", "--no-warnings", ...proxyArgs()], 45_000);
+// Puntaje de un resultado (MaV: puntuarCandidato), SIN el premio a noticieros
+// y canales oficiales (son los que reclaman con Content ID):
+// - el titulo nombra lo que se busca (el lugar, el sujeto): la senal mas fuerte
+//   de que el video es de ahi y no de otro lugar parecido;
+// - toma aerea, drone, 4K, footage, recorrido: material limpio sin gente a camara;
+// - 2 a 30 min (reportajes y vuelos); listas y recopilaciones abajo.
+const CLEAN_FOOTAGE = /\b(drone|dron|a[eé]reo|aerial|4k|footage|imagenes|im[aá]genes|recorrido|descenso|bajada|vuelo|timelapse|archivo|archive|hist[oó]ric[oa]s?|1[89]\d0s)\b/i;
+const LIST_TITLE = /\b(top ?\d+|los \d+|best of|lo mejor de|ranking|curiosidades|datos curiosos|you won'?t believe|no creer[aá]s)\b/i;
+export function rankYouTube<T extends { title?: string; duration?: number }>(entries: T[], query: string): T[] {
+  const plain = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const terms = [...new Set(plain(query).split(/[^a-z0-9]+/).filter((w) => w.length >= 4))];
+  const score = (e: T) => {
+    const title = plain(e.title ?? "");
+    const named = terms.filter((w) => title.includes(w)).length;
+    const d = e.duration ?? 0;
+    return Math.min(named, 3) * 0.7 + (CLEAN_FOOTAGE.test(e.title ?? "") ? 0.5 : 0) + (d >= 120 && d <= 1800 ? 0.6 : 0) - (LIST_TITLE.test(e.title ?? "") ? 1 : 0);
+  };
+  return entries
+    .map((e, i) => ({ e, i, s: score(e) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((x) => x.e);
+}
+
+// Busquedas en curso: si dos planos (o la busqueda adelantada) piden la misma
+// a la vez, comparten un solo yt-dlp.
+const inflight = new Map<string, Promise<VisualCandidate[]>>();
+
+export function searchYouTubeVideos(query: string): Promise<VisualCandidate[]> {
+  const running = inflight.get(query);
+  if (running) return running;
+  const p = (async () => {
+    // Cache de 6 h (MaV): la misma busqueda no vuelve a pasar por el proxy.
+    const cached = await cachedSearch(query);
+    if (cached) return cached;
+    const results = await searchYouTubeVideosNow(query);
+    await storeSearch(query, results);
+    return results;
+  })().finally(() => inflight.delete(query));
+  inflight.set(query, p);
+  return p;
+}
+
+// Busquedas ADELANTADAS (MaV): todas las del video al empezar, en segundo
+// plano. Cuando cada plano llega a buscar, ya esta en cache o en curso.
+export function prewarmYouTubeSearches(queries: string[]): void {
+  for (const q of [...new Set(queries.map((x) => x.trim()).filter(Boolean))]) {
+    if (frenoYoutube.abierto()) return;
+    void searchYouTubeVideos(q).catch(() => undefined);
+  }
+}
+
+async function searchYouTubeVideosNow(query: string): Promise<VisualCandidate[]> {
+  const raw = await frenoYoutube.correr(() => run(YTDLP, [`ytsearch${SEARCH_RESULTS}:${query}`, "--flat-playlist", "-J", "--no-warnings", ...proxyArgs()], 45_000));
   const entries = ((JSON.parse(raw) as { entries?: FlatEntry[] }).entries ?? []).filter(
     (e) =>
       e.id &&
       e.title &&
       !BLOCKED_TITLE.test(e.title) &&
+      !BLOCKED_CHANNEL.test(e.channel ?? e.uploader ?? "") &&
       (e.live_status ?? "not_live") === "not_live" &&
       (e.duration ?? 0) >= MIN_VIDEO_SECONDS &&
       (e.duration ?? 0) <= MAX_VIDEO_SECONDS
   );
-  return entries.slice(0, 4).map((e) => ({
+  const ranked = rankYouTube(entries, query);
+  return ranked.slice(0, 4).map((e) => ({
     provider: "youtube",
     external_id: e.id!,
     type: "VIDEO" as const,
@@ -245,8 +403,8 @@ export async function downloadYouTubeSegment(candidate: VisualCandidate, seconds
   const start = Math.max(intro, Math.min(wanted, total - length - 2));
   const raw = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}-raw.mp4`);
   const out = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}.mp4`);
-  await downloadSection(candidate.url, start, length, raw);
-  await cleanSegment(raw, needed, out);
+  await frenoYoutube.correr(() => downloadSection(candidate.url, start, length, raw));
+  await cleanSegment(raw, needed, out, candidate.logo_corner);
   await rm(raw, { force: true }).catch(() => undefined);
   return out;
 }
@@ -255,7 +413,16 @@ export async function downloadYouTubeSegment(candidate: VisualCandidate, seconds
 // select='gt(scene,0.22)' y fundidos a negro con blackdetect; se usa el tramo
 // sin cortes que contiene el centro de la ventana (o el mas largo). Si queda
 // corto se ralentiza hasta 0,5x; nunca se repite ni se congela.
-async function cleanSegment(raw: string, needed: number, out: string): Promise<void> {
+// Recorte del logo chico de esquina (MaV: crop=iw*0.84:ih*0.84 lejos de esa
+// esquina). El render despues lo lleva a 1080p.
+export function cornerCrop(corner: "tl" | "tr" | "bl" | "br" | undefined): string | null {
+  if (!corner) return null;
+  const x = corner === "tl" || corner === "bl" ? "iw*0.16" : "0";
+  const y = corner === "tl" || corner === "tr" ? "ih*0.16" : "0";
+  return `crop=trunc(iw*0.84/2)*2:trunc(ih*0.84/2)*2:${x}:${y}`;
+}
+
+async function cleanSegment(raw: string, needed: number, out: string, logoCorner?: "tl" | "tr" | "bl" | "br"): Promise<void> {
   if (!ffmpegPath) throw new Error("ffmpeg-static no resolvio el binario");
   const probe = await runCapture(ffmpegPath, ["-hide_banner", "-i", raw, "-an", "-vf", "blackdetect=d=0.03:pix_th=0.10,select='gt(scene,0.22)',showinfo", "-f", "null", "-"], 90_000);
   // Imagen quieta (MaV: freezedetect) y barras negras (cropdetect), en otra pasada.
@@ -284,7 +451,8 @@ async function cleanSegment(raw: string, needed: number, out: string): Promise<v
   const slow = take < needed ? Math.min(2, needed / take) : 1; // 0,5x como minimo
   if (frozenShare(still, from, from + take, dur) > 0.8) throw new Error("el tramo es una imagen fija (mas del 80 % quieto)");
   const crop = barsCrop(still);
-  const filters = [...(crop ? [crop] : []), ...(slow > 1 ? [`setpts=${slow.toFixed(3)}*PTS`] : [])];
+  const logo = cornerCrop(logoCorner);
+  const filters = [...(crop ? [crop] : []), ...(logo ? [logo] : []), ...(slow > 1 ? [`setpts=${slow.toFixed(3)}*PTS`] : [])];
   await runCapture(
     ffmpegPath,
     ["-y", "-hide_banner", "-loglevel", "error", "-ss", from.toFixed(2), "-i", raw, "-t", take.toFixed(2), "-an",
@@ -358,6 +526,8 @@ export function momentsFromCues(cues: Cue[], keywords: string[]): number[] {
 // Subtitulos del video (manuales o automaticos, es/en) sin bajar el video.
 // hasSubs = false si no hay: el que llama usa una fraccion del video.
 export async function subtitleMoments(candidate: VisualCandidate, keywords: string[], workDir: string): Promise<{ hasSubs: boolean; moments: number[] }> {
+  // Con el freno abierto no se piden subtitulos (se cuelgan 60 s).
+  if (frenoYoutube.abierto()) return { hasSubs: false, moments: [] };
   const base = path.join(workDir, `subs-${candidate.external_id}`);
   // Los originales primero: la traduccion automatica ("es" de un video en
   // ingles) es la que mas 429 da. Con --ignore-errors sigue si falla uno, y
@@ -365,7 +535,7 @@ export async function subtitleMoments(candidate: VisualCandidate, keywords: stri
   await run(
     YTDLP,
     [candidate.url, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", "en-orig,es-orig,en,es", "--sub-format", "vtt", "--ignore-errors", "--no-warnings", "--no-playlist", ...proxyArgs(), "-o", `${base}.%(ext)s`],
-    60_000
+    15_000 // subtitulos: 15 s (antes 60)
   ).catch(() => undefined);
   const files = (await readdir(workDir)).filter((f) => f.startsWith(path.basename(base)) && f.endsWith(".vtt"));
   if (files.length === 0) return { hasSubs: false, moments: [] };
@@ -460,7 +630,7 @@ async function downloadSectionOnce(url: string, start: number, length: number, o
       "-o",
       out,
     ],
-    180_000
+    90_000
   );
   const info = await stat(out);
   if (info.size < 50_000) throw new Error("el tramo bajado esta vacio");

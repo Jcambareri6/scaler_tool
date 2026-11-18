@@ -194,6 +194,9 @@ export interface OverlaySpec {
   // "data": cifras de una fuente abierta (Banco Mundial), no del guion; la
   // fuente va en `label` y se muestra en pantalla.
   source: "script" | "data";
+  // Ocupa el plano ENTERO (de su inicio a su fin): el mapa de un plano de
+  // clase mapa, que tapa la textura de fondo (sin esto se veia la niebla).
+  full?: boolean;
   // Titulo/etiqueta corta (tambien literal del guion, ver generate_overlay).
   label?: string;
   items?: OverlayItem[];

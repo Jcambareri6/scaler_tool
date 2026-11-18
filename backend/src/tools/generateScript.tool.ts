@@ -10,6 +10,7 @@ import { fetchWithTimeout } from "../lib/http.js";
 import { MAX_SCRIPT_CHARS } from "../lib/scriptLimits.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { getDocumentalStyle } from "../lib/documentalStyles.js";
+import { comprobarHechos } from "../lib/comprobarHechos.js";
 
 // Un guion completo (hasta MAX_OUTPUT_TOKENS) puede tardar bastante mas que
 // una llamada de chat corta -- 30s (el default de fetchWithTimeout) cortaria
@@ -261,6 +262,35 @@ function parseGeneratedScript(raw: unknown): GeneratedScriptPayload {
   };
 }
 
+// ¿El guion cumple lo que promete? ("cuatro datos" -> hay cuatro; "te cuento
+// por que" -> lo cuenta). null si cumple o si la revision falla.
+const PROMISE_CHECK_MODEL = "claude-haiku-5-5";
+async function missingPromises(client: Anthropic, text: string): Promise<string | null> {
+  try {
+    const message = await client.messages.create({
+      model: PROMISE_CHECK_MODEL,
+      max_tokens: 3000,
+      messages: [
+        {
+          role: "user",
+          content: `Guion de un video:\n"""\n${text.slice(0, 30000)}\n"""\n\n¿El guion cumple TODO lo que promete? Revisa: si anuncia una cantidad ("cuatro datos", "doce cosas", "tres razones"), cuenta cuantas desarrolla de verdad; si promete contar o revelar algo, si lo cuenta. Responde SOLO JSON: {"cumple": true|false, "falta": "que falta, en una frase (ej: anuncia doce datos y desarrolla nueve: faltan el 10, 11 y 12)"}`,
+        },
+      ],
+    });
+    const raw = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+    // Tolerante: sin JSON (o cortado) cuenta como "no se pudo revisar".
+    const a = raw.indexOf("{");
+    const b = raw.lastIndexOf("}");
+    if (a < 0 || b <= a) throw new Error(`respuesta sin JSON (${message.stop_reason}): ${raw.slice(0, 120)}`);
+    const parsed = JSON.parse(raw.slice(a, b + 1)) as { cumple?: unknown; falta?: unknown };
+    if (parsed.cumple === false && typeof parsed.falta === "string" && parsed.falta.trim()) return parsed.falta.trim().slice(0, 300);
+    return null;
+  } catch (err) {
+    console.warn(`[generate_script] revision de promesas fallo: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 async function generateWithAnthropic(
   systemPrompt: string,
   userPrompt: string,
@@ -322,14 +352,23 @@ async function generateWithAnthropic(
       fullText = `${withoutClosing.trimEnd()}\n\n${parsed.full_text.trimStart()}`;
     }
 
-    if (!targetChars || fullText.length >= targetChars * MIN_ACCEPTABLE_LENGTH_RATIO) {
-      break;
-    }
+    const lengthOk = !targetChars || fullText.length >= targetChars * MIN_ACCEPTABLE_LENGTH_RATIO;
     if (attempt === MAX_CONTINUATION_ATTEMPTS) {
       break;
     }
+    // Lo que el guion promete y no cumple (MaV revisa el largo; aca ademas
+    // lo prometido): el de 9 minutos anunciaba "doce datos" y terminaba en el
+    // noveno. Una llamada corta a Haiku cuando el largo ya alcanza.
+    const missing = lengthOk ? await missingPromises(client, fullText) : null;
+    if (lengthOk && !missing) {
+      break;
+    }
+    if (missing) console.log(`[generate_script] el guion no cumple lo que promete: ${missing} -> se completa`);
 
-    const missingChars = targetChars - fullText.length;
+    const missingChars = Math.max(0, (targetChars ?? fullText.length) - fullText.length);
+    const ask = missing
+      ? `El guion promete algo que no cumple: ${missing}. Agrega SOLO lo que falta (contenido nuevo, mismo tono), usando la tool "${CONTINUE_SCRIPT_TOOL_NAME}".`
+      : `El guion lleva ${fullText.length} caracteres y el objetivo es ${targetChars}. Hay que extenderlo aproximadamente ${missingChars} caracteres mas, usando la tool "${CONTINUE_SCRIPT_TOOL_NAME}".`;
     messages.push({ role: "assistant", content: response.content });
     messages.push({
       role: "user",
@@ -341,7 +380,7 @@ async function generateWithAnthropic(
         },
         {
           type: "text",
-          text: `El guion lleva ${fullText.length} caracteres y el objetivo es ${targetChars}. Hay que extenderlo aproximadamente ${missingChars} caracteres mas, usando la tool "${CONTINUE_SCRIPT_TOOL_NAME}".
+          text: `${ask}
 El video tiene que tener UN SOLO cierre. El texto anterior ya termina con un cierre (conclusion, reflexion final, despedida, pedido de like/suscripcion, etc.), asi que:
 1. En "closing_start" copia TEXTUALMENTE las primeras palabras donde empieza ese cierre en el guion acumulado. Todo desde ahi se va a borrar.
 2. En "full_text" escribi SOLO el fragmento nuevo: continua el desarrollo desde justo antes de ese cierre, con contenido nuevo (sin repetir ni resumir lo ya escrito), mismo tono y estilo, y termina con el unico cierre del video.
@@ -349,6 +388,20 @@ No escribas mas de un cierre ni despedidas intermedias.`,
         },
       ],
     });
+  }
+
+  // Datos contra Wikipedia antes de la voz (MaV: comprobarHechos). Corrige solo
+  // lo que la fuente contradice; si falla, el guion sigue igual.
+  if (process.env.FACTCHECK?.trim().toLowerCase() !== "off") {
+    const checked = await comprobarHechos(client, fullText).catch((err) => {
+      console.warn(`[generate_script] comprobar hechos fallo: ${(err as Error).message}`);
+      return null;
+    });
+    if (checked) {
+      console.log(`[generate_script] hechos: ${checked.checked} revisados, ${checked.changes.length} corregidos`);
+      for (const c of checked.changes) console.log(`[generate_script]   "${c.antes}" -> "${c.despues}" (${c.por}; ${c.fuente})`);
+      fullText = checked.text;
+    }
   }
 
   return { title, full_text: fullText };
