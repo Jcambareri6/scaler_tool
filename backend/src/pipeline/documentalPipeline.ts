@@ -16,7 +16,7 @@ import { makeWorkDir } from "../lib/workDir.js";
 import { envInt } from "../lib/env.js";
 import { buildPhrases, type Phrase } from "../director/phrases.js";
 import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGraphic } from "../director/montajista.js";
-import { JUDGE_MODEL, judgeCandidates, type CandidateVerdict, type JudgeResult, type JudgeShot, type QaCode } from "../director/visualJudge.js";
+import { JUDGE_MODEL, QA_MODEL, judgeCandidates, type CandidateVerdict, type JudgeResult, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
 import { correctPlace, haversineKm } from "../lib/geocode.js";
@@ -974,7 +974,37 @@ export function summarizeRejections(rejected: CandidateVerdict[]): string {
   return [...counts].sort((a, b) => b[1] - a[1]).map(([code, n]) => `${code} x${n}`).join(", ") || "ningun candidato";
 }
 
-type Judge = { client: Anthropic; model: string; workDir: string; usage: Record<string, number> };
+type Judge = { client: Anthropic; model: string; qaModel?: string; workDir: string; usage: Record<string, number> };
+
+// Precio por millon de tokens (entrada, salida), USD. Para estimar el costo
+// de cada video y verlo en documental_plan.usage.costo_usd.
+const PRICE_PER_M: Record<string, [number, number]> = {
+  "claude-haiku-5-5": [0.1, 0.5],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-sonnet-5": [2, 10],
+  "claude-opus-5-5": [4, 20],
+  "claude-opus-5": [5, 25],
+};
+function priced(model: string, input = 0, output = 0): number {
+  const [i, o] = PRICE_PER_M[model] ?? [2, 10];
+  return (input * i + output * o) / 1_000_000;
+}
+export function estimateCostUsd(
+  judge: Record<string, number>,
+  montaje: Record<string, { input?: number; output?: number }> | undefined,
+  judgeModel: string,
+  qaModel: string
+): { total: number; partes: Record<string, number> } {
+  const partes: Record<string, number> = {
+    juez: priced(judgeModel, judge.input, judge.output),
+    biblioteca: priced(judgeModel, judge.biblioteca_input, judge.biblioteca_output),
+    qa: priced(qaModel, judge.qa_input, judge.qa_output),
+    lugar: priced("claude-haiku-5-5", judge.place_input, judge.place_output),
+    montaje: Object.entries(montaje ?? {}).reduce((s, [m, u]) => s + priced(m, u?.input, u?.output), 0),
+  };
+  for (const k of Object.keys(partes)) partes[k] = Math.round(partes[k]! * 1000) / 1000;
+  return { total: Object.values(partes).reduce((a, b) => a + b, 0), partes };
+}
 
 // Visual (url + tipo) de cada plano, desde assets.
 type ShotVisual = { url: string; type: "VIDEO" | "IMAGE"; provider: string; via: string; title?: string; duration?: number };
@@ -1149,7 +1179,7 @@ async function finalQa(
         },
       ];
     });
-    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, ronda, obras, mainSubjectsOf(ctx));
+    const { decisions, obras: kept } = await runQaFinal(judge.client, judge.qaModel ?? QA_MODEL, items, judge.workDir, judge.usage, ronda, obras, mainSubjectsOf(ctx));
     obras = kept;
     all.push(...decisions);
     const badRows = decisions.filter((d) => d.malo).flatMap((d) => byOrder.filter((r) => r.id === d.sceneId));
@@ -1770,7 +1800,7 @@ async function rescueGaps(
           },
         ];
       });
-      const { decisions } = await runQaFinal(judge.client, judge.model, items, judge.workDir, judge.usage, QA_RESCUE_RONDA, [], mainSubjectsOf(ctx)).catch((err) => {
+      const { decisions } = await runQaFinal(judge.client, judge.qaModel ?? QA_MODEL, items, judge.workDir, judge.usage, QA_RESCUE_RONDA, [], mainSubjectsOf(ctx)).catch((err) => {
         console.warn(`[documental] QA del rescate fallo: ${(err as Error).message}`);
         return { decisions: [] as QaDecision[] };
       });
@@ -1979,6 +2009,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
       ? {
           client: new Anthropic({ apiKey: provider.api_key }),
           model: (provider.configuration?.juez_model as string | undefined) ?? JUDGE_MODEL,
+          qaModel: (provider.configuration?.qa_model as string | undefined) ?? QA_MODEL,
           workDir,
           usage: judgeUsage,
         }
@@ -2082,12 +2113,14 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
   }
 
   // 5. Plan guardado para la revision y la auditoria.
+  const costo = estimateCostUsd(judgeUsage, plan.usage as Record<string, { input?: number; output?: number }> | undefined, judge?.model ?? JUDGE_MODEL, judge?.qaModel ?? QA_MODEL);
+  console.log(`[documental] ${ctx.projectId}: costo de modelos ~${costo.total.toFixed(2)} USD (${JSON.stringify(costo.partes)})`);
   const summary = {
     style: style.id,
     source: plan.source,
     chapters: plan.chapters,
     issues: plan.issues,
-    usage: { montaje: plan.usage, juez: judgeUsage },
+    usage: { montaje: plan.usage, juez: judgeUsage, costo_usd: costo },
     shots: outcomes.sort((a, b) => a.order - b.order),
     qa: {
       hoja,

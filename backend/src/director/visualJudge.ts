@@ -20,11 +20,21 @@ import { youtubeContactSheet } from "../lib/youtubeSource.js";
 // ffmpeg que puede leer de la red (en el worker, el de Debian: ver lib/ffmpegBin.ts).
 const ffmpegPath = ffmpegForNetwork;
 
-export const JUDGE_MODEL = "claude-sonnet-5-5";
+// COSTO (19/11/2026): el juez con Sonnet era el 85 % del costo (~1 USD por
+// minuto de video). El trabajo de VOLUMEN (biblioteca, elegir entre
+// candidatos, revisar el tramo) va con Haiku 5.5 (20 veces mas barato); la
+// ULTIMA palabra (QA final de todo el video y de lo rescatado) sigue en
+// Sonnet. Los controles duros (vloggers, marcas, pais, epoca) estan en el codigo.
+export const JUDGE_MODEL = "claude-haiku-5-5";
+export const QA_MODEL = "claude-sonnet-5-5";
 // Reserva del juez y del QA (MaV: el 429 pasa a otro modelo, el 404 al alias):
 // si Sonnet esta saturado, limitado o retirado, Opus. Solo Claude. Sin esto,
 // con Sonnet caido no entraba ningun YouTube y el QA dejaba pasar todo.
 export const JUDGE_FALLBACK_MODEL = process.env.DOCUMENTAL_JUDGE_FALLBACK?.trim() || "claude-opus-5-5";
+// Reserva de cada modelo: Haiku -> Sonnet, Sonnet -> Opus.
+function fallbackFor(model: string): string {
+  return /haiku/.test(model) ? QA_MODEL : JUDGE_FALLBACK_MODEL;
+}
 
 function retriable(err: unknown): boolean {
   const status = (err as { status?: number }).status;
@@ -35,9 +45,10 @@ export async function claudeJudge(client: Anthropic, params: Anthropic.MessageCr
   try {
     return await client.messages.stream(params).finalMessage();
   } catch (err) {
-    if (!retriable(err) || params.model === JUDGE_FALLBACK_MODEL) throw err;
-    console.warn(`[juez] ${params.model} fallo (${(err as { status?: number }).status ?? "?"}): pasa a ${JUDGE_FALLBACK_MODEL}`);
-    return await client.messages.stream({ ...params, model: JUDGE_FALLBACK_MODEL }).finalMessage();
+    const fallback = fallbackFor(params.model);
+    if (!retriable(err) || params.model === fallback) throw err;
+    console.warn(`[juez] ${params.model} fallo (${(err as { status?: number }).status ?? "?"}): pasa a ${fallback}`);
+    return await client.messages.stream({ ...params, model: fallback }).finalMessage();
   }
 }
 

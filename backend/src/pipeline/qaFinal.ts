@@ -139,7 +139,9 @@ export async function qaFrames(item: QaItem, workDir: string): Promise<string[]>
   }
   const span = Math.max(1, item.durationSeconds ?? 6);
   const outs: string[] = [];
-  for (const [i, f] of [0.15, 0.5, 0.85].entries()) {
+  // 2 cuadros por clip (antes 3): el QA mira inicio y final del plano; menos
+  // imagenes por llamada = menos costo, y el escaneo fino ya lo hizo el juez.
+  for (const [i, f] of [0.25, 0.75].entries()) {
     const out = `${base}-${i}.jpg`;
     try {
       await ffmpeg(["-y", "-loglevel", "error", ...net, "-ss", (f * span).toFixed(2), "-i", item.url, "-frames:v", "1", "-vf", "scale=448:-2", "-q:v", "5", out]);
@@ -295,9 +297,18 @@ export async function judgeBatch(
       content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: (await readFile(f)).toString("base64") } });
     }
   }
-  const message = await claudeJudge(client, { model, max_tokens: 6000 + 800 * batch.length, system: SYSTEM, messages: [{ role: "user", content }] });
-  usage.input = (usage.input ?? 0) + message.usage.input_tokens;
-  usage.output = (usage.output ?? 0) + message.usage.output_tokens;
+  const message = await claudeJudge(client, {
+    model,
+    max_tokens: 6000 + 800 * batch.length,
+    system: SYSTEM,
+    // Esfuerzo bajo: el QA decide ok/rechazo con reglas claras; pensar de mas
+    // solo suma tokens de salida (el 40 % del costo del juez con Sonnet).
+    output_config: { effort: "low" },
+    messages: [{ role: "user", content }],
+  } as Anthropic.MessageCreateParamsNonStreaming);
+  // Aparte del juez: el QA es otro modelo (Sonnet) y se cobra distinto.
+  usage.qa_input = (usage.qa_input ?? 0) + message.usage.input_tokens;
+  usage.qa_output = (usage.qa_output ?? 0) + message.usage.output_tokens;
   const text = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
   return parseQaVerdicts(parseArray(text), batch.map((b) => b.item.order));
 }
