@@ -296,8 +296,7 @@ export default function PreviewPanel({ projectId }: Props) {
   const [overlayTheme, setOverlayTheme] = useState<OverlayTheme>("documental");
   const [renderQuality, setRenderQuality] = useState<RenderQuality>("720p");
   const [visualSource, setVisualSource] = useState<VisualSource>("stock");
-  // Mientras el cliente prueba, los admins solo ven el formato Documental.
-  const [videoFormat, setVideoFormat] = useState<VideoFormat>("documental");
+  const [videoFormat, setVideoFormat] = useState<VideoFormat>("stock");
   // "Solo IA"/"Mixto" (video con SnapGen) solo para admins; el backend lo
   // vuelve a chequear (orchestrator.ts) y para el resto busca stock.
   const { account } = useAccount();
@@ -326,7 +325,8 @@ export default function PreviewPanel({ projectId }: Props) {
         setOverlayTheme(p.overlayTheme);
         setRenderQuality(p.renderQuality);
         setVisualSource(p.visualSource);
-        setVideoFormat("documental");
+        // El formato elegido al crear el proyecto (estándar o documental).
+        setVideoFormat(p.videoFormat);
         setVideoStyle(enabledStyleId(p.videoStyle));
       }
     });
@@ -497,8 +497,7 @@ export default function PreviewPanel({ projectId }: Props) {
             )
               // "Todo animado" todavia no esta listo: solo se ve donde
               // VITE_TODO_ANIMADO=on (local, para seguir probandolo).
-              // Mientras el cliente prueba: solo Documental.
-              .filter((opt) => opt.value === "documental")
+              .filter((opt) => opt.value !== "animated" || import.meta.env.VITE_TODO_ANIMADO === "on")
               .map((opt) => (
               <button
                 key={opt.value}
