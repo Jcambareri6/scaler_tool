@@ -21,7 +21,9 @@ import { SHOT_CLASSES, type DocumentalStyle, type MusicMood, type ShotClass } fr
 // orquestador. Modelo configurable en provider "anthropic":
 // configuration.montaje_model.
 
-const DEFAULT_MODEL = "claude-opus-5-5";
+// Sonnet 5.5 (antes Opus): la mitad del costo del plan; el plan lo validan
+// el verificador y las reglas en codigo (cobertura, anio, busquedas abstractas).
+const DEFAULT_MODEL = "claude-sonnet-5-5";
 // ~120 planos en un video de 10 min: el plan es largo (streaming).
 const MAX_TOKENS = 48000;
 const ROTULO_TYPES = ["lower_third", "person_card", "milestone", "badge"];
