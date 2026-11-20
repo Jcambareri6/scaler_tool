@@ -97,16 +97,58 @@ const NEAR_MAX_KM = 2500;
 // Coordenada final de un lugar: la del modelo si cae cerca (<= 25 km) de
 // algun resultado; si no (o si falta), la del mejor resultado. El tamano del
 // sitio sale del resultado elegido o del mas cercano a la coordenada.
+// Oceanos y mares: Nominatim no los tiene como lugar buscable y devuelve
+// tocayos en tierra ("Atlantico Norte" -> la Region Autonoma del Atlantico
+// Norte de Nicaragua). Para estos manda la coordenada del modelo.
+export const WATER_BODY = /\b(oc[eé]ano|mar(es)?|atl[aá]ntico|pac[ií]fico|[ií]ndico|[aá]rtico|ant[aá]rtico|golfo|estrecho|ocean|sea|gulf|strait)\b/i;
+// Regiones administrativas: si el resultado es una de estas y cae a mas de
+// COLLISION_KM de la coordenada del modelo, es un tocayo, no un error del modelo.
+const ADMIN_AREA = new Set(["state", "region", "province", "county", "state_district", "municipality", "administrative"]);
+const COLLISION_KM = 1500;
+
+// Encuadres del mapa satelital de reserva (rescate): distancia (km de alto) y
+// un corrimiento chico del centro, para que dos planos de mapa seguidos no se
+// vean iguales.
+export const SATELLITE_FRAMES = [
+  { km: 4, dLat: 0, dLon: 0 },
+  { km: 14, dLat: 0.01, dLon: -0.015 },
+  { km: 45, dLat: -0.03, dLon: 0.03 },
+  { km: 2, dLat: 0.004, dLon: 0.006 },
+  { km: 25, dLat: -0.012, dLon: -0.02 },
+];
+// Oceano o mar: a 2-45 km solo se ve agua azul (PILOTO 7, "Atlantico Norte").
+// Se abre hasta ver costas, y en un lugar grande (provincia, region) el
+// encuadre acompana su tamano.
+const WATER_KM = 1500;
+const WIDE_SCALE = [1, 1.4, 0.8, 1.8, 1.1];
+export function satelliteKm(k: number, name: string, placeKm?: number): number {
+  const f = SATELLITE_FRAMES[k % SATELLITE_FRAMES.length]!;
+  const base = WATER_BODY.test(name) ? Math.max(WATER_KM, placeKm ?? 0) : placeKm;
+  if (!base || base <= 45) return f.km;
+  return Math.round(base * WIDE_SCALE[k % WIDE_SCALE.length]!);
+}
+
 export async function correctPlace(
   name: string,
   model: { lat: number; lon: number } | undefined,
   near?: { lat: number; lon: number }
 ): Promise<{ lat: number; lon: number; km?: number; corrected: boolean } | null> {
-  const results = name ? await geocode(name) : [];
   const validModel =
     model && Number.isFinite(model.lat) && Number.isFinite(model.lon) && Math.abs(model.lat) <= 90 && Math.abs(model.lon) <= 180 && !(model.lat === 0 && model.lon === 0)
       ? model
       : undefined;
+  // Un oceano o mar sin coordenada del modelo: mejor nada que un tocayo en tierra.
+  if (WATER_BODY.test(name)) return validModel ? { ...validModel, corrected: false } : null;
+  const results = name ? await geocode(name) : [];
+  return pickPlace(results, validModel, near);
+}
+
+// La decision de correctPlace sin red (para las pruebas).
+export function pickPlace(
+  results: GeoResult[],
+  validModel: { lat: number; lon: number } | undefined,
+  near?: { lat: number; lon: number }
+): { lat: number; lon: number; km?: number; corrected: boolean } | null {
   if (results.length === 0) return validModel ? { ...validModel, corrected: false } : null;
   if (validModel) {
     const near = results
@@ -116,5 +158,8 @@ export async function correctPlace(
     if (near) return { lat: validModel.lat, lon: validModel.lon, km: Math.min(near.r.km, 50), corrected: false };
   }
   const best = bestResult(results, validModel ? undefined : near)!;
+  if (validModel && ADMIN_AREA.has(best.kind) && haversineKm(validModel, best) > COLLISION_KM) {
+    return { ...validModel, corrected: false };
+  }
   return { lat: best.lat, lon: best.lon, km: best.km, corrected: true };
 }

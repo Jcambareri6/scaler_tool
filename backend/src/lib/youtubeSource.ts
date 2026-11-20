@@ -10,6 +10,7 @@ import type { VisualCandidate } from "./documentalSources.js";
 import { ffmpegForNetwork } from "./ffmpegBin.js";
 import { frenoYoutube, limpiar, sheetSlots, ytdlpSlots } from "./youtubeGuard.js";
 import { cachedSearch, storeSearch } from "./documentalCache.js";
+import { apifyEnabled, apifyVideoFile } from "./apifyYoutube.js";
 
 // METRAJE DE YOUTUBE (como MaV, youtubePlano.js): busqueda con yt-dlp, el
 // juez elige por miniatura + titulo, y recien ahi se baja SOLO un tramo del
@@ -195,12 +196,26 @@ async function lowResSource(url: string): Promise<{ url: string; close: () => Pr
   throw lastError ?? new Error("sin URL directa");
 }
 
+// Fuente de la hoja: el video entero bajado por Apify (lib/apifyYoutube.ts) o,
+// si no esta o falla, la URL directa de 360p por yt-dlp (proxy o directo).
+async function sheetSource(candidate: VisualCandidate, total: number): Promise<{ url: string; close: () => Promise<void> }> {
+  if (await apifyEnabled()) {
+    try {
+      const file = await apifyVideoFile(candidate.url, total);
+      return { url: file, close: async () => undefined };
+    } catch (err) {
+      console.warn(`[youtube] apify fallo en la hoja de ${candidate.external_id}: ${(err as Error).message}; sigue por yt-dlp`);
+    }
+  }
+  return frenoYoutube.correr(() => lowResSource(candidate.url));
+}
+
 export async function youtubeContactSheet(candidate: VisualCandidate, workDir: string, key: string): Promise<{ path: string; times: number[] } | null> {
   if (!ffmpegPath) return null;
   const total = candidate.video_seconds ?? candidate.duration_seconds;
   if (!total || total < 8) return null;
   const times = sheetTimes(total);
-  const source = await frenoYoutube.correr(() => lowResSource(candidate.url));
+  const source = await sheetSource(candidate, total);
   try {
     const frames = await Promise.all(
       times.map(async (t, k) => {
@@ -403,10 +418,29 @@ export async function downloadYouTubeSegment(candidate: VisualCandidate, seconds
   const start = Math.max(intro, Math.min(wanted, total - length - 2));
   const raw = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}-raw.mp4`);
   const out = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}.mp4`);
-  await frenoYoutube.correr(() => downloadSection(candidate.url, start, length, raw));
+  // Apify primero (el video entero ya bajado, el mismo de la hoja); si falla,
+  // el camino de siempre. Un fallo de Apify no toca el freno de YouTube.
+  let viaApify = false;
+  if (await apifyEnabled()) {
+    try {
+      await cutLocal(await apifyVideoFile(candidate.url, total), start, length, raw);
+      viaApify = true;
+    } catch (err) {
+      console.warn(`[youtube] apify fallo en el tramo de ${candidate.external_id}: ${(err as Error).message}; sigue por yt-dlp`);
+    }
+  }
+  if (!viaApify) await frenoYoutube.correr(() => downloadSection(candidate.url, start, length, raw));
   await cleanSegment(raw, needed, out, candidate.logo_corner);
   await rm(raw, { force: true }).catch(() => undefined);
   return out;
+}
+
+// Tramo de un video ya bajado (Apify): corte sin recodificar; cleanSegment
+// despues busca el tramo sin cortes de plano y lo recodifica.
+async function cutLocal(file: string, start: number, length: number, out: string): Promise<void> {
+  if (!ffmpegPath) throw new Error("ffmpeg no resolvio el binario");
+  await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-ss", start.toFixed(2), "-i", file, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], 90_000);
+  if ((await stat(out)).size < 50_000) throw new Error("el tramo cortado esta vacio");
 }
 
 // Tramo limpio (MaV, youtubePlano.tramoLimpio): cortes de plano con
