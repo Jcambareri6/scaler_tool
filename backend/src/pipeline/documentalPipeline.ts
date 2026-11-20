@@ -19,7 +19,7 @@ import { directMontaje, leadOf, type MontajePlan, type PlannedShot, type ShotGra
 import { JUDGE_MODEL, QA_MODEL, judgeCandidates, type CandidateVerdict, type JudgeResult, type JudgeShot, type QaCode } from "../director/visualJudge.js";
 import { shotEpochs } from "../lib/epoca.js";
 import { HuellaRegistry, fingerprint } from "../lib/huella.js";
-import { correctPlace, haversineKm } from "../lib/geocode.js";
+import { SATELLITE_FRAMES, correctPlace, haversineKm, satelliteKm } from "../lib/geocode.js";
 import { MAPA_MODEL, directMapa } from "../director/directorMapa.js";
 import { formatValue, poblacion, samplePoints, serie } from "../lib/datosAbiertos.js";
 import { runQaFinal, type QaDecision, type QaItem } from "./qaFinal.js";
@@ -69,21 +69,11 @@ const RESCUE_MS_PER_SHOT = 12_000;
 // Dos momentos del mismo video, como minimo esta separacion.
 const MOMENT_GAP_SECONDS = 20;
 
-// Encuadres del mapa de reserva: distancia (km de alto) y un corrimiento
-// chico del centro, para que dos planos de mapa seguidos no se vean iguales.
-const SATELLITE_FRAMES = [
-  { km: 4, dLat: 0, dLon: 0 },
-  { km: 14, dLat: 0.01, dLon: -0.015 },
-  { km: 45, dLat: -0.03, dLon: 0.03 },
-  { km: 2, dLat: 0.004, dLon: 0.006 },
-  { km: 25, dLat: -0.012, dLon: -0.02 },
-];
-
 // Reemplaza el rotulo sobre niebla por el mapa satelital del lugar: el del
 // plano si tiene uno, si no el lugar de la historia. Devuelve cuantos cambio.
 async function satelliteFallback(ctx: DocumentalContext, rows: ShotRow[], trailOf: (row: ShotRow) => string[], all: ShotRow[] = rows): Promise<number> {
   if (rows.length === 0) return 0;
-  let story: { lat: number; lon: number } | null = null;
+  let story: { lat: number; lon: number; km?: number } | null = null;
   let storyName = ctx.storyPlace?.split(",")[0]?.trim() ?? "";
   if (ctx.storyPlace) {
     story = await correctPlace(ctx.storyPlace, undefined).catch(() => null);
@@ -93,7 +83,7 @@ async function satelliteFallback(ctx: DocumentalContext, rows: ShotRow[], trailO
   if (!story) {
     const planned = all.find((r) => r.shot.lugar)?.shot.lugar;
     if (planned) {
-      story = { lat: planned.lat, lon: planned.lon };
+      story = { lat: planned.lat, lon: planned.lon, ...(planned.km ? { km: planned.km } : {}) };
       storyName = planned.nombre;
     } else if (ctx.videoTopic) {
       story = await correctPlace(ctx.videoTopic, undefined).catch(() => null);
@@ -111,7 +101,7 @@ async function satelliteFallback(ctx: DocumentalContext, rows: ShotRow[], trailO
       type: "map_marker",
       text: name,
       source: "script",
-      geo: { lat: center.lat + f.dLat, lon: center.lon + f.dLon, km: own?.km ?? f.km },
+      geo: { lat: center.lat + f.dLat, lon: center.lon + f.dLon, km: satelliteKm(k, name, own?.km ?? story?.km) },
       basemap: "satellite",
       full: true,
       anchor: 0,
