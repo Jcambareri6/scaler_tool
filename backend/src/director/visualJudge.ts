@@ -8,7 +8,7 @@ import { WIKIMEDIA_UA, type VisualCandidate } from "../lib/documentalSources.js"
 import type { ShotClass } from "../lib/documentalStyles.js";
 import { epochLine, type ShotEpoch } from "../lib/epoca.js";
 import { ffmpegForNetwork } from "../lib/ffmpegBin.js";
-import { youtubeContactSheet } from "../lib/youtubeSource.js";
+import { youtubeContactSheet, youtubeQuickSheet } from "../lib/youtubeSource.js";
 
 // JUEZ VISUAL del formato documental: mismo criterio que el Revisor de
 // sceneReview.ts (vision + JSON), pero sobre MATERIAL REAL: mira una
@@ -216,7 +216,10 @@ export async function candidateThumbnail(candidate: VisualCandidate, workDir: st
     if (copied) return out;
   }
   if (candidate.provider === "youtube" && /youtube.com|youtu.be/.test(candidate.url)) {
-    const sheet = await youtubeContactSheet(candidate, workDir, key).catch((err) => {
+    // Hoja rapida de 3 cuadros (sin bajar el video, ver youtubeQuickSheet);
+    // DOCUMENTAL_YT_HOJA=completa vuelve a la de 16 (baja el video entero).
+    const sheetOf = process.env.DOCUMENTAL_YT_HOJA === "completa" ? youtubeContactSheet : youtubeQuickSheet;
+    const sheet = await sheetOf(candidate, workDir, key).catch((err) => {
       console.warn(`[juez] sin hoja de cuadros para youtube:${candidate.external_id}: ${(err as Error).message.slice(0, 160)}`);
       return null;
     });

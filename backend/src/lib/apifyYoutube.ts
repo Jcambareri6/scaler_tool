@@ -2,11 +2,10 @@ import { createWriteStream } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { envInt } from "./env.js";
-import { getActiveProvider } from "./providers.js";
 import { Semaforo, limpiar } from "./youtubeGuard.js";
 
 // YOUTUBE POR APIFY: YouTube bloquea las IPs de datacenter (el worker de
@@ -30,8 +29,14 @@ const CACHE_DIR = path.join(os.tmpdir(), "skaler-apify-yt");
 const CACHE_MAX_BYTES = envInt("APIFY_YT_CACHE_MB", 6000) * 1024 * 1024;
 // Plan gratis de Apify: 5 corridas a la vez como maximo.
 const apifySlots = new Semaforo(envInt("APIFY_YT_PARALELO", 4));
-// Videos largos en 480p para no bajar 1 GB por 6 segundos de plano.
-const LONG_VIDEO_SECONDS = 30 * 60;
+// Videos de mas de 10 min en 480p (antes 30): en el piloto bajaban 340-600 MB
+// en 720p para usar 6 segundos de plano.
+const LONG_VIDEO_SECONDS = 10 * 60;
+// La descarga se corta si no llega NADA en este tiempo (no por duracion
+// total: con 5 min fijos se perdian videos grandes que venian bien), con un
+// tope de 20 min por video.
+const STALL_MS = 45_000;
+const MAX_DOWNLOAD_MS = 20 * 60_000;
 
 type ApifyConfig = { token: string; actor: string; format: string };
 
@@ -39,6 +44,9 @@ type ApifyConfig = { token: string; actor: string; format: string };
 let config: { value: ApifyConfig | null; at: number } | null = null;
 export async function apifyConfig(): Promise<ApifyConfig | null> {
   if (config && Date.now() - config.at < 5 * 60_000) return config.value;
+  // Import diferido: asi youtubeSource no arrastra el cliente de Supabase al
+  // cargarse (las pruebas sin red ni .env lo importan).
+  const { getActiveProvider } = await import("./providers.js");
   const provider = await getActiveProvider("apify").catch(() => null);
   const conf = (provider?.configuration ?? {}) as { actor?: string; format?: string };
   const value = provider?.api_key?.trim()
@@ -97,21 +105,39 @@ async function fetchVideo(id: string, format: string, conf: ApifyConfig): Promis
   if (!item?.download_url) throw new Error(`apify: sin enlace (${item?.error ?? "sin resultado"})`);
 
   const file = path.join(CACHE_DIR, `${id}-${format}.mp4`);
-  // El servidor de descarga a veces satura (429/5xx): hasta 3 intentos con pausa.
-  let body: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    body = await fetch(item.download_url, { signal: AbortSignal.timeout(300_000) });
-    if (body.ok || ![429, 500, 502, 503, 504].includes(body.status)) break;
-    await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
-  }
-  if (!body?.ok || !body.body) throw new Error(`apify: descarga HTTP ${body?.status ?? "?"}`);
+  // Vigia de la descarga: aborta si pasan STALL_MS sin datos o MAX_DOWNLOAD_MS en total.
+  const abort = new AbortController();
+  let stall = setTimeout(() => abort.abort(new Error("apify: la descarga se trabo (45 s sin datos)")), STALL_MS);
+  const total = setTimeout(() => abort.abort(new Error("apify: la descarga paso los 20 min")), MAX_DOWNLOAD_MS);
+  const alive = () => {
+    clearTimeout(stall);
+    stall = setTimeout(() => abort.abort(new Error("apify: la descarga se trabo (45 s sin datos)")), STALL_MS);
+  };
   try {
-    await pipeline(Readable.fromWeb(body.body as unknown as WebReadableStream), createWriteStream(file));
+    // El servidor de descarga a veces satura (429/5xx): hasta 3 intentos con pausa.
+    let body: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      body = await fetch(item.download_url, { signal: abort.signal });
+      alive();
+      if (body.ok || ![429, 500, 502, 503, 504].includes(body.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
+    }
+    if (!body?.ok || !body.body) throw new Error(`apify: descarga HTTP ${body?.status ?? "?"}`);
+    const watched = new Transform({
+      transform(chunk, _enc, done) {
+        alive();
+        done(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(body.body as unknown as WebReadableStream), watched, createWriteStream(file), { signal: abort.signal });
     const size = (await stat(file)).size;
     if (size < 50_000) throw new Error("apify: el video bajado esta vacio");
   } catch (err) {
     await rm(file, { force: true }).catch(() => undefined);
-    throw err;
+    throw abort.signal.aborted && abort.signal.reason instanceof Error ? abort.signal.reason : err;
+  } finally {
+    clearTimeout(stall);
+    clearTimeout(total);
   }
   void trimCache();
   return file;

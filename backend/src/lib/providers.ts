@@ -12,6 +12,11 @@ function providersOffline(): boolean {
 // Las Tools resuelven su Provider por slug sin saber como esta guardado
 // (Etapa 9: "las Tools deben poder utilizar Providers sin conocer detalles
 // innecesarios de su configuracion").
+// Ultima fila leida bien de cada proveedor: si Supabase no responde (corte
+// de red del 20/11/2026), se usa esa en vez de devolver "no configurado" y
+// perder el plano ("R2 no esta configurado" con R2 configurado).
+const lastGood = new Map<string, Provider>();
+
 export async function getActiveProvider(slug: string): Promise<Provider | null> {
   if (providersOffline()) return null;
   const { data, error } = await supabase
@@ -19,9 +24,14 @@ export async function getActiveProvider(slug: string): Promise<Provider | null> 
     .select("*")
     .eq("slug", slug)
     .eq("is_active", true)
-    .single();
+    .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) return lastGood.get(slug) ?? null;
+  if (!data) {
+    lastGood.delete(slug);
+    return null;
+  }
+  lastGood.set(slug, data);
   return data;
 }
 

@@ -59,8 +59,12 @@ import type { ContentPolicy, OverlaySpec, OverlayType } from "../types/shared/ty
 //      (generate_overlay, texto literal del guion), como siempre.
 
 // 6 planos a la vez (antes 4): YouTube tiene su propio semaforo (youtubeGuard).
-const SHOT_CONCURRENCY = envInt("DOCUMENTAL_SHOT_CONCURRENCY", 6);
-const RESCUE_CONCURRENCY = envInt("DOCUMENTAL_RESCUE_CONCURRENCY", 5);
+// 16 planos a la vez (antes 6): con 6, un documental de 29 min (279 planos)
+// iba a ~1,7 planos por minuto (~3 h). El juez es Haiku y la hoja de YouTube
+// por plano ya no baja el video entero (youtubeQuickSheet), asi que el
+// limite real son los rate limits de las fuentes, no la CPU.
+const SHOT_CONCURRENCY = envInt("DOCUMENTAL_SHOT_CONCURRENCY", 16);
+const RESCUE_CONCURRENCY = envInt("DOCUMENTAL_RESCUE_CONCURRENCY", 10);
 // Presupuestos: busqueda max(14 min, 35 s por plano); rescate max(6 min, 12 s por plano rescatado).
 const SEARCH_BUDGET_MS = envInt("DOCUMENTAL_SEARCH_BUDGET_MS", 14 * 60_000);
 const SEARCH_MS_PER_SHOT = 35_000;
