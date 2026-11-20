@@ -3,11 +3,12 @@ import http from "node:http";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import tls from "node:tls";
-import { copyFile, readdir, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { uploadPublicFile } from "./storage.js";
 import type { VisualCandidate } from "./documentalSources.js";
 import { ffmpegForNetwork } from "./ffmpegBin.js";
+import { fetchWithTimeout } from "./http.js";
 import { frenoYoutube, limpiar, sheetSlots, ytdlpSlots } from "./youtubeGuard.js";
 import { cachedSearch, storeSearch } from "./documentalCache.js";
 import { apifyEnabled, apifyVideoFile } from "./apifyYoutube.js";
@@ -194,6 +195,50 @@ async function lowResSource(url: string): Promise<{ url: string; close: () => Pr
     }
   }
   throw lastError ?? new Error("sin URL directa");
+}
+
+// ---------- Hoja rapida (sin bajar el video) ----------
+// El juez de cada plano miraba los videos de YouTube con la hoja de 16
+// cuadros, y para eso Apify bajaba el video ENTERO (50-600 MB) de cada
+// candidato, de a 4: un documental de 29 min iba a 1,7 planos por minuto y
+// los planos se quedaban sin tiempo esperando la fila (20/11/2026). YouTube
+// publica 3 cuadros reales de cada video (hq1/hq2/hq3.jpg, al ~25/50/75 %):
+// se bajan en el acto, sin Apify ni bloqueo de bot. Solo el video ELEGIDO se
+// baja (el tramo), y ese tramo lo vuelve a revisar el juez con cuadros reales.
+// La biblioteca sigue con la hoja completa (pocos videos, una sola vez).
+const QUICK_FRACTIONS = [0.25, 0.5, 0.75];
+
+export async function youtubeQuickSheet(candidate: VisualCandidate, workDir: string, key: string): Promise<{ path: string; times: number[] } | null> {
+  if (!ffmpegPath) return null;
+  const total = candidate.video_seconds ?? candidate.duration_seconds;
+  if (!total || total < 8 || !/^[\w-]{11}$/.test(candidate.external_id)) return null;
+  const frames = await Promise.all(
+    QUICK_FRACTIONS.map(async (fraction, k) => {
+      const file = path.join(workDir, `${key}-q${k + 1}.jpg`);
+      try {
+        const res = await fetchWithTimeout(`https://i.ytimg.com/vi/${candidate.external_id}/hq${k + 1}.jpg`, {}, 15_000);
+        if (!res.ok) return null;
+        const body = Buffer.from(await res.arrayBuffer());
+        if (body.length < 1500) return null;
+        await writeFile(file, body);
+        return { file, t: total * fraction };
+      } catch {
+        return null;
+      }
+    })
+  );
+  const ok = frames.filter((f): f is { file: string; t: number } => f !== null);
+  if (ok.length < 2) return null;
+  const out = path.join(workDir, `${key}-hoja.jpg`);
+  // Los hq1-3 vienen en 4:3 con franjas negras (video 16:9 adentro): se recortan.
+  const scaled = ok.map((_, i) => `[${i}:v]crop=iw:trunc(iw*9/32)*2,scale=480:270[v${i}]`).join(";");
+  const filter = `${scaled};${ok.map((_, i) => `[v${i}]`).join("")}hstack=inputs=${ok.length}`;
+  try {
+    await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", ...ok.flatMap((f) => ["-i", f.file]), "-filter_complex", filter, "-frames:v", "1", "-q:v", "4", out], 30_000);
+  } finally {
+    await Promise.all(ok.map((f) => rm(f.file, { force: true }))).catch(() => undefined);
+  }
+  return { path: out, times: ok.map((f) => f.t) };
 }
 
 // Fuente de la hoja: el video entero bajado por Apify (lib/apifyYoutube.ts) o,
