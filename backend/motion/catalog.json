@@ -33,7 +33,15 @@
     "map_globe": { "introSeconds": 2.0, "blur": 10 },
     "map_marker": { "introSeconds": 2.1, "blur": 0 },
     "layers_diagram": { "introSeconds": 2.0, "blur": 10 },
-    "cycle_diagram": { "introSeconds": 2.4, "blur": 10 }
+    "cycle_diagram": { "introSeconds": 2.4, "blur": 10 },
+    "photo_frame": { "introSeconds": 2.6, "full": true },
+    "checklist": { "introSeconds": 3.0, "blur": 0 },
+    "highlight_phrase": { "introSeconds": 1.8, "blur": 6 },
+    "side_panel": { "introSeconds": 2.5, "blur": 0 },
+    "photo_tree": { "introSeconds": 2.4, "full": true },
+    "process_wave": { "introSeconds": 2.2, "full": true },
+    "dossier": { "introSeconds": 1.8, "full": true },
+    "concept_circles": { "introSeconds": 2.3, "full": true }
   },
   "icons": [
     "apple", "bike", "bird", "building", "bus", "car", "cat", "coin", "dog", "drop",

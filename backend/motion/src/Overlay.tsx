@@ -34,6 +34,14 @@ import { MapGlobe } from "./components/MapGlobe";
 import { MapMarker } from "./components/MapMarker";
 import { LayersDiagram } from "./components/LayersDiagram";
 import { CycleDiagram } from "./components/CycleDiagram";
+import { PhotoFrame } from "./components/PhotoFrame";
+import { Checklist } from "./components/Checklist";
+import { HighlightPhrase } from "./components/HighlightPhrase";
+import { SidePanel } from "./components/SidePanel";
+import { PhotoTree } from "./components/PhotoTree";
+import { ProcessWave } from "./components/ProcessWave";
+import { Dossier } from "./components/Dossier";
+import { ConceptCircles } from "./components/ConceptCircles";
 
 export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) {
   const theme = resolveTheme(themeName);
@@ -104,6 +112,22 @@ export function Overlay({ spec, theme: themeName, exit, locale }: OverlayProps) 
       return <LayersDiagram spec={spec} theme={theme} exit={exit} />;
     case "cycle_diagram":
       return <CycleDiagram spec={spec} theme={theme} exit={exit} />;
+    case "photo_frame":
+      return <PhotoFrame spec={spec} theme={theme} exit={exit} />;
+    case "checklist":
+      return <Checklist spec={spec} theme={theme} exit={exit} />;
+    case "highlight_phrase":
+      return <HighlightPhrase spec={spec} theme={theme} exit={exit} />;
+    case "side_panel":
+      return <SidePanel spec={spec} theme={theme} exit={exit} />;
+    case "photo_tree":
+      return <PhotoTree spec={spec} theme={theme} exit={exit} />;
+    case "process_wave":
+      return <ProcessWave spec={spec} theme={theme} exit={exit} />;
+    case "dossier":
+      return <Dossier spec={spec} theme={theme} exit={exit} />;
+    case "concept_circles":
+      return <ConceptCircles spec={spec} theme={theme} exit={exit} />;
     default:
       return null;
   }

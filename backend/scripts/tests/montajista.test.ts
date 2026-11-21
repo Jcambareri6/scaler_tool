@@ -42,3 +42,44 @@ const end = (i: number) => (shots[i + 1] ? phrases[shots[i + 1]!.from]!.start : 
 shots.forEach((s, i) => assert.ok(s.from === s.to || end(i) - phrases[s.from]!.start <= 9 * 1.15 + 0.01, `plano ${i} largo`));
 assert.equal(chapters.length, 1);
 console.log("\nOK: verificador");
+
+// Planos de mapa seguidos (DocuMEX, 20/11/2026: hasta 4 mapas seguidos): solo
+// el primero queda mapa; los demas pasan a lugar, sin mapa encima.
+{
+  const mapas = parsePlan(
+    {
+      chapters: [],
+      shots: [
+        { desde: "p1", hasta: "p2", clase: "mapa", sujeto: "Tijuana", query_en: "Tijuana", lugar: { nombre: "Tijuana", lat: 32.5, lon: -117.0 }, grafico: { type: "map_marker", text: "Tijuana" } },
+        { desde: "p3", hasta: "p4", clase: "mapa", sujeto: "Ensenada", query_en: "Ensenada", lugar: { nombre: "Ensenada", lat: 31.9, lon: -116.6 }, grafico: { type: "map_marker", text: "Ensenada" } },
+        { desde: "p5", hasta: "p6", clase: "mapa", sujeto: "Mexicali", query_en: "Mexicali", lugar: { nombre: "Mexicali", lat: 32.6, lon: -115.5 } },
+        { desde: "p7", hasta: `p${n}`, clase: "metraje", sujeto: "costa", query_en: "Baja California coast aerial" },
+      ],
+    },
+    phrases
+  );
+  const out = verifyPlan(mapas, phrases, style).shots;
+  const clases = out.slice(0, 3).map((s) => s.clase);
+  assert.equal(clases.filter((c) => c === "mapa").length, 1, `mapas seguidos: ${clases.join(",")}`);
+  assert.equal(out[0]!.clase, "mapa");
+  assert.ok(out.slice(1, 3).every((s) => s.clase !== "mapa" && !(s.grafico && /^map_/.test(s.grafico.type))), "los siguientes no son mapa ni llevan mapa encima");
+  console.log(out.slice(0, 5).map((s) => `p${s.from + 1}-p${s.to + 1} ${s.clase} q=${s.query} ${s.grafico?.type ?? ""}`).join(" | "));
+  assert.ok(out.some((s) => s.clase === "lugar" && s.query === "Ensenada"), "Ensenada pasa a lugar con su nombre de busqueda");
+  console.log("mapas seguidos OK:", clases.join(","));
+}
+
+// Control de relleno seguido (21/11/2026): 2 o mas planos seguidos de mapa o
+// niebla se avisan para corregir.
+{
+  const { fillerRuns } = await import("../../src/pipeline/documentalPipeline.js");
+  const runs = fillerRuns([
+    { order: 1, clase: "lugar", provider: "youtube" },
+    { order: 2, clase: "mapa", provider: "textura" },
+    { order: 3, clase: "metraje", provider: "textura" },
+    { order: 4, clase: "cosa", provider: "commons" },
+    { order: 5, clase: "lugar", provider: "textura" },
+    { order: 6, clase: "metraje", provider: "youtube" },
+  ]);
+  assert.deepEqual(runs.map((r) => r.planos), [[2, 3]]);
+  console.log("relleno seguido OK:", JSON.stringify(runs));
+}

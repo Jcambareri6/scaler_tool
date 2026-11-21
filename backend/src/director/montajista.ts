@@ -31,6 +31,8 @@ const ROTULO_TYPES = ["lower_third", "person_card", "milestone", "badge"];
 const ROTULO_FROM_GRAPHIC: Record<string, string> = { big_number: "milestone", number_phrase: "milestone", timeline: "milestone" };
 const MAP_TYPES = ["map_marker", "map_globe", "map_route"];
 const MAP_MIN_GAP = 35;
+// Planos de clase mapa: uno cada 45 s como mucho y nunca dos seguidos (ver 4b).
+const MAP_SHOT_MIN_GAP = 45;
 const MUSIC_MOODS: MusicMood[] = ["documental", "tension", "triste", "epico", "misterio", "esperanza"];
 
 export interface ShotGraphic {
@@ -139,6 +141,7 @@ ${style.description}
 - Clases preferidas, en orden: ${style.plan.prefer.join(", ")}.
 - "ambiente" como mucho en el ${Math.round(MAX_AMBIENT_SHARE * 100)}% de los planos: es el ultimo recurso (va a stock generico). Si la frase habla de algo que se puede mostrar, es persona, cosa, lugar o metraje.
 - Graficos: como mucho ${style.plan.graphicsPerMinute} por minuto (${style.plan.graphicsPerMinuteHook} en el primer minuto), nunca mas del ${Math.round(style.plan.maxGraphicShare * 100)}% del tiempo, separados al menos ${style.plan.minGraphicGapSeconds} s. Apunta a acercarte a ese limite: cada cifra, fecha, nombre propio, lugar o comparacion del guion es candidata a grafico (big_number, milestone, map_marker, person_card, versus...).
+- MINIMO 2 graficos por minuto en todo el video (no solo al principio): un documental sin animaciones aburre. Ademas de cifras y fechas, usa los que leen IDEAS: highlight_phrase para cada remate o revelacion, checklist o side_panel cuando el guion enumera, process_wave para causa y efecto, photo_tree para de que esta hecho algo, dossier para presentar a quien investigo o conto la historia. Varia los tipos: no repitas el mismo tipo dos veces seguidas.
 - Graficos favoritos de este estilo: ${style.graphics.favor.join(", ")}.
 ${style.sources.archiveFirst ? `- Prioriza material de archivo${style.sources.epochHint ? ` (${style.sources.epochHint})` : ""}: pon siempre \`anio\` cuando sea historico.\n` : ""}
 ## Graficos disponibles (campo grafico.type)
@@ -535,6 +538,33 @@ export function verifyPlan(
     graphicTime += end - start;
   });
 
+  // 4b. Planos de MAPA: nunca dos seguidos y como mucho uno cada
+  // MAP_SHOT_MIN_GAP s (DocuMEX 29 min, 20/11/2026: 34 planos de mapa, hasta
+  // 4 seguidos). El que sobra pasa a "lugar": se busca metraje real del sitio
+  // (YouTube primero) y se le saca el mapa de encima.
+  let lastMapShotAt = -Infinity;
+  let prevWasMap = false;
+  for (const shot of shots) {
+    const start = shotStart(shot, phrases);
+    const mapGraphic = !!shot.grafico && MAP_TYPES.includes(shot.grafico.type);
+    if (shot.clase !== "mapa") {
+      prevWasMap = mapGraphic;
+      if (mapGraphic) lastMapShotAt = start;
+      continue;
+    }
+    if (prevWasMap || start - lastMapShotAt < MAP_SHOT_MIN_GAP) {
+      const place = shot.lugar?.nombre ?? (mapGraphic ? shot.grafico!.text : undefined);
+      issues.push(`plano de mapa en p${shot.from + 1} pasa a lugar: ${prevWasMap ? "otro mapa justo antes" : `otro mapa hace menos de ${MAP_SHOT_MIN_GAP} s`}`);
+      shot.clase = "lugar";
+      if (place) shot.query = place;
+      if (mapGraphic) delete shot.grafico;
+      prevWasMap = false;
+      continue;
+    }
+    lastMapShotAt = start;
+    prevWasMap = true;
+  }
+
   // 5. Rotulos: el nombre solo sobre la foto de esa persona; fechas en cualquier plano.
   for (const shot of shots) {
     if (!shot.rotulo) continue;
@@ -656,6 +686,13 @@ const IMPACT_ORDER = [
   "cycle_diagram",
   "profile_card",
   "pivot_question",
+  "highlight_phrase",
+  "checklist",
+  "side_panel",
+  "process_wave",
+  "photo_tree",
+  "dossier",
+  "concept_circles",
   "scoreboard",
   "phrase_swap",
   "strike_word",

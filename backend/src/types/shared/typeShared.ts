@@ -178,6 +178,19 @@ export type OverlayType =
   // nombre del ciclo).
   | "layers_diagram"
   | "cycle_diagram"
+  // Estilo GoMotion (20/11/2026): foto del plano sobre papel antiguo (`image`,
+  // `text` = leyenda), libreta con lista que se tilda, frase sobre el video con
+  // palabras resaltadas (`label`), panel lateral con vinetas, arbol de
+  // conceptos con fotos (`items[].image`), proceso sobre una onda, expediente
+  // con el nombre encerrado en rojo y conceptos en circulos.
+  | "photo_frame"
+  | "checklist"
+  | "highlight_phrase"
+  | "side_panel"
+  | "photo_tree"
+  | "process_wave"
+  | "dossier"
+  | "concept_circles"
   | "ninguno";
 
 // Item de un overlay con varios valores (barras de data_viz_single, los dos
@@ -186,6 +199,8 @@ export type OverlayType =
 export interface OverlayItem {
   label: string;
   text: string;
+  // photo_tree: foto del nodo (URL publica, la busca el pipeline).
+  image?: string;
 }
 
 export interface OverlaySpec {
@@ -225,6 +240,8 @@ export interface OverlaySpec {
   // map_cartoon: escena del mapa explicativo (director/directorMapa.ts) y
   // duracion fija = el plano entero.
   escena?: Record<string, unknown>;
+  // photo_frame: la foto del plano (URL publica) enmarcada sobre papel.
+  image?: string;
 }
 export interface Provider {
   id: string;

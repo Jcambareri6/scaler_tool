@@ -4,6 +4,8 @@ import type { PaletteTheme } from "./theme";
 export interface OverlayItem {
   label: string;
   text: string;
+  // photo_tree: foto del nodo (la busca el backend; sin foto, solo el texto).
+  image?: string;
 }
 
 export interface OverlaySpec {
@@ -27,6 +29,8 @@ export interface OverlaySpec {
   pyramid?: { years: { year: number; men: number[]; women: number[] }[] };
   // map_cartoon: la escena del mapa explicativo (backend director/directorMapa.ts).
   escena?: unknown;
+  // photo_frame: la foto del plano (URL publica) que va enmarcada sobre papel.
+  image?: string;
 }
 
 export interface GeoPoint {

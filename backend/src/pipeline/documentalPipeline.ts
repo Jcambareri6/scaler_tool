@@ -527,15 +527,17 @@ async function sourceCandidates(
       return searchArchiveVideos(shot.query, shot.anio, shot.entidad);
     case "youtube":
       {
-        // Primero la biblioteca del video (ya escaneada): los videos cuyos
-        // cuadros describen lo que dice el plano. Si no hay, busqueda en vivo.
-        if (ctx.library?.length) {
-          const excluded = new Set(exclude);
-          const text = [shot.sujeto, shot.entidad, ...(shot.obligatorio ?? []), shot.queryLocal, shot.query].filter(Boolean).join(" ");
-          const lib = libraryCandidates(ctx.library, text, (c) => excluded.has(`youtube:${c.external_id}`) || excluded.has(c.url));
-          if (lib.length) return lib;
-        }
-        return youtubeCandidatesFor(shot);
+        // Biblioteca del video (ya escaneada) Y busqueda en vivo, en la misma
+        // ronda. Antes, con algo en la biblioteca no se buscaba en vivo: si el
+        // juez rechazaba esos videos el plano nunca probaba YouTube (DocuMEX
+        // 29 min: 21 videos para 283 planos, 56 tramos de YouTube y 73 mapas).
+        // Con la hoja rapida la busqueda en vivo cuesta casi nada.
+        const excluded = new Set(exclude);
+        const text = [shot.sujeto, shot.entidad, ...(shot.obligatorio ?? []), shot.queryLocal, shot.query].filter(Boolean).join(" ");
+        const lib = ctx.library?.length ? libraryCandidates(ctx.library, text, (c) => excluded.has(`youtube:${c.external_id}`) || excluded.has(c.url)).slice(0, 2) : [];
+        const live = await youtubeCandidatesFor(shot).catch(() => [] as VisualCandidate[]);
+        const seen = new Set(lib.map((c) => c.external_id));
+        return [...lib, ...live.filter((c) => !seen.has(c.external_id))];
       }
     case "stock":
       return stockCandidates(shot.query, minDuration, exclude, ctx);
@@ -774,7 +776,7 @@ async function fillShot(
     let found: VisualCandidate[] = [];
     try {
       found = (await sourceCandidates(source, search, minDuration, [...used], style, ctx)).filter((c) => !used.has(key(c)) && !used.has(c.url));
-      // YouTube: como mucho 3 videos por ronda (MaV), cada uno con su hoja de 16 cuadros.
+      // YouTube: como mucho YT_PER_ROUND videos por ronda (la biblioteca primero).
       if (source === "youtube") found = found.slice(0, YT_PER_ROUND);
     } catch (err) {
       console.warn(`[documental] plano ${row.order}: fuente ${source} fallo: ${(err as Error).message}`);
@@ -1276,7 +1278,9 @@ const RESCUE_YT_TOPIC_MAX = envInt("DOCUMENTAL_RESCUE_YT_TOPIC", 3);
 // prueba del Titanic uno aparecia 7 veces).
 // Ronda con la que se guarda el QA de lo rescatado (despues de las del QA final).
 const QA_RESCUE_RONDA = 9;
-const YT_PER_ROUND = 3;
+// 5 videos por ronda (antes 3): con la hoja rapida de 3 cuadros cada uno
+// pesa poco para el juez y no hay que bajar el video para mirarlo.
+const YT_PER_ROUND = 5;
 const YT_MAX_USES = envInt("DOCUMENTAL_YT_MAX_USES", 3);
 // Un video corto (un vuelo de drone de 29 s) da como mucho 2 planos: en La
 // Rumorosa 10 de 41 planos salieron de 2 videos y se veian iguales.
@@ -1539,7 +1543,7 @@ async function rescueGaps(
   let commonsLoaded = 0;
   let ytTopicLeft = youtubeEnabled() ? RESCUE_YT_TOPIC_MAX : 0;
   let texture: string | null = null;
-  const counts = { youtube_momento: 0, commons_tema: 0, youtube_tema: 0, stock_ultimo: 0, casi_buena: 0, rotulo: 0 };
+  const counts = { youtube_momento: 0, commons_tema: 0, youtube_plano: 0, youtube_tema: 0, stock_ultimo: 0, casi_buena: 0, rotulo: 0 };
 
   // Devuelve false si la imagen ya esta en el video (dHash): el rescate sigue
   // con la proxima opcion.
@@ -1635,6 +1639,41 @@ async function rescueGaps(
       } else {
         trailOf(row).push("fotos del tema: ninguna foto libre");
       }
+      // 2b. YouTube con la busqueda PROPIA del plano, en vivo (20/11/2026:
+      // DocuMEX 29 min, 159 planos al rescate y 0 por YouTube del tema -- ese
+      // paso tiene tope de 3 por documental y una busqueda generica). Con la
+      // hoja rapida (3 cuadros, sin bajar el video) el juez elige entre
+      // varios y solo se baja el elegido. Antes del stock, de la foto "casi
+      // buena" y del mapa satelital.
+      if (youtubeEnabled() && !frenoYoutube.abierto()) {
+        const found = (await youtubeCandidatesFor(row.shot).catch(() => [] as VisualCandidate[]))
+          .filter((c) => !used.has(key(c)) && !used.has(c.url))
+          .slice(0, YT_PER_ROUND);
+        if (found.length) {
+          const verdict = await judgeCandidates(judge.client, judge.model, judgeShotOf(row, context, { tema }), found, judge.workDir, judge.usage).catch(() => null);
+          const pick = verdict && verdict.chosen !== null ? found[verdict.chosen] : undefined;
+          if (!pick) trailOf(row).push(verdictNote("youtube del plano", found, verdict));
+          if (pick && !used.has(key(pick))) {
+            used.add(key(pick));
+            const chosen = verdict!.verdicts.find((v) => v.index === verdict!.chosen);
+            const frames = [...new Set([chosen?.frame, ...(chosen?.goodFrames ?? [])].filter((n): n is number => n !== undefined))];
+            const times = frames.map((n) => pick.sheet_times?.[n - 1]).filter((t): t is number => t !== undefined);
+            const clip = await materializeYouTube(ctx, row, chosen?.logoCorner ? { ...pick, logo_corner: chosen.logoCorner } : pick, judge, context, {
+              tema,
+              log: trailOf(row),
+              ...(times.length ? { atSeconds: times[0]!, alternatives: times.slice(1) } : {}),
+            });
+            if (clip && (await save(row, clip, "youtube_plano"))) {
+              counts.youtube_plano += 1;
+              ytSources.push(pick);
+              markMomentUsed(ctx, pick.external_id, clip.yt_start);
+              return;
+            }
+          }
+        } else {
+          trailOf(row).push("youtube del plano: sin resultados");
+        }
+      }
       // 3. YouTube con una busqueda del tema (tope por video).
       if (ytTopicLeft > 0 && queries.length) {
         ytTopicLeft -= 1;
@@ -1715,16 +1754,29 @@ async function rescueGaps(
   let recovered = 0;
   if (judge && !(ctx.rescueDeadline && Date.now() > ctx.rescueDeadline)) {
     const fails = new Map<string, number>();
+    // Pegado a un mapa (el del plan o el que va a poner el rescate): si queda
+    // en textura termina en OTRO mapa al lado (PILOTO 8: "Chihuahua" y
+    // "Barrancas del Cobre" seguidos). Esos van primero y con 2 usos mas
+    // por video: repetir un video en otro momento se ve mejor que dos mapas.
+    const isMapRow = (r: ShotRow | undefined) => !!r && (r.shot.clase === "mapa" || outcomeOf.get(r.id)?.provider === "textura");
+    const nextToMap = (r: ShotRow) => {
+      const i = byOrder.indexOf(r);
+      return (byOrder[i - 1]?.shot.clase === "mapa" || byOrder[i + 1]?.shot.clase === "mapa") || isMapRow(byOrder[i - 1]) || isMapRow(byOrder[i + 1]);
+    };
     for (let round = 0; round < LAST_PASS_ROUNDS; round++) {
-      const leftovers = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
+      const leftovers = byOrder
+        .filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa")
+        .sort((a, b) => Number(nextToMap(b)) - Number(nextToMap(a)));
       if (leftovers.length === 0) break;
       for (const row of leftovers) {
         if (recovered >= LAST_PASS_MAX) break;
         const i = byOrder.indexOf(row);
         const near = neighbourOrigins(i);
+        const relaxed = nextToMap(row);
+        const room = (s: VisualCandidate) => ytRoom(s) || (relaxed && (usesOf.get(`youtube:${s.external_id}`) ?? 0) < YT_MAX_USES + 2);
         // Menos usado primero; nunca el video del plano de al lado.
         const sources = ytSources
-          .filter((s) => !near.includes(`youtube:${s.external_id}`) && ytRoom(s) && (fails.get(s.external_id) ?? 0) < 3)
+          .filter((s) => !near.includes(`youtube:${s.external_id}`) && room(s) && (fails.get(s.external_id) ?? 0) < 3)
           .sort((a, b) => (usesOf.get(`youtube:${a.external_id}`) ?? 0) - (usesOf.get(`youtube:${b.external_id}`) ?? 0));
         let attempts = 0;
         for (const src of sources) {
@@ -1829,6 +1881,95 @@ async function rescueGaps(
   const textured = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
   const withText = await addKeyPhraseOverlays(textured, ctx, judge, toolCtx);
   console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, mapa_satelital: satellite, rotulos_con_texto: withText })}`);
+}
+
+// RELLENO SEGUIDO (pedido del cliente, 21/11/2026): dos planos seguidos de
+// relleno (mapa del plan, mapa satelital o rotulo sobre la niebla) se notan
+// mucho. Devuelve cada racha de 2 o mas para avisar y corregir a mano.
+export function fillerRuns(rows: { order: number; clase: string; provider?: string | undefined }[]): { planos: number[]; tipos: string[] }[] {
+  const tipo = (r: { clase: string; provider?: string | undefined }) => (r.clase === "mapa" ? "mapa" : r.provider === "textura" ? "niebla/mapa satelital" : null);
+  const runs: { planos: number[]; tipos: string[] }[] = [];
+  let current: { order: number; t: string }[] = [];
+  const close = () => {
+    if (current.length >= 2) runs.push({ planos: current.map((c) => c.order), tipos: current.map((c) => c.t) });
+    current = [];
+  };
+  for (const r of [...rows].sort((a, b) => a.order - b.order)) {
+    const t = tipo(r);
+    if (t) current.push({ order: r.order, t });
+    else close();
+  }
+  close();
+  return runs;
+}
+
+// FOTO SOBRE PAPEL (GoMotion, su recurso mas usado: ~15 en 23 min). Una foto
+// fija de archivo (Commons, Wikidata, Openverse, archivo) se muestra enmarcada
+// sobre papel antiguo con su leyenda, en vez de la foto sola: suma una
+// animacion sin depender del montajista. Como mucho una cada
+// PHOTO_FRAME_GAP s, nunca dos seguidas y solo en planos sin otro grafico.
+// Tambien busca la foto de cada nodo de los photo_tree.
+const PHOTO_FRAME_GAP = envInt("DOCUMENTAL_PHOTO_FRAME_GAP", 40);
+const PHOTO_FRAME_SOURCES = new Set(["commons", "wikidata", "openverse", "archive_org", "archive"]);
+const PHOTO_FRAME_MIN_SECONDS = 3;
+
+async function framePhotos(ctx: DocumentalContext, rows: ShotRow[]): Promise<{ marcos: number; arboles: number }> {
+  if (process.env.DOCUMENTAL_FOTO_PAPEL === "off" || rows.length === 0) return { marcos: 0, arboles: 0 };
+  const visuals = await shotVisuals(ctx);
+  const { data } = await supabase.from("scenes").select("id, content").in("id", rows.map((r) => r.id));
+  const contentOf = new Map((data ?? []).map((s) => [s.id as string, (s.content as Record<string, unknown>) ?? {}]));
+  let lastAt = -Infinity;
+  let prevFramed = false;
+  let marcos = 0;
+  let arboles = 0;
+  for (const row of [...rows].sort((a, b) => a.order - b.order)) {
+    const content = contentOf.get(row.id) ?? {};
+    const overlays = Array.isArray(content.overlays) ? (content.overlays as OverlaySpec[]) : [];
+
+    // Arbol de conceptos: la foto de cada nodo (Commons, la primera que haya).
+    const tree = overlays.find((o) => o.type === "photo_tree" && (o.items ?? []).some((i) => !i.image));
+    if (tree) {
+      tree.items = await Promise.all(
+        (tree.items ?? []).map(async (item) => {
+          if (item.image) return item;
+          const found = await searchCommonsImages(item.text).catch(() => [] as VisualCandidate[]);
+          const pick = found.find((c) => c.type === "IMAGE");
+          return pick ? { ...item, image: pick.thumb_url ?? pick.url } : item;
+        })
+      );
+      await supabase.from("scenes").update({ content: { ...content, overlays } }).eq("id", row.id);
+      arboles += 1;
+    }
+
+    const visual = visuals.get(row.id);
+    const eligible =
+      !!visual &&
+      visual.type === "IMAGE" &&
+      PHOTO_FRAME_SOURCES.has(visual.provider) &&
+      overlays.length === 0 &&
+      row.shot.clase !== "mapa" &&
+      row.end - row.start >= PHOTO_FRAME_MIN_SECONDS &&
+      !prevFramed &&
+      row.start - lastAt >= PHOTO_FRAME_GAP;
+    if (!eligible) {
+      prevFramed = false;
+      continue;
+    }
+    // Leyenda: el nombre de lo que muestra (entidad o lugar), corto y sin cifras.
+    // Sin entidad ni lugar, el sujeto del plano si es corto (PILOTO 8: las 3
+    // fotos salian sin leyenda).
+    const shortName = (n: string | undefined) => {
+      const t = (n ?? "").trim();
+      return t && t.split(/\s+/).length <= 5 && !/\d/.test(t) ? t : "";
+    };
+    const caption = shortName(row.shot.entidad) || shortName(row.shot.lugar?.nombre) || shortName(row.shot.sujeto);
+    const spec: OverlaySpec = { type: "photo_frame", text: caption, source: "script", image: visual.url, anchor: 0, full: true };
+    await supabase.from("scenes").update({ content: { ...content, overlays: [spec], overlay: spec } }).eq("id", row.id);
+    marcos += 1;
+    lastAt = row.start;
+    prevFramed = true;
+  }
+  return { marcos, arboles };
 }
 
 // ESTILO MAPA INTERACTIVO (como el directorMapa de MaV): el video entero es un
@@ -2097,6 +2238,12 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
       console.warn(`[documental] topes de pantalla fallaron: ${(err as Error).message}`);
       return { partidos: 0, alargados: 0 };
     });
+    // Fotos sobre papel (automatico) y fotos de los arboles de conceptos.
+    const marcos = await framePhotos(ctx, byOrder).catch((err) => {
+      console.warn(`[documental] fotos sobre papel fallaron: ${(err as Error).message}`);
+      return { marcos: 0, arboles: 0 };
+    });
+    console.log(`[documental] ${ctx.projectId}: ${marcos.marcos} fotos sobre papel, ${marcos.arboles} arboles con fotos`);
     await reportJobProgress(ctx.jobId, 89, "Armando la hoja de contactos...", { force: true });
     hoja = await buildContactSheet(ctx, byOrder, outcomes, workDir, frames).catch((err) => {
       console.warn(`[documental] no se pudo armar la hoja de contactos: ${(err as Error).message}`);
@@ -2104,6 +2251,17 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
     });
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  // Control de relleno seguido: 2 o mas planos seguidos de mapa, rotulo o
+  // niebla (textura) quedan marcados para corregir en la revision.
+  const rellenoSeguido = fillerRuns(
+    byOrder.map((r) => ({ order: r.order, clase: r.shot.clase, provider: outcomes.find((o) => o.sceneId === r.id)?.provider }))
+  );
+  for (const run of rellenoSeguido) {
+    const aviso = `relleno seguido: planos ${run.planos.join(", ")} (${run.tipos.join(" + ")}) -- corregir en la revision`;
+    console.warn(`[documental] ${ctx.projectId}: AVISO ${aviso}`);
+    plan.issues.push(aviso);
   }
 
   // 5. Plan guardado para la revision y la auditoria.
@@ -2123,6 +2281,7 @@ export async function runDocumentalMontaje(ctx: DocumentalContext): Promise<void
       marcados: qaDecisions.filter((d) => d.malo).length,
       decisiones: qaDecisions,
       topes,
+      relleno_seguido: rellenoSeguido,
     },
     created_at: new Date().toISOString(),
   };
