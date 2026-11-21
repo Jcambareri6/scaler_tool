@@ -92,6 +92,8 @@ const BASE_DURATIONS: DocumentalStyle["plan"]["durations"] = {
 const DOC_SKELETON =
   "Gancho inicial (3-5%), contexto (8-12%), desarrollo que acumula tension (20-25%), el hecho central contado en secuencia (30-35%), consecuencias (10-15%), resolucion (5-8%), cierre (2-3%). Cada seccion termina con un enganche a la siguiente. No escribas titulos, marcas ni acotaciones: todo el texto se narra en voz alta.";
 
+const GOMOTION_FAVOR = ["highlight_phrase", "checklist", "side_panel", "process_wave", "photo_tree", "dossier"];
+
 function style(overrides: Partial<DocumentalStyle> & Pick<DocumentalStyle, "id" | "name" | "description" | "idealFor" | "examples" | "category">): DocumentalStyle {
   const base: Omit<DocumentalStyle, "id" | "name" | "description" | "idealFor" | "examples" | "category"> = {
     script: { skeleton: DOC_SKELETON, tone: "Narrador de documental: sobrio, preciso, con datos concretos." },
@@ -122,7 +124,14 @@ function style(overrides: Partial<DocumentalStyle> & Pick<DocumentalStyle, "id" 
     script: { ...base.script, ...overrides.script },
     plan: { ...base.plan, ...overrides.plan },
     sources: { ...base.sources, ...overrides.sources },
-    graphics: { ...base.graphics, ...overrides.graphics },
+    // Los graficos estilo GoMotion (20/11/2026) son favoritos de todos los
+    // estilos, salvo que el estilo los prohiba: suben la variedad y no tapan
+    // el video (highlight_phrase, checklist, side_panel).
+    graphics: (() => {
+      const merged = { ...base.graphics, ...overrides.graphics };
+      const extra = GOMOTION_FAVOR.filter((t) => !merged.favor.includes(t) && !merged.forbid.includes(t));
+      return { ...merged, favor: [...merged.favor, ...extra] };
+    })(),
     look: { ...base.look, ...overrides.look },
     captions: { ...base.captions, ...overrides.captions },
     sound: { ...base.sound, ...overrides.sound },

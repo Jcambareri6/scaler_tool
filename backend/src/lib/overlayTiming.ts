@@ -57,6 +57,14 @@ const DEFAULT_DURATIONS: Partial<Record<OverlaySpec["type"], number>> = {
   map_marker: 5.5,
   layers_diagram: 7,
   cycle_diagram: 7,
+  photo_frame: 5,
+  checklist: 7,
+  highlight_phrase: 4.5,
+  side_panel: 7,
+  photo_tree: 7,
+  process_wave: 6.5,
+  dossier: 5,
+  concept_circles: 5.5,
 };
 
 export interface TimedOverlay extends OverlaySpec {
@@ -153,6 +161,15 @@ const PRIORITY: Record<string, number> = {
   kinetic_quote: 1,
   phrase_swap: 1,
   pivot_question: 1,
+  // Estilo GoMotion (20/11/2026).
+  dossier: 4,
+  photo_frame: 3,
+  checklist: 3,
+  side_panel: 3,
+  process_wave: 3,
+  photo_tree: 3,
+  highlight_phrase: 2,
+  concept_circles: 2,
 };
 
 function normText(s: string | undefined): string {
@@ -199,7 +216,8 @@ export function placeOverlays(scenes: OverlaySceneTiming[], supportedTypes?: rea
     if (sceneStart === undefined || sceneEnd === undefined || sceneEnd <= sceneStart) continue;
     const list = scene.overlays?.length ? scene.overlays : scene.overlay ? [scene.overlay] : [];
     for (const spec of list) {
-      if (!spec || spec.type === "ninguno" || !spec.text?.trim()) continue;
+      // La foto sobre papel puede ir sin leyenda: lo que se ve es la foto.
+      if (!spec || spec.type === "ninguno" || (!spec.text?.trim() && spec.type !== "photo_frame")) continue;
       if (supportedTypes && !supportedTypes.includes(spec.type)) continue;
       const narrated = spec.start_seconds ?? sceneStart + (spec.anchor ?? 0) * (sceneEnd - sceneStart);
       const { start_seconds: _s, anchor: _a, ...clean } = spec as TimedOverlay;

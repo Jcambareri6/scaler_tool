@@ -63,8 +63,27 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
   const line = draw(ZOOM_FRAMES, ZOOM_FRAMES + 16);
   const card = enter(ZOOM_FRAMES + 2, 14);
   // Tarjeta a la derecha del punto salvo que no entre o que ahi este el
-  // lugar de referencia (lo taparia).
-  const cardLeft = ref ? rx <= px : px < width * 0.6;
+  // lugar de referencia (lo taparia). Nunca se sale de la pantalla (20/11/2026:
+  // "Reserva de la Biosfera El Vizcaino" a 54 px y sin corte se iba del cuadro):
+  // va del lado con mas lugar, la letra se achica hasta lo que entre (con un
+  // minimo legible), pasa a dos lineas si igual no alcanza, y la altura se
+  // acomoda dentro del cuadro.
+  const margin = 48 * s;
+  const gap = 90 * s;
+  const padX = 26 * s;
+  const spaceRight = width - (px + gap) - margin;
+  const spaceLeft = px - gap - margin;
+  const preferRight = ref ? rx <= px : px < width * 0.6;
+  const titleChars = Math.max(1, spec.text.length);
+  const fits = (space: number) => space - 2 * padX >= titleChars * 54 * s * 0.62;
+  const cardLeft = fits(preferRight ? spaceRight : spaceLeft) ? preferRight : ref ? preferRight : spaceRight >= spaceLeft;
+  const space = Math.max(220 * s, cardLeft ? spaceRight : spaceLeft);
+  const inner = space - 2 * padX;
+  const titleSize = Math.max(34 * s, Math.min(54 * s, inner / (titleChars * 0.62)));
+  const titleLines = titleChars * titleSize * 0.62 > inner ? 2 : 1;
+  const labelSize = spec.label ? Math.max(20 * s, Math.min(28 * s, inner / (Math.max(1, spec.label.length) * 0.62))) : 0;
+  const cardHeight = 36 * s + titleLines * titleSize * 1.15 + (spec.label ? labelSize * 1.3 + 6 * s : 0);
+  const cardTop = Math.min(Math.max(py - 60 * s, margin), height - margin - cardHeight);
 
   return (
     <AbsoluteFill style={{ opacity: exit }}>
@@ -136,9 +155,11 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
       <div
         style={{
           position: "absolute",
-          top: py - 60 * s,
-          ...(cardLeft ? { left: px + 90 * s } : { right: width - px + 90 * s }),
-          padding: `${18 * s}px ${26 * s}px`,
+          top: cardTop,
+          ...(cardLeft ? { left: px + gap } : { right: width - px + gap }),
+          maxWidth: space,
+          boxSizing: "border-box",
+          padding: `${18 * s}px ${padX}px`,
           borderLeft: cardLeft ? `${4 * s}px solid ${theme.accent}` : undefined,
           borderRight: cardLeft ? undefined : `${4 * s}px solid ${theme.accent}`,
           textAlign: cardLeft ? "left" : "right",
@@ -147,11 +168,11 @@ export function MapMarker({ spec, theme, exit: withExit }: { spec: OverlaySpec; 
           transform: `translateX(${(1 - card) * (cardLeft ? -24 : 24) * s}px)`,
         }}
       >
-        <div style={{ fontFamily: theme.fontSans, fontWeight: 800, fontSize: 54 * s, textTransform: "uppercase", letterSpacing: 2 * s, color: theme.text, whiteSpace: "nowrap" }}>
+        <div style={{ fontFamily: theme.fontSans, fontWeight: 800, fontSize: titleSize, lineHeight: 1.1, textTransform: "uppercase", letterSpacing: 2 * s, color: theme.text, whiteSpace: titleLines > 1 ? "normal" : "nowrap", overflowWrap: "break-word" }}>
           {spec.text}
         </div>
         {spec.label && (
-          <div style={{ marginTop: 6 * s, fontFamily: theme.fontSans, fontWeight: 600, fontSize: 28 * s, letterSpacing: 3 * s, color: theme.accent, whiteSpace: "nowrap" }}>
+          <div style={{ marginTop: 6 * s, fontFamily: theme.fontSans, fontWeight: 600, fontSize: labelSize, letterSpacing: 3 * s, color: theme.accent, whiteSpace: "normal" }}>
             {spec.label}
           </div>
         )}

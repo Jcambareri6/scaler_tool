@@ -52,7 +52,13 @@ export interface DocumentalSummary {
     issues: string[];
     shots: DocumentalShotOutcome[];
     // QA final (como MaV): hoja de contactos con un cuadro por plano.
-    qa?: { hoja?: string | null; oscuros?: number; vacios?: number } | null;
+    qa?: {
+      hoja?: string | null;
+      oscuros?: number;
+      vacios?: number;
+      // 2 o mas planos seguidos de mapa/niebla: corregir en la revision.
+      relleno_seguido?: { planos: number[]; tipos: string[] }[];
+    } | null;
   } | null;
   credits: DocumentalCredit[];
   creditsText: string;

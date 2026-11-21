@@ -47,6 +47,15 @@ const VALID_TYPES: OverlayType[] = [
   "map_marker",
   "layers_diagram",
   "cycle_diagram",
+  // Estilo GoMotion (20/11/2026).
+  "photo_frame",
+  "checklist",
+  "highlight_phrase",
+  "side_panel",
+  "photo_tree",
+  "process_wave",
+  "dossier",
+  "concept_circles",
   "ninguno",
 ];
 
@@ -63,9 +72,14 @@ const MULTI_ITEM_TYPES: OverlayType[] = [
   "chapter_index",
   "layers_diagram",
   "cycle_diagram",
+  "checklist",
+  "side_panel",
+  "photo_tree",
+  "process_wave",
+  "concept_circles",
 ];
 // En una lista cada entrada es solo su texto: el label es opcional.
-const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram"];
+const OPTIONAL_ITEM_LABEL_TYPES: OverlayType[] = ["list", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram", "checklist", "side_panel", "photo_tree", "process_wave", "concept_circles"];
 // Graficos que dibujan el valor de cada item: sin cifra no hay que dibujar.
 const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 
@@ -73,7 +87,8 @@ const NUMERIC_ITEM_TYPES: OverlayType[] = ["line_chart"];
 // esta literal en el guion (nombre de lugar, nombre del hito).
 // title_card: el titulo del capitulo es el nombre de la parte ("Las
 // advertencias"), no un pedazo de frase.
-const RELAXED_LABEL_TYPES: OverlayType[] = ["map_marker", "milestone", "title_card"];
+// photo_frame: la leyenda de la foto es el nombre de lo que muestra ("La presa Chicoasen").
+const RELAXED_LABEL_TYPES: OverlayType[] = ["map_marker", "milestone", "title_card", "photo_frame"];
 
 const MILESTONE_DATE = /\b(\d{3,4}|\d{1,2} de \w+|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|siglo)\b/i;
 
@@ -138,7 +153,7 @@ export function matchesScript(script: string, text: string | undefined): boolean
 // Titulos (de una lista, una linea de tiempo, una ficha): MaV no los valida.
 // Aca: cortos, sin cifras (las cifras siempre dichas) y con la mayoria de sus
 // palabras con sentido presentes en el guion ("El camino de La Rumorosa").
-const TITLE_TYPES: OverlayType[] = ["list", "timeline", "profile_card", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram", "title_card", "person_card", "lower_third", "line_chart", "data_viz_single", "versus", "scoreboard"];
+const TITLE_TYPES: OverlayType[] = ["list", "timeline", "profile_card", "card_grid", "chapter_index", "layers_diagram", "cycle_diagram", "title_card", "person_card", "lower_third", "line_chart", "data_viz_single", "versus", "scoreboard", "checklist", "side_panel", "photo_tree", "process_wave", "concept_circles", "dossier"];
 const MAX_PALABRAS_TITULO_LIBRE = 7;
 export function titleFromScript(fullScript: string, text: string | undefined): boolean {
   const t = text?.trim() ?? "";
@@ -193,9 +208,21 @@ function legible(type: OverlayType, text: string, items: { label: string; text: 
   if (type === "big_number" && !tieneCifra(text)) throw new Error(`big_number sin cifra ("${text}")`);
   if (type === "versus" && items?.length === 2 && tieneCifra(items[0]!.text) !== tieneCifra(items[1]!.text)) throw new Error("versus de una cifra contra una frase: no compara nada");
   if (type === "scale_compare" && !icon) throw new Error("scale_compare sin un icono de la lista: quedaria un circulo vacio");
-  if (type === "list") {
+  if (type === "list" || type === "checklist" || type === "side_panel") {
     if (CONECTOR_INICIAL.test(text)) throw new Error(`el titulo de la lista ("${text}") es un conector, no dice que se enumera`);
     if ((items ?? []).some((i) => CONECTOR_INICIAL.test(i.text) || terminaEnConector(i.text))) throw new Error("la lista tiene renglones cortados");
+  }
+  // Frase sobre el video: como kinetic_quote, un poco mas larga (se lee sobre
+  // la imagen, en lineas de ~3 palabras), con las palabras resaltadas adentro.
+  if (type === "highlight_phrase") {
+    const n = palabras(text).length;
+    if (n < MIN_PALABRAS_CITA || n > 10 || text.length > 60) throw new Error(`highlight_phrase de ${n} palabras / ${text.length} caracteres ("${text}"): tiene que ser de ${MIN_PALABRAS_CITA} a 10 palabras y 60 caracteres`);
+    if (terminaEnConector(text)) throw new Error(`"${text}" termina en un conector: es una frase cortada`);
+  }
+  // Pasos de la curva y conceptos de los circulos: cortos, que se lean solos.
+  if (type === "process_wave" || type === "concept_circles" || type === "photo_tree") {
+    const max = type === "concept_circles" ? 2 : 5;
+    if ((items ?? []).some((i) => palabras(i.text).length > max)) throw new Error(`${type}: cada paso o concepto tiene que tener como mucho ${max} palabras`);
   }
 }
 
@@ -304,7 +331,8 @@ export const generateOverlayTool: ToolDefinition<
               (matchesScript(fullScript, item.label) || titleFromScript(fullScript, item.label) ||
                 (OPTIONAL_ITEM_LABEL_TYPES.includes(overlay.type) && !item.label?.trim()))
           )
-          .map((item) => ({ label: (item.label ?? "").trim(), text: item.text.trim() }))
+          // photo_tree: la foto del nodo (la pone el pipeline) pasa si es una URL.
+          .map((item) => ({ label: (item.label ?? "").trim(), text: item.text.trim(), ...(/^https?:\/\//.test(item.image ?? "") ? { image: item.image } : {}) }))
       : undefined;
     // La piramide solo existe con datos reales (pipeline documental, source "data").
     if (overlay.type === "population_pyramid") {
@@ -341,6 +369,12 @@ export const generateOverlayTool: ToolDefinition<
     if (overlay.type === "number_phrase" && !tieneCifra(text)) {
       throw new Error("number_phrase sin cifra en el texto — se descarta");
     }
+    if (overlay.type === "process_wave" && items!.length < 3) {
+      throw new Error("process_wave necesita al menos 3 pasos (el primero, uno en el medio y el ultimo)");
+    }
+    if (overlay.type === "photo_frame" && !/^https?:\/\//.test(overlay.image ?? "")) {
+      throw new Error("photo_frame sin la foto del plano (image) — se descarta");
+    }
     if (overlay.type === "cycle_diagram" && items!.length < 3) {
       throw new Error("cycle_diagram necesita al menos 3 pasos");
     }
@@ -353,7 +387,7 @@ export const generateOverlayTool: ToolDefinition<
     const min = NUMERIC_TYPES.includes(overlay.type) ? 0 : 10;
     const shown = numerizar(text, min);
     const shownLabel = label ? numerizar(label, min) : undefined;
-    const shownItems = items?.map((item) => ({ label: numerizar(item.label, min), text: numerizar(item.text, min) }));
+    const shownItems = items?.map((item) => ({ label: numerizar(item.label, min), text: numerizar(item.text, min), ...(item.image ? { image: item.image } : {}) }));
     legible(overlay.type, shown, shownItems, icon);
 
     return {
@@ -364,6 +398,7 @@ export const generateOverlayTool: ToolDefinition<
         ...(shownLabel ? { label: shownLabel } : {}),
         ...(shownItems?.length ? { items: shownItems } : {}),
         ...(icon ? { icon } : {}),
+        ...(overlay.type === "photo_frame" && overlay.image ? { image: overlay.image } : {}),
         ...(geo ? { geo } : {}),
         ...(ref ? { ref } : {}),
         ...(isMap && (overlay.basemap === "satellite" || overlay.basemap === "dark") ? { basemap: overlay.basemap } : {}),
