@@ -169,6 +169,29 @@ export function titleFromScript(fullScript: string, text: string | undefined): b
   return found / content.length >= 0.6;
 }
 
+// Rotulos de persona con el nombre completo ("Alfred Wegener") cuando el
+// guion la nombra solo por el apellido ("Wegener"): valen si el APELLIDO
+// aparece literal en el guion (Rio de la Plata, 25/11/2026: se descartaban
+// Wegener, Keidel y du Toit). El apellido es la ultima palabra con sus
+// particulas ("du Toit", "van der Waals"); el nombre, 2 a 5 palabras con
+// mayuscula y sin cifras.
+const PERSON_TYPES: OverlayType[] = ["person_card", "profile_card", "dossier"];
+const PARTICULAS = /^(de|del|da|das|do|dos|du|di|van|von|der|den|la|le|ibn|bin|al|y)$/i;
+export function surnameInScript(script: string, text: string | undefined): boolean {
+  const ws = (text ?? "").trim().split(/\s+/).filter(Boolean);
+  if (ws.length < 2 || ws.length > 5 || /\d/.test(text ?? "")) return false;
+  if (!ws.every((w) => /^[A-ZÁÉÍÓÚÜÑ]/.test(w) || PARTICULAS.test(w))) return false;
+  let k = ws.length - 1;
+  while (k - 1 >= 1 && PARTICULAS.test(ws[k - 1]!)) k -= 1;
+  const surname = words(ws.slice(k).join(" "));
+  if (surname.join("").length < 3) return false;
+  const hay = words(script);
+  for (let i = 0; i + surname.length <= hay.length; i++) {
+    if (surname.every((w, j) => hay[i + j] === w)) return true;
+  }
+  return false;
+}
+
 // Graficos que muestran cifras: ahi hasta el "tres" va en digitos.
 const NUMERIC_TYPES: OverlayType[] = ["big_number", "number_phrase", "data_viz_single", "versus", "scoreboard", "line_chart", "scale_compare", "rank_reveal", "milestone", "timeline"];
 
@@ -308,7 +331,8 @@ export const generateOverlayTool: ToolDefinition<
     const textOk =
       shortLabelOk ||
       matchesScript(script_text, text) ||
-      (TITLE_TYPES.includes(overlay.type) && (matchesScript(fullScript, text) || titleFromScript(fullScript, text)));
+      (TITLE_TYPES.includes(overlay.type) && (matchesScript(fullScript, text) || titleFromScript(fullScript, text))) ||
+      (PERSON_TYPES.includes(overlay.type) && surnameInScript(fullScript, text));
     if (!textOk) {
       throw new Error(
         `overlay.text ("${text}") no aparece literalmente en el guion — modo estricto lo prohibe`

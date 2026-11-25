@@ -12,7 +12,7 @@ import { getOwnedProject } from "../lib/ownership.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { getChannelSettingsForProject } from "../lib/channelSettings.js";
 import { mirrorTimelineVisuals } from "../lib/mirrorAssets.js";
-import { runDocumentalMontaje } from "./documentalPipeline.js";
+import { assertMotionReady, runDocumentalMontaje } from "./documentalPipeline.js";
 import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { navHeaderContext, resolveProjectStyle } from "../lib/niches.js";
@@ -162,6 +162,9 @@ const SCENE_CONCURRENCY = 4;
 // aparte, para pedidos puntuales, pero no orquesta este flujo.
 export async function runPreRenderPipeline(projectId: string, ctx: PipelineContext) {
   const project = await getProjectOrThrow(projectId, ctx.userId);
+  // Documental sin graficos animados: falla ACA, antes de pagar la voz (las
+  // corridas del 25/11/2026 salieron sin animaciones y nadie se entero).
+  if (effectiveFormat(project.video_format, ctx.userId) === "documental") assertMotionReady();
 
   const { data: script, error: scriptError } = await supabase
     .from("scripts")

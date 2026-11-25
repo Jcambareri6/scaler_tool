@@ -30,7 +30,7 @@ for (const shot of shots) {
   const chain = sourceChain(shot, style.sources.archiveFirst);
   let picked = "";
   for (const source of chain) {
-    if (source === "stock" || source === "ai_image") continue;
+    if (source === "ai_image" || source === "wikipedia") continue;
     try {
       const list =
         source === "wikidata" ? (shot.entidad ? await searchWikidataImage(shot.entidad) : [])

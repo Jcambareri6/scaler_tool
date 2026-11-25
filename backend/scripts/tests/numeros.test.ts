@@ -10,6 +10,15 @@ assert.equal(numerizar("pierde más de novecientos metros de altura"), "pierde m
 assert.equal(numerizar("pueden superar los cuarenta y cinco grados"), "pueden superar los 45 grados");
 assert.equal(numerizar("en apenas unos dieciséis kilómetros"), "en apenas unos 16 kilómetros");
 assert.equal(numerizar("un rascacielos de trescientos pisos"), "un rascacielos de 300 pisos");
+// Cifras ya en digitos con su unidad en letras (Rio de la Plata, 25/11/2026:
+// los hitos decian "136 a 132 0 millones" y "130 0 millones de años").
+assert.equal(numerizar("Hace unos 136 a 132 millones de años"), "Hace unos 136 a 132 millones de años");
+assert.equal(numerizar("130 millones de años"), "130 millones de años");
+assert.equal(numerizar("hace 132 mil millones"), "hace 132 mil millones");
+assert.equal(numerizar("hace 1,5 millones de años"), "hace 1,5 millones de años");
+assert.equal(numerizar("ciento treinta millones de años"), "130 millones de años");
+assert.equal(numerizar("Hace unos ciento treinta y seis a ciento treinta y dos millones de años"), "Hace unos 136 a 132 millones de años");
+assert.deepEqual(numbersIn("130 millones de años"), [130]);
 assert.equal(numerizar("unos once kilómetros de la frontera"), "unos 11 kilómetros de la frontera");
 assert.equal(numerizar("Hoy te cuento cuatro datos"), "Hoy te cuento cuatro datos", "menos de 10 queda en letras");
 assert.equal(numerizar("Hoy te cuento cuatro datos", 0), "Hoy te cuento 4 datos");
@@ -47,3 +56,21 @@ const k = await run({ type: "kinetic_quote", text: "ciento setenta accidentes al
 assert.equal(k.overlay.text, "170 accidentes al año");
 await assert.rejects(run({ type: "kinetic_quote", text: "La montaña habla de noche", source: "script" }), /no aparece/);
 console.log("graficos OK");
+
+// Rotulos de persona con el nombre completo cuando el guion dice solo el
+// apellido (Rio de la Plata, 25/11/2026: Wegener, Keidel y du Toit).
+{
+  const { surnameInScript } = await import("../../src/tools/generateOverlay.tool.js");
+  const rio = "La idea de Wegener parecía absurda. Años después, Keidel encontró los mismos fósiles y du Toit comparó las rocas de África y Sudamérica.";
+  assert.ok(surnameInScript(rio, "Alfred Wegener"));
+  assert.ok(surnameInScript(rio, "Juan Keidel"));
+  assert.ok(surnameInScript(rio, "Alexander du Toit"));
+  assert.ok(!surnameInScript(rio, "Charles Darwin"), "apellido que el guion no dice");
+  assert.ok(!surnameInScript(rio, "Wegener"), "una sola palabra no es un nombre completo");
+  assert.ok(!surnameInScript(rio, "los fósiles de Wegener"), "no es un nombre (minusculas)");
+  const run2 = (overlay: Record<string, unknown>) => generateOverlayTool.execute({ scene_id: "x", script_text: "La idea de Wegener parecía absurda.", full_text: rio, overlay: overlay as never }, {} as never);
+  assert.equal((await run2({ type: "person_card", text: "Alfred Wegener", label: "meteorólogo", source: "script" })).overlay.text, "Alfred Wegener");
+  assert.equal((await run2({ type: "dossier", text: "Alexander du Toit", source: "script" })).overlay.text, "Alexander du Toit");
+  await assert.rejects(run2({ type: "person_card", text: "Charles Darwin", source: "script" }), /no aparece/);
+  console.log("rotulos de persona OK");
+}

@@ -134,28 +134,29 @@ Antes de los veredictos escribi "justificacion": 1 o 2 frases con el POR QUE de 
 
 Responde SOLO con JSON: {"justificacion": "...", "elegido": numero|null, "veredictos": [{"i": numero, "codigo": "...", "motivo": "corto", "camara": true|false, "marca": true|false, "logo_esquina": null|"tl"|"tr"|"bl"|"br", "cuadro": numero, "cuadros_ok": [numeros] (estos dos solo en hojas de cuadros de YouTube)}]}`;
 
-// JUEZ DE TEMA (rescate, como el prompt "tema" de fotoTema en MaV): el plano
-// ya no tiene una imagen especifica, asi que la pregunta CAMBIA: no "¿es la
-// cosa?" sino "¿es de ESTA historia?". Con el juez estricto en el rescate se
-// rechazaban 11 candidatos por plano y quedaban rotulos.
-const SYSTEM_TEMA = `Sos el juez de RESCATE de un documental hecho con material real. Este plano no consiguio una imagen especifica: necesita material del TEMA de esta historia (b-roll) que no se sienta al azar bajo la frase.
+// JUEZ DEL RESCATE. Antes (como fotoTema de MaV) preguntaba "¿es de ESTA
+// historia?" y dejaba pasar clips del tema general del video que no tenian
+// nada que ver con la frase (25/11/2026, pedido del cliente). Ahora compara
+// contra la FRASE y el tema de ESE tramo del guion; es mas flexible que el
+// juez de la busqueda solo en que no exige la accion exacta.
+const SYSTEM_TEMA = `Sos el juez de RESCATE de un documental hecho con material real. Este plano no consiguio una imagen especifica en la busqueda. Te paso la FRASE que dice la voz y el TEMA DE ESTE TRAMO del guion (de que hablan las frases de alrededor).
 
-Elegi el UNO que claramente pertenece a esta historia: su lugar principal, su barco/vehiculo, sus edificios, su gente, sus objetos o su epoca. No hace falta que muestre la accion exacta de la frase.
+Elegi el UNO que muestra lo que dice la frase o el tema de este tramo: la cosa, el lugar, el ser vivo, la persona o el fenomeno del que se habla en ESTE momento. No hace falta que muestre la accion exacta, pero si la misma cosa. Que sea del tema general del video NO alcanza: una imagen del tema del video que no tiene que ver con la frase ni con el tramo se siente al azar.
 
 Codigos por candidato:
-- ok: pertenece a esta historia (mismo pais, lugar y epoca) y no se siente al azar bajo la frase.
-- equivocado: es de OTRA historia, otro pais, otro lugar u otra epoca.
+- ok: muestra lo que dice la frase o el tema de este tramo (mismo pais, lugar y epoca) y el espectador entiende por que esta ahi.
+- generico: es del tema general del video pero no de lo que dice la frase ni del tramo; o es relleno que podria ir en cualquier video.
+- equivocado: muestra otra cosa, otro lugar, otro pais u otra epoca.
 - epoca: el plano es historico y se ve algo claramente moderno (o al reves).
-- texto: texto grande quemado, subtitulos o graficos encima.
+- texto: texto grande quemado, subtitulos o graficos encima (los rotulos de un diagrama o una ilustracion cientifica no cuentan).
 - marca_agua: marca de agua o logo grande.
-- ficcion: pelicula, serie, animacion, CGI, videojuego o remix (solo material real).
+- ficcion: pelicula, serie, animacion, CGI, videojuego o remix (solo material real; una ilustracion, un diagrama o una reconstruccion cientifica de un articulo SI sirven).
 - persona: se ve claramente a otra persona presentada como protagonista.
 - oscuro: muy oscuro, borroso o de muy baja calidad.
-- generico: SOLO si no tiene nada que ver con la historia (una oficina moderna cualquiera, un paisaje de otro lado).
-Rechaza mapas, diagramas y escenas modernas sin relacion.
+Ilustraciones, diagramas, fosiles, grabados y fotos de epoca sirven si muestran lo de la frase o del tramo. Rechaza mapas de ubicacion genericos y escenas modernas sin relacion.
 Rechaza (persona) gente hablando o posando a camara: vloggers, selfies, presentadores, turistas como protagonistas. Un documental no muestra a los youtubers del video de origen.
-Rechaza (equivocado) OTRO sitio aunque sea de la misma zona: si la frase nombra un lugar o una cosa concreta (Campo Alaska, la cuesta, las cruces), unas ruinas, una mina, un tunel o un edificio que NO son eso no sirven. Material del tema sirve solo cuando la frase no nombra nada concreto.
-Si ninguno pertenece a la historia, "elegido": null.
+Rechaza (equivocado) OTRO sitio aunque sea de la misma zona: si la frase nombra un lugar o una cosa concreta (Campo Alaska, la cuesta, las cruces), unas ruinas, una mina, un tunel o un edificio que NO son eso no sirven.
+Si ninguno muestra lo de la frase o del tramo, "elegido": null.
 
 En CADA candidato contesta dos chequeos, mirando todos sus cuadros: "camara": true si alguien mira, posa o habla a camara (vlogger, selfie, presentador, turista posando, youtuber); "marca": true si hay una MARCA DE AGUA de verdad: de una agencia de stock, un logo o texto semitransparente encima de la imagen, un logo grande o en el centro, o el nombre de un canal escrito sobre la imagen. Cualquiera de los dos en true descarta el candidato. "logo_esquina": si lo UNICO que hay es un logo CHICO de canal (menos de un sexto del ancho) en UNA esquina, la esquina: "tl" (arriba izquierda), "tr" (arriba derecha), "bl" (abajo izquierda) o "br" (abajo derecha); si no, null. Ese logo se recorta y el clip sirve: no lo cuentes como marca.
 
@@ -372,7 +373,7 @@ export function shotContext(shot: JudgeShot): string {
   if (era) lines.push(era);
   if (shot.modo === "tema") {
     lines.push(
-      `MODO RESCATE: ninguna fuente dio el sujeto exacto. Acepta (ok) material del tema del video${shot.tema ? ` ("${shot.tema}")` : ""} si el lugar, el pais y la epoca son los de la historia; no lo rechaces por "generico". Si rechaza (equivocado/epoca/texto/marca_agua) otro lugar, otro pais, otra epoca, texto o marca de agua.`
+      `MODO RESCATE: ninguna fuente dio el sujeto exacto. Tema de este tramo del guion: ${shot.tema ? `"${shot.tema}"` : "(sin tema)"}. Acepta (ok) solo lo que muestra lo que dice la frase o ese tema del tramo; algo del tema general del video que no tiene que ver con la frase es "generico". Rechaza (equivocado/epoca/texto/marca_agua) otro lugar, otro pais, otra epoca, texto o marca de agua.`
     );
   }
   return lines.join("\n");

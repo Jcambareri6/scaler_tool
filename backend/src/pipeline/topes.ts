@@ -14,7 +14,9 @@ export const MIN_CEDED = 0.4;
 // El corte va 120 ms antes de la palabra.
 const WORD_LEAD = 0.12;
 
-const TEMA_VIAS = new Set(["commons_tema", "stock_ultimo", "youtube_tema"]);
+// Fotos de "tema" (rescate): el paso 2 busca con el tema del tramo y el 3 trae
+// las imagenes del articulo; commons_tema/youtube_tema son de corridas viejas.
+const TEMA_VIAS = new Set(["busqueda_tema", "wikipedia_articulo", "commons_tema", "youtube_tema"]);
 const STOCK_PROVIDERS = new Set(["pexels", "pixabay", "coverr"]);
 
 export interface CapVisual {

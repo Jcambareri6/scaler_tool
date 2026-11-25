@@ -36,6 +36,9 @@ function parseWords(words: string[]): { value: number; millions: boolean } | nul
   let current = 0;
   let millions = false;
   let any = false;
+  // "millones" solo no es un numero (es la unidad de una cifra en digitos:
+  // "130 millones" daba "130 0 millones").
+  let valued = false;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
     if (w === "y") {
@@ -51,14 +54,16 @@ function parseWords(words: string[]): { value: number; millions: boolean } | nul
     else if (w === "mil") {
       total += (current || 1) * 1000;
       current = 0;
+      valued = true;
     } else if (w === "millon" || w === "millones") {
       // "dos millones" -> se muestra "2 millones": el numero queda chico.
       millions = true;
       if (i !== words.length - 1) return null;
     } else return null;
+    if (w in UNIDADES || w in DECENAS || w in CENTENAS) valued = true;
     any = true;
   }
-  if (!any) return null;
+  if (!any || !valued) return null;
   return { value: total + current, millions };
 }
 
@@ -104,7 +109,10 @@ export function numerizar(text: string, min = 10): string {
     }
     const parsed = parseWords(words);
     const article = words.length === 1 && (w === "un" || w === "una" || w === "uno");
-    if (!parsed || article || (parsed.value < min && !parsed.millions)) {
+    // "132 mil millones": "mil"/"millones" detras de una cifra en digitos son
+    // su unidad, no otro numero (daba "132 1000 millones").
+    const afterDigits = (w === "mil" || w === "millon" || w === "millones") && /\d\s*$/.test(tokens.slice(Math.max(0, i - 2), i).join(""));
+    if (!parsed || article || afterDigits || (parsed.value < min && !parsed.millions)) {
       out.push(tokens[i]!);
       i += 1;
       continue;

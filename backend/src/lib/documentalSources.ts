@@ -147,13 +147,21 @@ interface CommonsPage {
 
 const BAD_COMMONS_TITLE = /\b(map|mapa|logo|icon|coat of arms|escudo|flag|bandera|diagram|diagrama|chart|graph|poster|cartel|screenshot|signature|firma|seal|stamp|svg)\b/i;
 
-function commonsCandidate(page: CommonsPage, query: string, minWidth = MIN_IMAGE_WIDTH): VisualCandidate | null {
+function commonsCandidate(
+  page: CommonsPage,
+  query: string,
+  minWidth = MIN_IMAGE_WIDTH,
+  opts: { badTitle?: RegExp; svgMinWidth?: number } = {}
+): VisualCandidate | null {
   const info = page.imageinfo?.[0];
-  if (!info || !/^image\/(jpeg|png|webp)/.test(info.mime)) return null;
+  if (!info) return null;
+  // SVG (diagramas de Wikipedia): solo los grandes; Commons sirve la miniatura en PNG.
+  const svg = info.mime === "image/svg+xml";
+  if (svg ? opts.svgMinWidth === undefined || info.width < opts.svgMinWidth || !info.thumburl : !/^image\/(jpeg|png|webp)/.test(info.mime)) return null;
   if (info.width < minWidth || info.width / info.height > MAX_ASPECT) return null;
   // Mapas, diagramas, logos, escudos, banderas, carteles y capturas no son
   // fotos del tema (MaV: MALO_TITULO).
-  if (BAD_COMMONS_TITLE.test(page.title ?? "")) return null;
+  if ((opts.badTitle ?? BAD_COMMONS_TITLE).test(page.title ?? "")) return null;
   const meta = info.extmetadata ?? {};
   const license = commercialLicense(meta.License?.value ?? meta.LicenseShortName?.value);
   if (!license) return null;
@@ -240,7 +248,89 @@ export async function searchWikidataImage(entity: string, language = "es"): Prom
   return results;
 }
 
+// ---------- Wikipedia (las imagenes del articulo) ----------
+
+// Lo que NO es una ilustracion del tema en un articulo: iconos de plantillas,
+// banderas, logos, escudos, mapas de ubicacion genericos, simbolos y audio.
+// A diferencia de Commons, los diagramas y las ilustraciones SI sirven aca.
+export const BAD_ARTICLE_IMAGE =
+  /(\bicon|icono|\bflag\b|flag[ _]of|bandera|\blogo|escudo|coat[ _]of[ _]arms|location[ _]?map|locator|mapa[ _]de[ _]localizaci|mapa[ _]de[ _]ubicaci|relief[ _]map|\bblank[ _]map|orthographic[ _]projection|symbol|s[ií]mbolo|pictogram|disambig|question[ _]book|wiki(pedia|data|source|quote|media|species|books|news|versity|voyage)|commons-logo|edit-clear|pencil|l[aá]piz|oojs|\bpog\b|increase|decrease|steady|arrow|flecha|loudspeaker|speaker|altavoz|padlock|crystal[ _]clear|nuvola|gnome-|ambox|\bstub\b|portal|signature|firma|\.(ogg|oga|ogv|webm|mid|wav|mp3|flac|tif|tiff|pdf|djvu)$)/i;
+// Minimo para una ilustracion de articulo (retratos viejos y fosiles suelen
+// ser chicos; el render la muestra entera sobre su copia desenfocada).
+const MIN_ARTICLE_IMAGE_WIDTH = 500;
+// Un SVG mas chico que esto es un icono o un simbolo, no un diagrama.
+const MIN_ARTICLE_SVG_WIDTH = 800;
+const ARTICLE_MAX_IMAGES = 12;
+
+export function articleImageAllowed(fileTitle: string): boolean {
+  const name = fileTitle.replace(/^(File|Archivo|Imagen|Image):/i, "");
+  return !!name && !BAD_ARTICLE_IMAGE.test(name);
+}
+
+// Imagenes de un articulo de Wikipedia (es, si no existe en, o el idioma que
+// se pida primero): MediaWiki prop=images y la info de cada archivo en Commons
+// (licencia y autor). Los archivos locales de Wikipedia (no libres) no estan
+// en Commons y quedan afuera solos. Hoy Wikidata da una sola foto (P18); esto
+// trae ilustraciones, diagramas, fosiles, retratos y fotos de epoca.
+export async function searchWikipediaImages(title: string, languages: string[] = ["es", "en"]): Promise<VisualCandidate[]> {
+  const article = title.trim();
+  if (!article) return [];
+  for (const lang of languages) {
+    const params = new URLSearchParams({ action: "query", format: "json", formatversion: "2", titles: article, redirects: "1", prop: "images", imlimit: "100" });
+    const data = await wikimediaJson<{ query?: { pages?: { title: string; missing?: boolean; images?: { title: string }[] }[] } }>(
+      `https://${lang}.wikipedia.org/w/api.php?${params}`
+    ).catch(() => null);
+    const page = data?.query?.pages?.[0];
+    if (!page || page.missing) continue;
+    const files = (page.images ?? [])
+      .map((i) => i.title.replace(/^[^:]+:/, ""))
+      .filter((name) => articleImageAllowed(name))
+      .slice(0, 50);
+    if (files.length === 0) continue;
+    const info = new URLSearchParams({
+      action: "query",
+      format: "json",
+      formatversion: "2",
+      titles: files.map((f) => `File:${f}`).join("|"),
+      prop: "imageinfo",
+      iiprop: IMAGEINFO,
+      iiurlwidth: "1920",
+      iiextmetadatafilter: EXTMETA,
+    });
+    const meta = await wikimediaJson<{ query?: { pages?: CommonsPage[] } }>(`${COMMONS_API}?${info}`).catch(() => null);
+    const byName = new Map((meta?.query?.pages ?? []).map((p) => [p.title.replace(/^File:/, ""), p]));
+    const pageUrl = `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, "_"))}`;
+    const out: VisualCandidate[] = [];
+    // En el orden en que aparecen en el articulo (la primera suele ser la principal).
+    for (const f of files) {
+      const p = byName.get(f) ?? byName.get(f.replace(/_/g, " "));
+      if (!p) continue;
+      const c = commonsCandidate(p, article, MIN_ARTICLE_IMAGE_WIDTH, { badTitle: BAD_ARTICLE_IMAGE, svgMinWidth: MIN_ARTICLE_SVG_WIDTH });
+      if (c) out.push({ ...c, provider: "wikipedia", query: `${article} (${pageUrl})` });
+      if (out.length >= ARTICLE_MAX_IMAGES) break;
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
 // ---------- Openverse (fotos CC de Flickr y otros) ----------
+
+// Bancos de stock dentro de Openverse (fotos genericas de escritorios,
+// laptops, gente posando): en un documental no van.
+const OPENVERSE_STOCK_SOURCES = new Set(["stocksnap", "rawpixel", "nappy", "wordpress", "woc_tech", "justtakeitfree", "svgsilh"]);
+const STOCK_HOSTS = /(^|\.)(unsplash|pexels|pixabay|stocksnap|rawpixel|nappy|burst\.shopify|freepik|shutterstock|istockphoto|gettyimages|depositphotos|dreamstime|123rf|canva|picjumbo|kaboompics|freerangestock|negativespace|gratisography|lifeofpix|startupstockphotos)\./i;
+
+export function isStockResult(r: { source?: string; provider?: string; url?: string; foreign_landing_url?: string }): boolean {
+  if (OPENVERSE_STOCK_SOURCES.has((r.source ?? "").toLowerCase()) || OPENVERSE_STOCK_SOURCES.has((r.provider ?? "").toLowerCase())) return true;
+  return [r.url, r.foreign_landing_url].some((u) => {
+    try {
+      return !!u && STOCK_HOSTS.test(`${new URL(u).hostname}.`);
+    } catch {
+      return false;
+    }
+  });
+}
 
 interface OpenverseResult {
   id: string;
@@ -254,6 +344,8 @@ interface OpenverseResult {
   foreign_landing_url: string;
   width?: number;
   height?: number;
+  source?: string;
+  provider?: string;
 }
 
 export async function searchOpenverseImages(query: string): Promise<VisualCandidate[]> {
@@ -263,6 +355,7 @@ export async function searchOpenverseImages(query: string): Promise<VisualCandid
     .flatMap((r): VisualCandidate[] => {
       const license = commercialLicense(r.license);
       if (!license) return [];
+      if (isStockResult(r)) return [];
       if ((r.width ?? 0) < MIN_IMAGE_WIDTH || (r.width && r.height && r.width / r.height > MAX_ASPECT)) return [];
       return [
         {
@@ -387,37 +480,41 @@ async function searchArchiveOnce(terms: string, query: string, year: number | un
 
 // ---------- Cadena de fuentes por clase ----------
 
-export type SourceName = "wikidata" | "commons" | "openverse" | "archive" | "youtube" | "stock" | "ai_image";
+export type SourceName = "wikidata" | "commons" | "wikipedia" | "openverse" | "archive" | "youtube" | "ai_image";
 
 export interface ShotSearch {
   clase: ShotClass;
   query: string;
   entidad?: string;
   anio?: number;
+  // Articulo de Wikipedia del tramo (montajista): sus imagenes son una fuente.
+  articulo?: string;
 }
 
-// Orden de fuentes para cada clase, SIN stock: el stock (Pexels) es el
-// ultimo recurso y solo entra al final del rescate (rescueGaps), con juez.
-// youtube (solo con DOCUMENTAL_YOUTUBE=on, ver youtubeSource.ts): como en
-// MaV, es la fuente del metraje real y del lugar filmado.
+// Orden de fuentes para cada clase. SIN stock (Pexels, Unsplash y bancos
+// parecidos): en el documental no se usa en ningun paso (pedido del cliente,
+// 25/11/2026). youtube (solo con DOCUMENTAL_YOUTUBE=on, ver youtubeSource.ts):
+// como en MaV, es la fuente del metraje real y del lugar filmado. wikipedia:
+// las imagenes del articulo del tramo, si el montajista dio uno.
 export function sourceChain(search: ShotSearch, archiveFirst: boolean, youtube = false): SourceName[] {
   const historic = search.anio !== undefined && search.anio < 1990;
   const yt: SourceName[] = youtube ? ["youtube"] : [];
+  const wp: SourceName[] = search.articulo ? ["wikipedia"] : [];
   switch (search.clase) {
     case "persona":
-      return ["wikidata", "commons", "openverse"];
+      return ["wikidata", "commons", ...wp, "openverse"];
     case "lugar":
-      return historic ? ["commons", "archive", ...yt, "openverse"] : [...yt, "commons", "openverse"];
+      return historic ? ["commons", "archive", ...yt, ...wp, "openverse"] : [...yt, "commons", ...wp, "openverse"];
     case "cosa":
-      return search.entidad ? ["wikidata", "commons", ...yt, "openverse"] : ["commons", ...yt, "openverse"];
+      return search.entidad ? ["wikidata", "commons", ...yt, ...wp, "openverse"] : ["commons", ...yt, ...wp, "openverse"];
     case "metraje":
-      return archiveFirst || historic ? ["archive", ...yt, "commons"] : [...yt, "archive", "commons"];
+      return archiveFirst || historic ? ["archive", ...yt, "commons", ...wp] : [...yt, "archive", "commons", ...wp];
     // Mapa: no se busca nada (como MaV). Lleva el mapa animado (map_marker).
     case "mapa":
       return [];
     case "grafico":
     case "ambiente":
     default:
-      return historic ? ["archive", "openverse", "commons"] : ["openverse", "commons", ...yt];
+      return historic ? ["archive", "openverse", "commons", ...wp] : ["openverse", "commons", ...yt, ...wp];
   }
 }

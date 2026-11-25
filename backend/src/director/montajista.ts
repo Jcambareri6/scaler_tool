@@ -70,6 +70,13 @@ export interface PlannedShot {
   // Busqueda para YouTube en el idioma del LUGAR de la historia (un tema de
   // Mexico tiene mucho mas metraje en castellano: "bajada La Rumorosa").
   queryLocal?: string;
+  // De que habla ESE tramo del guion (las 4-5 frases de alrededor), en pocas
+  // palabras ("Mesosaurus", "formacion del Rio de la Plata"). Lo usa el rescate
+  // para buscar de nuevo y para el juez (en vez del tema general del video).
+  temaBloque?: string;
+  // Titulo del articulo de Wikipedia (es o en) que mejor ilustra ese tramo: el
+  // rescate saca de ahi ilustraciones, diagramas, fosiles, retratos...
+  articulo?: string;
 }
 
 export interface ShotData {
@@ -154,6 +161,8 @@ ${style.graphics.favor.includes("line_chart") ? DATA_GUIDE : ""}
 - anio: SOLO si la imagen TIENE que ser de esa epoca (una persona de 1915, un edificio recien construido en 1923, un hecho historico). Si la frase habla de un nombre, un origen, un paisaje o es una transicion ("por eso los primeros viajeros bautizaron este tramo como..."), muestra el lugar o la cosa de la que se habla y NO pongas anio: unas rocas o una sierra se ven igual hoy, y con anio el juez rechaza las tomas actuales que si sirven.
 - clase mapa: SOLO si la frase nombra lugares, una ruta, una distancia o una frontera ("conecta Tecate con Mexicali"). Si la frase habla de para que servia algo, de personas o de hechos ("pensado para albergar tropas"), no es mapa: es la cosa, el lugar o la persona.
 - obligatorio: las cosas concretas que nombra la frase y TIENEN que verse (en persona, la persona; en cosa, la cosa; en lugar, el lugar). Vacio en ambiente o si la frase no nombra nada. El juez rechaza la imagen que no lo muestra.
+- tema_bloque (en TODOS los planos): de que habla ese tramo del guion, mirando las 4-5 frases de alrededor, en 1-5 palabras ("Mesosaurus", "formacion del Rio de la Plata", "deriva continental"). Es el tema del TRAMO, no el del video entero.
+- articulo (en TODOS los planos): el titulo exacto del articulo de Wikipedia, en castellano o en ingles, que mejor ilustra ese tramo ("Mesosaurus", "Río de la Plata", "Alfred Wegener"). Tiene que existir tal cual.
 
 Entrega UNA sola vez con submit_shot_plan. Los planos van en orden, sin huecos, y cubren de la primera a la ultima palabra del tramo. desde/hasta son numeros de palabra.`;
 }
@@ -202,6 +211,8 @@ const PLAN_TOOL: Anthropic.Tool = {
             respaldo_en: { type: "array", items: { type: "string" }, description: "1-2 busquedas de respaldo en ingles, otro angulo filmable de la misma frase" },
             query_local: { type: "string", description: "La misma busqueda en el idioma del LUGAR de la historia, para YouTube (castellano si pasa en Mexico o Argentina). Vacio si es el ingles" },
             entidad: { type: "string", description: "Nombre propio exacto (persona/cosa/lugar) como en Wikipedia" },
+            tema_bloque: { type: "string", description: "De que habla este tramo del guion (las 4-5 frases de alrededor), en 1-5 palabras: \"Mesosaurus\", \"formacion del Rio de la Plata\"" },
+            articulo: { type: "string", description: "Titulo exacto del articulo de Wikipedia (es o en) que mejor ilustra este tramo" },
             obligatorio: {
               type: "array",
               items: { type: "string" },
@@ -323,6 +334,8 @@ export function parsePlan(raw: Record<string, unknown> | undefined, phrases: Phr
       ...queriesOf(str(item.query_en) || str(item.sujeto), item.respaldo_en),
       ...(str(item.query_local) && !ABSTRACT_QUERY.test(str(item.query_local)) ? { queryLocal: str(item.query_local) } : {}),
       ...(str(item.entidad) ? { entidad: str(item.entidad) } : {}),
+      ...(str(item.tema_bloque) ? { temaBloque: str(item.tema_bloque).slice(0, 80) } : {}),
+      ...(str(item.articulo) ? { articulo: str(item.articulo).slice(0, 120) } : {}),
       ...(Array.isArray(item.obligatorio) && item.obligatorio.some((o) => str(o))
         ? { obligatorio: (item.obligatorio as unknown[]).map(str).filter(Boolean).slice(0, 5) }
         : {}),
