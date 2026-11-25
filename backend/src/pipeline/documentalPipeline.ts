@@ -36,7 +36,7 @@ import {
 } from "../lib/documentalSources.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
 import { downloadYouTubeSegment, prewarmYouTubeSearches, searchYouTubeVideos, subtitleKeywords, subtitleMoments, uploadYouTubeSegment, youtubeEnabled } from "../lib/youtubeSource.js";
-import { clasificar, frenoYoutube } from "../lib/youtubeGuard.js";
+import { clasificar, esperaSlots, frenoYoutube, type EsperaSlots } from "../lib/youtubeGuard.js";
 import { cachedShot, forgetShot, shotCacheKey, storeShot } from "../lib/documentalCache.js";
 import { buildLibrary, libraryCandidates, type LibraryVideo } from "../lib/documentalLibrary.js";
 import type { TranscribedWord } from "../tools/transcribeAudio.tool.js";
@@ -185,6 +185,9 @@ export interface DocumentalContext {
   // al rescate; pasado el del rescate, directo al rotulo.
   searchDeadline?: number;
   rescueDeadline?: number;
+  // Medicion (solo mide): segundos esperando un lugar de bajada de YouTube
+  // (semaforos de yt-dlp y Apify) vs. bajando, en todo el video y por plano.
+  bajadas?: { esperaMs: number; bajandoMs: number; porPlano: Map<string, { esperaMs: number; bajandoMs: number; n: number }> };
   // Momentos buenos de cada video de YouTube (cuadros que el juez aprobo en
   // la hoja) y los ya usados: "otro momento" sale de aca, no a ciegas.
   goodMoments?: Map<string, { source?: VisualCandidate; times: number[]; used: number[] }>;
@@ -639,6 +642,27 @@ function judgeShotOf(row: ShotRow, context: JudgeContext | undefined, rescue?: {
   };
 }
 
+const seg = (ms: number) => Math.round(ms / 1000);
+
+// Medicion de una bajada de YouTube (solo mide): "bajo" incluye bajar, cortar
+// y limpiar el tramo; "espero lugar" es lo que espero en los semaforos.
+function noteDownload(ctx: DocumentalContext, row: ShotRow, where: string, medida: EsperaSlots, totalMs: number, log?: string[]): void {
+  const bajandoMs = Math.max(0, totalMs - medida.ms);
+  const acc = (ctx.bajadas ??= { esperaMs: 0, bajandoMs: 0, porPlano: new Map() });
+  acc.esperaMs += medida.ms;
+  acc.bajandoMs += bajandoMs;
+  const p = acc.porPlano.get(row.id) ?? { esperaMs: 0, bajandoMs: 0, n: 0 };
+  p.esperaMs += medida.ms;
+  p.bajandoMs += bajandoMs;
+  p.n += 1;
+  acc.porPlano.set(row.id, p);
+  const detalle = Object.entries(medida.por)
+    .filter(([, ms]) => ms >= 500)
+    .map(([k, ms]) => `${k} ${seg(ms)} s`)
+    .join(", ");
+  log?.push(`${where}: bajada esperó lugar ${seg(medida.ms)} s${detalle ? ` (${detalle})` : ""}, bajó ${seg(bajandoMs)} s`);
+}
+
 // Baja el tramo de YouTube elegido por miniatura, lo revisa con 3 cuadros
 // reales (el juez otra vez, con un solo candidato) y lo sube a R2. Devuelve
 // el candidato con la URL propia, o null si el tramo no sirve.
@@ -679,16 +703,24 @@ async function materializeYouTube(
     let local: string | null = null;
     let lastError: Error | null = null;
     let usedAt: number | undefined;
-    for (const at of instants) {
-      try {
-        local = await downloadYouTubeSegment(pick, wanted, judge.workDir, opts.startFraction, at);
-        usedAt = at;
-        break;
-      } catch (err) {
-        lastError = err as Error;
-        // Bloqueo o red: no insistir con otro instante del mismo video.
-        if (clasificar(err) !== "roto" || frenoYoutube.abierto()) break;
+    // Medicion: cuanto espero por un lugar de bajada y cuanto bajo (va al
+    // recorrido del plano y a los totales del video).
+    const medida: EsperaSlots = { ms: 0, por: {} };
+    const bajadaDesde = Date.now();
+    try {
+      for (const at of instants) {
+        try {
+          local = await esperaSlots.run(medida, () => downloadYouTubeSegment(pick, wanted, judge.workDir, opts.startFraction, at));
+          usedAt = at;
+          break;
+        } catch (err) {
+          lastError = err as Error;
+          // Bloqueo o red: no insistir con otro instante del mismo video.
+          if (clasificar(err) !== "roto" || frenoYoutube.abierto()) break;
+        }
       }
+    } finally {
+      noteDownload(ctx, row, where, medida, Date.now() - bajadaDesde, opts.log);
     }
     if (!local) throw lastError ?? new Error("sin tramo");
     const clip: VisualCandidate = {
@@ -1473,7 +1505,8 @@ async function rescueGaps(
   const outcomeOf = new Map(outcomes.map((o) => [o.sceneId, o]));
   const gaps = byOrder.filter((r) => outcomeOf.get(r.id)?.qa !== "ok");
   if (gaps.length === 0) return;
-  ctx.rescueDeadline = Date.now() + Math.max(RESCUE_BUDGET_MS, gaps.length * RESCUE_MS_PER_SHOT);
+  const rescueBudgetMs = Math.max(RESCUE_BUDGET_MS, gaps.length * RESCUE_MS_PER_SHOT);
+  ctx.rescueDeadline = Date.now() + rescueBudgetMs;
   const key = (c: VisualCandidate) => `${c.provider}:${c.external_id}`;
   const tema = ctx.videoTopic ?? "";
 
@@ -1545,6 +1578,24 @@ async function rescueGaps(
   let texture: string | null = null;
   const counts = { youtube_momento: 0, commons_tema: 0, youtube_plano: 0, youtube_tema: 0, stock_ultimo: 0, casi_buena: 0, rotulo: 0 };
 
+  // MEDICION (solo mide, no cambia topes): todos los planos entran a la fila
+  // juntos (queuedAt); cada uno arranca cuando le toca un lugar de los
+  // RESCUE_CONCURRENCY y termina cuando se guarda su imagen. La linea va
+  // PRIMERA en el recorrido (persistShotVisual guarda solo los primeros 20).
+  const queuedAt = Date.now();
+  const bajadasAntes = { esperaMs: ctx.bajadas?.esperaMs ?? 0, bajandoMs: ctx.bajadas?.bajandoMs ?? 0 };
+  const timing = new Map<string, { started: number; ms?: number }>();
+  let cutByTime = 0;
+  const stamp = (row: ShotRow, via: string) => {
+    const t = timing.get(row.id);
+    // Solo la etapa principal del rescate (la ultima pasada no la pisa).
+    if (!t || t.ms !== undefined) return;
+    t.ms = Date.now() - t.started;
+    const b = ctx.bajadas?.porPlano.get(row.id);
+    const line = `rescate: esperó ${seg(t.started - queuedAt)} s, tardó ${seg(t.ms)} s, vía ${via}${b ? ` · bajadas: ${b.n}, esperó lugar ${seg(b.esperaMs)} s, bajó ${seg(b.bajandoMs)} s` : ""}`;
+    trailOf(row).unshift(line);
+  };
+
   // Devuelve false si la imagen ya esta en el video (dHash): el rescate sigue
   // con la proxima opcion.
   // `reserved`: el uso del video ya se reservo antes del await (tope por video
@@ -1561,6 +1612,7 @@ async function rescueGaps(
     const base = `${pick.provider}:${pick.external_id.split("@")[0]}`;
     originOf.set(row.id, base);
     if (!reserved) usesOf.set(base, (usesOf.get(base) ?? 0) + 1);
+    stamp(row, via);
     await persistShotVisual(ctx, row, pick, { code: "ok", reason: `rescate: ${via}`, rejected: rejectionsOf(row), source: via, rescate: trailOf(row), juicios: outcomeOf.get(row.id)?.juicios ?? [] });
     const o = outcomeOf.get(row.id)!;
     o.source = "fallback";
@@ -1570,11 +1622,15 @@ async function rescueGaps(
   };
 
   await mapWithConcurrency(gaps, RESCUE_CONCURRENCY, async (row) => {
+    timing.set(row.id, { started: Date.now() });
     const i = byOrder.indexOf(row);
     const context = contexts.get(row.id);
     // Presupuesto del rescate (MaV): pasado el tope, directo al rotulo.
     const late = !!ctx.rescueDeadline && Date.now() > ctx.rescueDeadline;
-    if (late) trailOf(row).push("rescate: se paso el presupuesto de tiempo");
+    if (late) {
+      cutByTime += 1;
+      trailOf(row).push("rescate: se paso el presupuesto de tiempo");
+    }
     if (judge && !late && row.shot.clase !== "mapa") {
       // 1. Otro momento de un YouTube ya usado o aprobado (rota entre los
       // videos, el menos usado primero). CON tope de usos por video (ytRoom) y
@@ -1731,6 +1787,7 @@ async function rescueGaps(
     // 4. Rotulo sobre la textura del estilo (el mapa, si es un plano de mapa,
     // ya va encima como map_marker). Nunca negro ni un plano repetido.
     texture ??= await textureUrl(style, ctx, judge?.workDir ?? (await makeWorkDir("skaler-textura-")));
+    stamp(row, row.shot.clase === "mapa" ? "mapa" : "rotulo");
     await persistShotVisual(
       ctx,
       row,
@@ -1881,6 +1938,23 @@ async function rescueGaps(
   const textured = byOrder.filter((r) => outcomeOf.get(r.id)?.provider === "textura" && r.shot.clase !== "mapa");
   const withText = await addKeyPhraseOverlays(textured, ctx, judge, toolCtx);
   console.log(`[documental] ${ctx.projectId}: rescate de ${gaps.length} planos -> ${JSON.stringify({ ...counts, ultima_pasada: recovered, mapa_satelital: satellite, rotulos_con_texto: withText })}`);
+  // MEDICION del rescate (solo mide): por que los planos se quedan sin tiempo.
+  const perShot = [...timing.values()].flatMap((t) => (t.ms !== undefined ? [t.ms] : []));
+  const avgMin = perShot.length ? perShot.reduce((a, b) => a + b, 0) / perShot.length / 60_000 : 0;
+  const maxMin = perShot.length ? Math.max(...perShot) / 60_000 : 0;
+  console.log(
+    `[documental] ${ctx.projectId}: MEDICION rescate -> ${JSON.stringify({
+      planos_entraron: gaps.length,
+      concurrencia: RESCUE_CONCURRENCY,
+      tope_min: Math.round((rescueBudgetMs / 60_000) * 10) / 10,
+      cortados_por_tiempo: cutByTime,
+      min_por_plano_promedio: Math.round(avgMin * 100) / 100,
+      min_por_plano_maximo: Math.round(maxMin * 100) / 100,
+      duracion_total_min: Math.round(((Date.now() - queuedAt) / 60_000) * 10) / 10,
+      seg_esperando_bajada: seg((ctx.bajadas?.esperaMs ?? 0) - bajadasAntes.esperaMs),
+      seg_bajando: seg((ctx.bajadas?.bajandoMs ?? 0) - bajadasAntes.bajandoMs),
+    })}`
+  );
 }
 
 // RELLENO SEGUIDO (pedido del cliente, 21/11/2026): dos planos seguidos de

@@ -12,6 +12,7 @@
 // - semaforo: como mucho YT_PARALELO procesos de yt-dlp a la vez en el
 //   proceso (antes podian ser 12 a la vez por job, mas 192 ffmpeg de hojas).
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { envInt } from "./env.js";
 
 export function limpiar(text: string): string {
@@ -72,16 +73,35 @@ class Freno {
 
 export const frenoYoutube = new Freno();
 
+// Medicion de la espera por un lugar (solo mide, no cambia nada): quien
+// quiera saber cuanto espero una bajada la corre adentro de
+// esperaSlots.run(medida, ...) y cada semaforo suma ahi lo que espero.
+export interface EsperaSlots {
+  ms: number;
+  por: Record<string, number>;
+}
+export const esperaSlots = new AsyncLocalStorage<EsperaSlots>();
+
 // Semaforo simple (FIFO).
 export class Semaforo {
   private libres: number;
   private cola: (() => void)[] = [];
-  constructor(n: number) {
+  constructor(
+    n: number,
+    private readonly nombre = "slots"
+  ) {
     this.libres = n;
   }
   async con<T>(fn: () => Promise<T>): Promise<T> {
+    const pidio = Date.now();
     if (this.libres > 0) this.libres -= 1;
     else await new Promise<void>((resolve) => this.cola.push(resolve));
+    const medida = esperaSlots.getStore();
+    if (medida) {
+      const ms = Date.now() - pidio;
+      medida.ms += ms;
+      medida.por[this.nombre] = (medida.por[this.nombre] ?? 0) + ms;
+    }
     try {
       return await fn();
     } finally {
@@ -92,6 +112,6 @@ export class Semaforo {
   }
 }
 
-export const ytdlpSlots = new Semaforo(envInt("YT_PARALELO", 4));
+export const ytdlpSlots = new Semaforo(envInt("YT_PARALELO", 4), "yt-dlp");
 // ffmpeg leyendo cuadros de la red (hojas de cuadros): de a pocos.
-export const sheetSlots = new Semaforo(envInt("YT_HOJA_FFMPEG", 6));
+export const sheetSlots = new Semaforo(envInt("YT_HOJA_FFMPEG", 6), "hoja");

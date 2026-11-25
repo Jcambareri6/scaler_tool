@@ -28,7 +28,7 @@ const CACHE_DIR = path.join(os.tmpdir(), "skaler-apify-yt");
 // Tope del cache en disco: un video de 720p pesa 20-600 MB.
 const CACHE_MAX_BYTES = envInt("APIFY_YT_CACHE_MB", 6000) * 1024 * 1024;
 // Plan gratis de Apify: 5 corridas a la vez como maximo.
-const apifySlots = new Semaforo(envInt("APIFY_YT_PARALELO", 4));
+const apifySlots = new Semaforo(envInt("APIFY_YT_PARALELO", 4), "apify");
 // Videos de mas de 10 min en 480p (antes 30): en el piloto bajaban 340-600 MB
 // en 720p para usar 6 segundos de plano.
 const LONG_VIDEO_SECONDS = 10 * 60;
