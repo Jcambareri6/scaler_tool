@@ -65,11 +65,13 @@ import type { ContentPolicy, OverlaySpec, OverlayType } from "../types/shared/ty
 // limite real son los rate limits de las fuentes, no la CPU.
 const SHOT_CONCURRENCY = envInt("DOCUMENTAL_SHOT_CONCURRENCY", 16);
 const RESCUE_CONCURRENCY = envInt("DOCUMENTAL_RESCUE_CONCURRENCY", 10);
-// Presupuestos: busqueda max(14 min, 35 s por plano); rescate max(6 min, 12 s por plano rescatado).
+// Presupuestos: busqueda max(14 min, 35 s por plano); rescate max(6 min, 25 s por plano rescatado).
 const SEARCH_BUDGET_MS = envInt("DOCUMENTAL_SEARCH_BUDGET_MS", 14 * 60_000);
 const SEARCH_MS_PER_SHOT = 35_000;
 const RESCUE_BUDGET_MS = envInt("DOCUMENTAL_RESCUE_BUDGET_MS", 6 * 60_000);
-const RESCUE_MS_PER_SHOT = 12_000;
+// 25 s por plano (antes 12): la medicion del 25/11/2026 (Rio de la Plata, 54
+// planos al rescate) dio ~2 min por plano con 10 a la vez, ~12 s de reloj.
+const RESCUE_MS_PER_SHOT = 25_000;
 // Dos momentos del mismo video, como minimo esta separacion.
 const MOMENT_GAP_SECONDS = 20;
 
@@ -187,7 +189,13 @@ export interface DocumentalContext {
   rescueDeadline?: number;
   // Medicion (solo mide): segundos esperando un lugar de bajada de YouTube
   // (semaforos de yt-dlp y Apify) vs. bajando, en todo el video y por plano.
-  bajadas?: { esperaMs: number; bajandoMs: number; porPlano: Map<string, { esperaMs: number; bajandoMs: number; n: number }> };
+  bajadas?: {
+    esperaMs: number;
+    bajandoMs: number;
+    // Tramos por via (pedazos, entero, archivo, yt-dlp): cantidad y ms.
+    porVia: Record<string, { n: number; ms: number }>;
+    porPlano: Map<string, { esperaMs: number; bajandoMs: number; n: number; vias: Record<string, number> }>;
+  };
   // Momentos buenos de cada video de YouTube (cuadros que el juez aprobo en
   // la hoja) y los ya usados: "otro momento" sale de aca, no a ciegas.
   goodMoments?: Map<string, { source?: VisualCandidate; times: number[]; used: number[] }>;
@@ -648,19 +656,26 @@ const seg = (ms: number) => Math.round(ms / 1000);
 // y limpiar el tramo; "espero lugar" es lo que espero en los semaforos.
 function noteDownload(ctx: DocumentalContext, row: ShotRow, where: string, medida: EsperaSlots, totalMs: number, log?: string[]): void {
   const bajandoMs = Math.max(0, totalMs - medida.ms);
-  const acc = (ctx.bajadas ??= { esperaMs: 0, bajandoMs: 0, porPlano: new Map() });
+  const acc = (ctx.bajadas ??= { esperaMs: 0, bajandoMs: 0, porVia: {}, porPlano: new Map() });
   acc.esperaMs += medida.ms;
   acc.bajandoMs += bajandoMs;
-  const p = acc.porPlano.get(row.id) ?? { esperaMs: 0, bajandoMs: 0, n: 0 };
+  const p = acc.porPlano.get(row.id) ?? { esperaMs: 0, bajandoMs: 0, n: 0, vias: {} };
   p.esperaMs += medida.ms;
   p.bajandoMs += bajandoMs;
   p.n += 1;
+  for (const t of medida.tramos ?? []) {
+    const v = (acc.porVia[t.via] ??= { n: 0, ms: 0 });
+    v.n += 1;
+    v.ms += t.ms;
+    p.vias[t.via] = (p.vias[t.via] ?? 0) + 1;
+  }
   acc.porPlano.set(row.id, p);
   const detalle = Object.entries(medida.por)
     .filter(([, ms]) => ms >= 500)
     .map(([k, ms]) => `${k} ${seg(ms)} s`)
     .join(", ");
-  log?.push(`${where}: bajada esperó lugar ${seg(medida.ms)} s${detalle ? ` (${detalle})` : ""}, bajó ${seg(bajandoMs)} s`);
+  const tramos = (medida.tramos ?? []).map((t) => `${t.via} ${seg(t.ms)} s`).join(", ");
+  log?.push(`${where}: bajada esperó lugar ${seg(medida.ms)} s${detalle ? ` (${detalle})` : ""}, bajó ${seg(bajandoMs)} s${tramos ? `, tramo por ${tramos}` : ""}`);
 }
 
 // Baja el tramo de YouTube elegido por miniatura, lo revisa con 3 cuadros
@@ -1583,7 +1598,11 @@ async function rescueGaps(
   // RESCUE_CONCURRENCY y termina cuando se guarda su imagen. La linea va
   // PRIMERA en el recorrido (persistShotVisual guarda solo los primeros 20).
   const queuedAt = Date.now();
-  const bajadasAntes = { esperaMs: ctx.bajadas?.esperaMs ?? 0, bajandoMs: ctx.bajadas?.bajandoMs ?? 0 };
+  const bajadasAntes = {
+    esperaMs: ctx.bajadas?.esperaMs ?? 0,
+    bajandoMs: ctx.bajadas?.bajandoMs ?? 0,
+    porVia: JSON.parse(JSON.stringify(ctx.bajadas?.porVia ?? {})) as Record<string, { n: number; ms: number }>,
+  };
   const timing = new Map<string, { started: number; ms?: number }>();
   let cutByTime = 0;
   const stamp = (row: ShotRow, via: string) => {
@@ -1592,7 +1611,8 @@ async function rescueGaps(
     if (!t || t.ms !== undefined) return;
     t.ms = Date.now() - t.started;
     const b = ctx.bajadas?.porPlano.get(row.id);
-    const line = `rescate: esperó ${seg(t.started - queuedAt)} s, tardó ${seg(t.ms)} s, vía ${via}${b ? ` · bajadas: ${b.n}, esperó lugar ${seg(b.esperaMs)} s, bajó ${seg(b.bajandoMs)} s` : ""}`;
+    const vias = b ? Object.entries(b.vias).map(([k, n]) => `${k}×${n}`).join(" ") : "";
+    const line = `rescate: esperó ${seg(t.started - queuedAt)} s, tardó ${seg(t.ms)} s, vía ${via}${b ? ` · bajadas: ${b.n}, esperó lugar ${seg(b.esperaMs)} s, bajó ${seg(b.bajandoMs)} s${vias ? `, tramos ${vias}` : ""}` : ""}`;
     trailOf(row).unshift(line);
   };
 
@@ -1953,6 +1973,13 @@ async function rescueGaps(
       duracion_total_min: Math.round(((Date.now() - queuedAt) / 60_000) * 10) / 10,
       seg_esperando_bajada: seg((ctx.bajadas?.esperaMs ?? 0) - bajadasAntes.esperaMs),
       seg_bajando: seg((ctx.bajadas?.bajandoMs ?? 0) - bajadasAntes.bajandoMs),
+      // Tramos del rescate por via: cantidad y segundos (pedazos vs. entero).
+      tramos: Object.fromEntries(
+        Object.entries(ctx.bajadas?.porVia ?? {}).map(([k, v]) => {
+          const before = bajadasAntes.porVia[k] ?? { n: 0, ms: 0 };
+          return [k, { n: v.n - before.n, seg: seg(v.ms - before.ms) }];
+        })
+      ),
     })}`
   );
 }

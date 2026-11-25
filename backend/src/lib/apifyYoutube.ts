@@ -13,9 +13,10 @@ import { Semaforo, limpiar } from "./youtubeGuard.js";
 // 20 min). El actor coder2077/youtube-video-downloader de Apify resuelve el
 // bloqueo de su lado y cobra por video (1,69 USD cada 1.000, sin importar la
 // duracion; los fallos no se cobran). Devuelve un enlace al video ENTERO que
-// dura 5 minutos y se abre hasta 3 veces: se baja en el acto a un archivo
-// local, y la hoja de cuadros y los tramos salen de ese archivo (una sola
-// descarga por video). Prueba del 20/11/2026 desde el worker: 24/25 videos
+// dura 5 minutos y se abre hasta 3 veces. La hoja de cuadros lo baja entero a
+// un archivo local (16 momentos = demasiadas aperturas del enlace); un tramo
+// suelto se lee desde el enlace hasta el final del tramo (apifyLink) y, si
+// eso falla, del video entero. Prueba del 20/11/2026 desde el worker: 24/25 videos
 // reales de los pilotos, 2-39 s cada uno.
 //
 // Token y config en la tabla providers (slug "apify", type
@@ -91,8 +92,59 @@ export function apifyVideoFile(url: string, durationSeconds?: number): Promise<s
   return job;
 }
 
-async function fetchVideo(id: string, format: string, conf: ApifyConfig): Promise<string> {
-  await mkdir(CACHE_DIR, { recursive: true });
+// Video ya bajado entero (o bajandose) por la hoja de cuadros: el tramo sale
+// de ese archivo, sin pedir nada mas a Apify.
+export function apifyFileIfCached(url: string): Promise<string> | null {
+  const id = videoId(url);
+  const cached = id ? inFlight.get(id) : undefined;
+  if (!cached) return null;
+  lastUse.set(id!, Date.now());
+  return cached;
+}
+
+// SOLO EL ENLACE, para leer un tramo sin bajar el video entero (en un video
+// largo la descarga entera tardaba hasta 20 min, medicion del 25/11/2026).
+// OJO: el enlace (fastsaver) NO acepta pedidos por rango (responde 200 sin
+// accept-ranges ni tamano y un Range da 4xx): ffmpeg lo lee DE CORRIDO desde
+// el principio y corta apenas termina el tramo (no baja lo que viene
+// despues). Prueba: tramo del minuto 15 de un video de 25 min en 196 s
+// contra 1238 s bajando el video entero.
+// El enlace vence a los 5 min y se abre hasta 3 veces: se reusa para otros
+// momentos del mismo video durante LINK_TTL_MS y como mucho LINK_MAX_USES
+// veces; despues, uno nuevo. Mismo formato que la descarga entera (480p en
+// videos largos): se lee todo lo anterior al tramo.
+const LINK_TTL_MS = 4 * 60_000;
+const LINK_MAX_USES = 2;
+const links = new Map<string, { url: Promise<string>; at: number; uses: number }>();
+
+export async function apifyLink(url: string, opts: { fresh?: boolean; durationSeconds?: number } = {}): Promise<{ link: string; reused: boolean }> {
+  const id = videoId(url);
+  if (!id) throw new Error("apify: no es un enlace de video de YouTube");
+  const conf = await apifyConfig();
+  if (!conf) throw new Error("apify: sin proveedor activo");
+  const format = opts.durationSeconds && opts.durationSeconds > LONG_VIDEO_SECONDS ? "480p" : conf.format;
+  const key = `${id}-${format}`;
+  const entry = links.get(key);
+  if (!opts.fresh && entry && Date.now() - entry.at < LINK_TTL_MS && entry.uses < LINK_MAX_USES) {
+    entry.uses += 1;
+    return { link: await entry.url, reused: true };
+  }
+  const fresh = { url: apifySlots.con(() => requestLink(id, format, conf)), at: Date.now(), uses: 1 };
+  links.set(key, fresh);
+  fresh.url.catch(() => {
+    if (links.get(key) === fresh) links.delete(key);
+  });
+  return { link: await fresh.url, reused: false };
+}
+
+// El enlace fallo al leerlo (vencido, ya abierto 3 veces): no se reusa.
+export function forgetApifyLink(url: string): void {
+  const id = videoId(url);
+  if (!id) return;
+  for (const key of [...links.keys()]) if (key.startsWith(`${id}-`)) links.delete(key);
+}
+
+async function requestLink(id: string, format: string, conf: ApifyConfig): Promise<string> {
   const res = await fetch(`https://api.apify.com/v2/acts/${conf.actor}/run-sync-get-dataset-items?timeout=120`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${conf.token}` },
@@ -103,6 +155,12 @@ async function fetchVideo(id: string, format: string, conf: ApifyConfig): Promis
   const items = (await res.json()) as { ok?: boolean; error?: string; download_url?: string }[];
   const item = items[0];
   if (!item?.download_url) throw new Error(`apify: sin enlace (${item?.error ?? "sin resultado"})`);
+  return item.download_url;
+}
+
+async function fetchVideo(id: string, format: string, conf: ApifyConfig): Promise<string> {
+  await mkdir(CACHE_DIR, { recursive: true });
+  const item = { download_url: await requestLink(id, format, conf) };
 
   const file = path.join(CACHE_DIR, `${id}-${format}.mp4`);
   // Vigia de la descarga: aborta si pasan STALL_MS sin datos o MAX_DOWNLOAD_MS en total.

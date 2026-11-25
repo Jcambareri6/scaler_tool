@@ -9,9 +9,9 @@ import { uploadPublicFile } from "./storage.js";
 import type { VisualCandidate } from "./documentalSources.js";
 import { ffmpegForNetwork } from "./ffmpegBin.js";
 import { fetchWithTimeout } from "./http.js";
-import { frenoYoutube, limpiar, sheetSlots, ytdlpSlots } from "./youtubeGuard.js";
+import { anotarTramo, frenoYoutube, limpiar, sheetSlots, ytdlpSlots } from "./youtubeGuard.js";
 import { cachedSearch, storeSearch } from "./documentalCache.js";
-import { apifyEnabled, apifyVideoFile } from "./apifyYoutube.js";
+import { apifyEnabled, apifyFileIfCached, apifyLink, apifyVideoFile, forgetApifyLink } from "./apifyYoutube.js";
 
 // METRAJE DE YOUTUBE (como MaV, youtubePlano.js): busqueda con yt-dlp, el
 // juez elige por miniatura + titulo, y recien ahi se baja SOLO un tramo del
@@ -243,6 +243,9 @@ export async function youtubeQuickSheet(candidate: VisualCandidate, workDir: str
 
 // Fuente de la hoja: el video entero bajado por Apify (lib/apifyYoutube.ts) o,
 // si no esta o falla, la URL directa de 360p por yt-dlp (proxy o directo).
+// La hoja NO lee por pedazos del enlace de Apify: son 16 momentos (16
+// aperturas) y el enlace se abre hasta 3 veces; ademas el archivo entero
+// despues sirve para los tramos de ese video sin pedir nada mas.
 async function sheetSource(candidate: VisualCandidate, total: number): Promise<{ url: string; close: () => Promise<void> }> {
   if (await apifyEnabled()) {
     try {
@@ -463,18 +466,42 @@ export async function downloadYouTubeSegment(candidate: VisualCandidate, seconds
   const start = Math.max(intro, Math.min(wanted, total - length - 2));
   const raw = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}-raw.mp4`);
   const out = path.join(workDir, `yt-${candidate.external_id}-${Math.round(start)}.mp4`);
-  // Apify primero (el video entero ya bajado, el mismo de la hoja); si falla,
-  // el camino de siempre. Un fallo de Apify no toca el freno de YouTube.
+  // Apify primero; un fallo de Apify no toca el freno de YouTube. Orden:
+  // 1) el video ya bajado entero por la hoja de cuadros (archivo local);
+  // 2) SOLO hasta el tramo, leido de corrido desde el enlace de Apify
+  //    (cutRemoteApify): nunca lo que viene despues del tramo;
+  // 3) si la lectura por pedazos falla, el video entero (camino de antes);
+  // 4) si Apify falla, yt-dlp (proxy o directo).
+  // Cada tramo anota por donde salio y cuanto tardo (medicion del rescate).
   let viaApify = false;
   if (await apifyEnabled()) {
+    const t0 = Date.now();
+    const cached = apifyFileIfCached(candidate.url);
     try {
-      await cutLocal(await apifyVideoFile(candidate.url, total), start, length, raw);
+      if (cached) {
+        await cutLocal(await cached, start, length, raw);
+        anotarTramo("archivo", Date.now() - t0);
+      } else {
+        try {
+          await cutRemoteApify(candidate.url, start, length, raw, total);
+          anotarTramo("pedazos", Date.now() - t0);
+        } catch (err) {
+          console.warn(`[youtube] tramo por pedazos de ${candidate.external_id} fallo: ${limpiar((err as Error).message).slice(0, 160)}; baja el video entero`);
+          const t1 = Date.now();
+          await cutLocal(await apifyVideoFile(candidate.url, total), start, length, raw);
+          anotarTramo("entero", Date.now() - t1);
+        }
+      }
       viaApify = true;
     } catch (err) {
       console.warn(`[youtube] apify fallo en el tramo de ${candidate.external_id}: ${(err as Error).message}; sigue por yt-dlp`);
     }
   }
-  if (!viaApify) await frenoYoutube.correr(() => downloadSection(candidate.url, start, length, raw));
+  if (!viaApify) {
+    const t0 = Date.now();
+    await frenoYoutube.correr(() => downloadSection(candidate.url, start, length, raw));
+    anotarTramo("yt-dlp", Date.now() - t0);
+  }
   await cleanSegment(raw, needed, out, candidate.logo_corner);
   await rm(raw, { force: true }).catch(() => undefined);
   return out;
@@ -486,6 +513,34 @@ async function cutLocal(file: string, start: number, length: number, out: string
   if (!ffmpegPath) throw new Error("ffmpeg no resolvio el binario");
   await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-ss", start.toFixed(2), "-i", file, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], 90_000);
   if ((await stat(out)).size < 50_000) throw new Error("el tramo cortado esta vacio");
+}
+
+// SOLO el tramo desde el enlace de Apify ("pedazos"): el enlace no acepta
+// pedidos por rango, asi que ffmpeg lo lee de corrido (-seekable 0, sin Range)
+// y corta apenas termina el tramo: baja lo anterior al tramo, nunca el resto
+// del video. Si el enlace reusado falla (vencido, ya abierto 3 veces), uno
+// nuevo una sola vez; si tambien falla, el que llama baja el video entero.
+async function cutRemoteApify(url: string, start: number, length: number, out: string, durationSeconds: number): Promise<void> {
+  if (!ffmpegPath) throw new Error("ffmpeg no resolvio el binario");
+  // Tope: 2 min + 0,6 s por segundo de video a recorrer, como mucho 15 min.
+  const timeoutMs = Math.min(15 * 60_000, 120_000 + start * 600);
+  const read = async (link: string) => {
+    await rm(out, { force: true }).catch(() => undefined);
+    // -rw_timeout: corta si el servidor no manda nada en 30 s (microsegundos).
+    await run(ffmpegPath, ["-y", "-hide_banner", "-loglevel", "error", "-seekable", "0", "-rw_timeout", "30000000", "-ss", start.toFixed(2), "-i", link, "-t", length.toFixed(2), "-an", "-c", "copy", "-movflags", "+faststart", out], timeoutMs);
+    if ((await stat(out)).size < 50_000) throw new Error("el tramo leido del enlace esta vacio");
+  };
+  const first = await apifyLink(url, { durationSeconds });
+  try {
+    await read(first.link);
+  } catch (err) {
+    forgetApifyLink(url);
+    if (!first.reused) throw err;
+    await read((await apifyLink(url, { fresh: true, durationSeconds })).link).catch((again) => {
+      forgetApifyLink(url);
+      throw again;
+    });
+  }
 }
 
 // Tramo limpio (MaV, youtubePlano.tramoLimpio): cortes de plano con

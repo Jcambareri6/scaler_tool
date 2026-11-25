@@ -79,8 +79,15 @@ export const frenoYoutube = new Freno();
 export interface EsperaSlots {
   ms: number;
   por: Record<string, number>;
+  // Como salio cada tramo (pedazos, entero, archivo, yt-dlp) y cuanto tardo.
+  tramos?: { via: string; ms: number }[];
 }
 export const esperaSlots = new AsyncLocalStorage<EsperaSlots>();
+
+export function anotarTramo(via: string, ms: number): void {
+  const medida = esperaSlots.getStore();
+  if (medida) (medida.tramos ??= []).push({ via, ms });
+}
 
 // Semaforo simple (FIFO).
 export class Semaforo {
