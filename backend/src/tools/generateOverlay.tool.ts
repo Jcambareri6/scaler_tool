@@ -175,7 +175,10 @@ export function titleFromScript(fullScript: string, text: string | undefined): b
 // Wegener, Keidel y du Toit). El apellido es la ultima palabra con sus
 // particulas ("du Toit", "van der Waals"); el nombre, 2 a 5 palabras con
 // mayuscula y sin cifras.
-const PERSON_TYPES: OverlayType[] = ["person_card", "profile_card", "dossier"];
+// lower_third: el montajista lo usa para el nombre de una persona (corrida del
+// 25/11/2026: "Alfred Wegener", "Juan Keidel" y "Alexander du Toit" vinieron
+// como lower_third y se descartaban).
+const PERSON_TYPES: OverlayType[] = ["person_card", "profile_card", "dossier", "lower_third"];
 const PARTICULAS = /^(de|del|da|das|do|dos|du|di|van|von|der|den|la|le|ibn|bin|al|y)$/i;
 export function surnameInScript(script: string, text: string | undefined): boolean {
   const ws = (text ?? "").trim().split(/\s+/).filter(Boolean);

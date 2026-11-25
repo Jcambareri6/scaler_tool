@@ -72,5 +72,10 @@ console.log("graficos OK");
   assert.equal((await run2({ type: "person_card", text: "Alfred Wegener", label: "meteorólogo", source: "script" })).overlay.text, "Alfred Wegener");
   assert.equal((await run2({ type: "dossier", text: "Alexander du Toit", source: "script" })).overlay.text, "Alexander du Toit");
   await assert.rejects(run2({ type: "person_card", text: "Charles Darwin", source: "script" }), /no aparece/);
+  // Como vinieron en la corrida: lower_third con el nombre completo.
+  for (const name of ["Juan Keidel", "Alfred Wegener", "Alexander du Toit"]) {
+    assert.equal((await run2({ type: "lower_third", text: name, source: "script" })).overlay.text, name);
+  }
+  await assert.rejects(run2({ type: "lower_third", text: "Charles Darwin", source: "script" }), /no aparece/);
   console.log("rotulos de persona OK");
 }
