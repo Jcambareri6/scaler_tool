@@ -1,0 +1,12 @@
+import "dotenv/config";
+import { writeFileSync } from "node:fs";
+import { supabase } from "../../src/lib/supabase.js";
+const P = process.argv[2]!, out = process.argv[3]!;
+const { data: proj } = await supabase.from("video_projects").select("id,title,video_style,documental_plan,created_at").eq("id", P).single();
+const { data: script } = await supabase.from("scripts").select("id").eq("video_project_id", P).single();
+const { data: scenes } = await supabase.from("scenes").select("id,order,content").eq("script_id", script!.id).order("order");
+const { data: assets } = await supabase.from("assets").select("scene_id,type,storage_key,metadata,created_at").eq("video_project_id", P).in("type", ["VIDEO", "IMAGE"]);
+const { data: tl } = await supabase.from("timelines").select("content").eq("video_project_id", P).single();
+writeFileSync(out, JSON.stringify({ proj, scenes, assets, timeline: tl?.content }, null, 0));
+console.log("escenas", scenes?.length, "assets", assets?.length);
+process.exit(0);

@@ -1,0 +1,11 @@
+import "dotenv/config";
+import { spawnSync } from "node:child_process";
+import { apifyLink } from "../../src/lib/apifyYoutube.js";
+import { ffmpegForNetwork } from "../../src/lib/ffmpegBin.js";
+const id = process.argv[2] ?? "cN5uEsM5Txc";
+const at = process.argv[3] ?? "916";
+const { link } = await apifyLink(`https://www.youtube.com/watch?v=${id}`, { fresh: true });
+const t = Date.now();
+const f = spawnSync(ffmpegForNetwork!, ["-y", "-hide_banner", "-loglevel", "error", "-seekable", "0", "-rw_timeout", "30000000", "-ss", at, "-i", link, "-t", "13.5", "-an", "-c", "copy", "out-pedazo.tmp.mp4"], { encoding: "utf8", timeout: 900_000 });
+console.log(`ffmpeg seekable=0 @${at}s: code ${f.status} en ${Math.round((Date.now() - t) / 1000)} s; stderr: ${(f.stderr ?? "").replace(/https?:\/\/\S+/g, "<url>").slice(-300)}`);
+process.exit(0);

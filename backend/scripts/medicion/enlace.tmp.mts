@@ -1,0 +1,18 @@
+import "dotenv/config";
+import { spawnSync } from "node:child_process";
+import { apifyLink } from "../../src/lib/apifyYoutube.js";
+import { ffmpegForNetwork } from "../../src/lib/ffmpegBin.js";
+const id = process.argv[2] ?? "cN5uEsM5Txc";
+let t = Date.now();
+const { link } = await apifyLink(`https://www.youtube.com/watch?v=${id}`);
+const u = new URL(link);
+console.log(`enlace en ${Math.round((Date.now() - t) / 1000)} s, host ${u.host}`);
+t = Date.now();
+const r = await fetch(link, { headers: { Range: "bytes=0-1023" }, signal: AbortSignal.timeout(60_000) }).catch((e) => e as Error);
+if (r instanceof Error) console.log("rango: error", r.message);
+else console.log(`rango: HTTP ${r.status} en ${Math.round((Date.now() - t) / 1000)} s, accept-ranges=${r.headers.get("accept-ranges")}, content-range=${r.headers.get("content-range")}, content-length=${r.headers.get("content-length")}, type=${r.headers.get("content-type")}`);
+if (!(r instanceof Error)) await r.body?.cancel();
+t = Date.now();
+const f = spawnSync(ffmpegForNetwork!, ["-y", "-hide_banner", "-loglevel", "error", "-rw_timeout", "20000000", "-ss", "916", "-i", link, "-t", "13.5", "-an", "-c", "copy", "out-pedazo.tmp.mp4"], { encoding: "utf8", timeout: 180_000 });
+console.log(`ffmpeg: code ${f.status} en ${Math.round((Date.now() - t) / 1000)} s; stderr: ${(f.stderr ?? "").replace(/https?:\/\/\S+/g, "<url>").slice(-400)}`);
+process.exit(0);
