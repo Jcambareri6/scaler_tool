@@ -141,7 +141,7 @@ Licencias aceptadas: dominio público, CC0, CC BY y CC BY-SA. Se descartan NC y 
 - **Búsqueda doble**: `query` en inglés y `query_local` en el idioma del lugar (un tema de México tiene más metraje en castellano).
 - **Momento**: con subtítulos del video se buscan las palabras del plano (`subtitleMoments`); si no, los cuadros aptos de la hoja; si no, el 30 % del video. Nunca dentro de la intro (los primeros 10 a 30 s).
 - **Usos**: un mismo video se usa varias veces en momentos distintos, con un tope según el largo del documental (`ytMaxUses`).
-- **Riesgo legal**: en Skaler está apagado salvo `DOCUMENTAL_YOUTUBE=on`. Es material con copyright sin licencia verificada. Para probar está bien; para publicar, usar material propio, con licencia o los clips que pase el usuario.
+- **Licencia**: en Skaler, YouTube está apagado salvo `DOCUMENTAL_YOUTUBE=on` y busca en todo YouTube. En la skill la búsqueda usa el filtro Creative Commons de YouTube (`sp=EgIwAQ%3D%3D`) y confirma el campo `license` de cada video antes de bajarlo. Si no es CC BY, no se baja salvo que el usuario declare sus derechos (`--licencia`). Cada tramo guarda su crédito (`.credito.json`) y `creditos.py` arma el texto para la descripción.
 
 ### 6.3 Rescate (planos sin material)
 

@@ -24,14 +24,30 @@ Scripts en `scripts/` (Python 3.10+, ffmpeg y yt-dlp; `faster-whisper` para los 
 5. **Plan.** Armar `plan.json` con el formato de `referencia/formato.md`, sección 4, siguiendo **todas** las reglas de la sección 5 y los valores del formato (duraciones, `prefer`, presupuesto de gráficos, `favor`/`forbid`). Los planos arrancan en la palabra que nombra lo que se ve. Antes de buscar, revisar el plan contra la lista de la sección 5 y mostrarle al usuario una tabla corta (n, tiempo, clase, sujeto, búsqueda, gráfico).
 6. **Material**, plano por plano, en el orden de fuentes de la sección 6:
    - Clips que pasó el usuario: primero esos. Armar su hoja (`python scripts/hoja_contactos.py clip.mp4 hoja.jpg`), elegir el momento y cortarlo (`python scripts/bajar_tramo.py clip.mp4 --momento 95 --dur 4.5 --salida planos/03.mp4`).
-   - YouTube: `python scripts/buscar_youtube.py "<query>"` (y otra vez con `query_local`). Elegir por título y miniatura, armar la hoja de cuadros del candidato y recién ahí bajar solo el tramo: `python scripts/bajar_tramo.py URL --momento <segundo> --dur <s> --salida planos/NN.mp4 [--logo br]`.
-   - Fotos (Wikidata, Commons, Openverse, archive.org): bajarlas a `planos/` y guardar autor, licencia y página para los créditos. Solo dominio público, CC0, CC BY y CC BY-SA.
+   - YouTube: `python scripts/buscar_youtube.py "<query>"` (y otra vez con `query_local`). Solo devuelve videos con licencia **Creative Commons BY confirmada** en su página. Elegir por título y miniatura, armar la hoja de cuadros del candidato y recién ahí bajar solo el tramo: `python scripts/bajar_tramo.py URL --momento <segundo> --dur <s> --salida planos/NN.mp4 [--logo br]`. El script se niega a bajar un video sin licencia CC.
+   - Archivo libre (ver "Material que se puede publicar"): archive.org, NASA, Commons, Pexels y Pixabay.
+   - Fotos (Wikidata, Commons, Openverse, archive.org): bajarlas a `planos/` con un `<foto>.credito.json` al lado (autor, licencia, URL). Solo dominio público, CC0, CC BY y CC BY-SA.
 7. **Juez.** Mirar cada candidato (miniatura u hoja) contra la frase y decidir con los códigos de la sección 7. Ser estricto: si nada sirve, buscar otra vez con `respaldo` o pasar al rescate (sección 6.3). Nunca aprobar por cortesía.
 8. **Revisión.** `python scripts/hoja_contactos.py planos/ hoja_video.jpg` y revisar el video entero: sin planos repetidos, sin relleno seguido, nada de otra época u otro lugar. Corregir lo que falle (como mucho una vuelta por plano).
 9. **Montaje.** Completar `archivo` en cada plano y:
    `python scripts/montar.py plan.json --formato formatos/<id>.json --voz voz.mp3 --palabras palabras.json --salida video.mp4 [--musica musica.mp3] [--borrador]`
    Primero con `--borrador` (720p, rápido). El script imprime el QC: negros, congelados y LUFS (tiene que dar −14).
-10. **Entrega.** El MP4, los capítulos (`MM:SS Título`) y los créditos de cada foto y clip para la descripción de YouTube.
+10. **Créditos.** `python scripts/creditos.py planos/ creditos.txt`. Si avisa planos sin crédito, completarlos o cambiar el material: **no se entrega para publicar con planos sin licencia**.
+11. **Entrega.** El MP4, los capítulos (`MM:SS Título`) y `creditos.txt` para pegar en la descripción de YouTube.
+
+## Material que se puede publicar
+
+| Fuente | Qué hay | Licencia |
+|---|---|---|
+| YouTube con filtro Creative Commons | Metraje de todo tipo, drones, noticieros de canales públicos | CC BY: crédito al autor |
+| archive.org (Prelinger, noticieros, películas del gobierno de EE. UU.) | Archivo histórico | Dominio público en su mayoría: confirmar en la página |
+| NASA (images.nasa.gov) | Espacio, aviación, Tierra | Dominio público (sin usar logos de NASA como aval) |
+| Obras del gobierno federal de EE. UU. (DoD/DVIDS, NOAA, USGS, National Archives) | Militar, clima, geografía, historia | Dominio público |
+| Wikimedia Commons | Fotos y videos | CC BY, CC BY-SA o dominio público |
+| Pexels, Pixabay, Coverr | Stock genérico (solo ambiente) | Uso comercial libre |
+| Clips del usuario | Lo que grabó, compró o tiene permiso para usar | `--licencia` al bajarlo |
+
+Para estudiar un formato sin licencia: `buscar_youtube.py --solo-referencia`. Esos videos nunca se usan como metraje.
 
 ## Formatos nuevos
 
@@ -47,7 +63,7 @@ El usuario va a pasar formatos para sumar, como JSON, como texto o como un video
 - Los gráficos solo con datos que están **literalmente** en el guion.
 - Nada de presentadores a cámara, vloggers, reacciones, ficción, animación, CGI ni marcas de agua. Un logo chico de canal en una esquina se recorta (`--logo`).
 - Ningún corte de plano dentro de un plano (`bajar_tramo.py` ya lo evita).
-- YouTube es material con copyright sin licencia verificada: sirve para probar el formato. Para publicar, avisarle al usuario y preferir sus clips o material con licencia.
+- Cada plano tiene que tener licencia de reuso (CC, dominio público, stock libre o derechos del usuario) y crédito. No se modifican clips para esquivar Content ID (espejar, cambiar velocidad, recortar o meter ruido): no cambia de quién es el material y YouTube lo sanciona como evasión.
 - Si YouTube bloquea la descarga desde el servidor (bot check, 429), poner un proxy residencial en `YTDLP_PROXY` o darle al usuario el comando para bajar el tramo en su PC:
   `yt-dlp --download-sections "*95-110" -f "bv*[height<=1080]" -o "%(id)s_95.mp4" URL`
 - Los videos de referencia se estudian, nunca se usan como metraje.

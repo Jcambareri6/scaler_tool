@@ -10,6 +10,13 @@ Uso:
   --momento  segundo del video donde está lo que se quiere mostrar (si no se pasa: 30 % del video)
   --dur      lo que dura el plano (2,5 a 12 s)
   --logo     esquina con un logo chico de canal para recortar: tl, tr, bl o br
+  --licencia licencia del material cuando no es Creative Commons y el usuario tiene los derechos
+             (ej: "propio", "comprado en Storyblocks", "permiso escrito del autor")
+  --autor    autor o canal, para los créditos
+
+Licencia: con una URL, primero lee la licencia de la página. Si no es Creative Commons y no
+se pasó --licencia, NO baja nada. Cada tramo deja al lado un <salida>.credito.json con autor,
+licencia, URL y segundos usados (scripts/creditos.py arma el texto para la descripción).
 
 Qué hace:
   1. Baja (o corta) min(dur*1,25+6, 24) s alrededor del momento, nunca en la intro.
@@ -41,9 +48,16 @@ def ventana(total: float, necesario: float, momento: float | None) -> tuple[floa
     return max(0.0, inicio), min(largo, total)
 
 
-def duracion_remota(url: str) -> float:
-    out = correr([YTDLP, "--no-warnings", "--no-playlist", "--print", "duration", *proxy_args(), url], timeout=60)
-    return float(out.strip().splitlines()[0])
+def datos_remotos(url: str) -> dict:
+    out = correr([YTDLP, "--no-warnings", "--no-playlist", "--skip-download", "-J", *proxy_args(), url], timeout=60)
+    d = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    return {
+        "duracion": float(d.get("duration") or 0),
+        "licencia": d.get("license") or "",
+        "autor": d.get("channel") or d.get("uploader") or "",
+        "titulo": d.get("title") or "",
+        "url": d.get("webpage_url") or url,
+    }
 
 
 def bajar(url: str, inicio: float, largo: float, salida: str) -> None:
@@ -146,6 +160,8 @@ def main() -> None:
     ap.add_argument("--dur", type=float, required=True)
     ap.add_argument("--salida", required=True)
     ap.add_argument("--logo", choices=["tl", "tr", "bl", "br"])
+    ap.add_argument("--licencia", help="licencia o derecho de uso cuando no es Creative Commons")
+    ap.add_argument("--autor")
     a = ap.parse_args()
     falta(FFMPEG)
     necesario = min(max(a.dur, 2.5), 12)
@@ -154,14 +170,28 @@ def main() -> None:
         crudo = os.path.join(tmp, "crudo.mp4")
         if es_url(a.fuente):
             falta(YTDLP)
-            total = duracion_remota(a.fuente)
+            meta = datos_remotos(a.fuente)
+            cc = bool(re.search(r"creative commons", meta["licencia"], re.I))
+            if not cc and not a.licencia:
+                raise RuntimeError(
+                    f"el video no tiene licencia Creative Commons ({meta['licencia'] or 'licencia estándar de YouTube'}): "
+                    "buscá otro con buscar_youtube.py o pasá --licencia si el usuario tiene los derechos"
+                )
+            credito = {"titulo": meta["titulo"], "autor": a.autor or meta["autor"], "url": meta["url"],
+                       "licencia": meta["licencia"] if cc else a.licencia}
+            total = meta["duracion"]
             inicio, largo = ventana(total, necesario, a.momento)
             bajar(a.fuente, inicio, largo, crudo)
         else:
+            credito = {"titulo": os.path.basename(a.fuente), "autor": a.autor or "", "url": "",
+                       "licencia": a.licencia or "material del usuario"}
             total = duracion(a.fuente)
             inicio, largo = ventana(total, necesario, a.momento)
             cortar(a.fuente, inicio, largo, crudo)
         info = limpiar(crudo, necesario, a.salida, a.logo)
+    credito["segundos"] = [round(inicio + info["desde_en_tramo"], 1), round(inicio + info["desde_en_tramo"] + info["toma"], 1)]
+    with open(a.salida + ".credito.json", "w", encoding="utf-8") as f:
+        json.dump(credito, f, ensure_ascii=False, indent=1)
     print(json.dumps({"fuente": a.fuente, "salida": a.salida, "inicio_tramo": round(inicio, 2), "largo_tramo": round(largo, 2), **info}, ensure_ascii=False))
 
 
