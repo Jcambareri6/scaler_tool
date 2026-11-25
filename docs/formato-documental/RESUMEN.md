@@ -39,3 +39,7 @@
 | 3 | **Nuevo formato del plan:** recurso + contenido + palabras, sin coordenadas | La IA genera el plan de Chernobyl y el resultado se parece al clip modelo |
 | 4 | **Agentes simplificados:** 1 llamada de plan, control en texto, 1 revisión visual | Menor costo por video y sin rondas que oscilan |
 | 5 | **Más recursos** (balanza, A/B, pictogramas, contador, barras, documento, lección…) + prueba con 8–10 guiones de nichos distintos | Métricas parejas en todos los nichos |
+
+## Skill para Claude
+
+La descripción completa del formato para usarlo fuera del backend, con scripts para bajar clips y montar, está en `skills-claude/formato-documental/` (empezar por `referencia/formato.md`).

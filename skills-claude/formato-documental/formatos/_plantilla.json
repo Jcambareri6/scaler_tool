@@ -1,0 +1,115 @@
+{
+  "id": "mi-formato",
+  "name": "Nombre visible",
+  "description": "Una línea: qué tipo de video sale.",
+  "idealFor": "Para qué temas sirve",
+  "examples": [
+    "Ejemplo de título 1",
+    "Ejemplo de título 2"
+  ],
+  "category": "general",
+  "referencias": [
+    {
+      "url": "https://www.youtube.com/watch?v=ID",
+      "que_mirar": "ritmo, gráficos, look; NUNCA se usa como metraje"
+    }
+  ],
+  "notas": "Lo que no entra en los campos: marcos propios, cómo arranca el video, qué evitar.",
+  "script": {
+    "skeleton": "Gancho inicial (3-5%), contexto (8-12%), desarrollo que acumula tension (20-25%), el hecho central contado en secuencia (30-35%), consecuencias (10-15%), resolucion (5-8%), cierre (2-3%). Cada seccion termina con un enganche a la siguiente. No escribas titulos, marcas ni acotaciones: todo el texto se narra en voz alta.",
+    "tone": "Narrador de documental: sobrio, preciso, con datos concretos."
+  },
+  "plan": {
+    "durations": {
+      "normal": [
+        2.5,
+        9
+      ],
+      "metraje": [
+        2.5,
+        9
+      ],
+      "persona": [
+        3.2,
+        6
+      ],
+      "cosa": [
+        2.5,
+        8
+      ],
+      "lugar": [
+        3,
+        9
+      ],
+      "ambiente": [
+        2.5,
+        9
+      ],
+      "mapa": [
+        4,
+        7
+      ],
+      "grafico": [
+        3,
+        9
+      ]
+    },
+    "prefer": [
+      "persona",
+      "lugar",
+      "cosa",
+      "metraje",
+      "ambiente"
+    ],
+    "graphicsPerMinute": 5,
+    "graphicsPerMinuteHook": 8,
+    "maxGraphicShare": 0.4,
+    "minGraphicGapSeconds": 3
+  },
+  "sources": {
+    "archiveFirst": false
+  },
+  "graphics": {
+    "favor": [
+      "big_number",
+      "person_card",
+      "timeline",
+      "milestone",
+      "line_chart",
+      "map_marker",
+      "lower_third",
+      "title_card",
+      "highlight_phrase",
+      "checklist",
+      "side_panel",
+      "process_wave",
+      "photo_tree",
+      "dossier"
+    ],
+    "forbid": [
+      "subscribe_cta",
+      "strike_word"
+    ],
+    "mapBase": "satellite"
+  },
+  "look": {
+    "contrast": 1.04,
+    "saturation": 0.94,
+    "brightness": -0.01,
+    "vignette": true,
+    "flashEvery": 9,
+    "zoomCutEvery": 4
+  },
+  "captions": {
+    "font": "Roboto Condensed",
+    "size": 54,
+    "words": 5,
+    "uppercase": false
+  },
+  "sound": {
+    "mood": "documental",
+    "musicVolume": 0.22,
+    "duckTo": 0.35,
+    "sfxVolume": 0.28
+  }
+}
