@@ -209,6 +209,11 @@ function localDuration(file: string): Promise<number | null> {
 // cuadros del video (20/50/80% de los primeros segundos) en una tira.
 export async function candidateThumbnail(candidate: VisualCandidate, workDir: string, key: string): Promise<string | null> {
   const out = path.join(workDir, `${key}.jpg`);
+  // Cuadro ya armado en disco (recorte del rescate): se mira ese.
+  if (candidate.thumb_path) {
+    const copied = await copyFile(candidate.thumb_path, out).then(() => true).catch(() => false);
+    if (copied) return out;
+  }
   // YouTube: 16 cuadros reales del video (no la tapa). Si no se puede (bot
   // check, video sin formato chico), la miniatura de siempre.
   // Video de la biblioteca: la hoja ya esta armada (no se vuelve a escanear).

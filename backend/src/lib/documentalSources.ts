@@ -28,6 +28,12 @@ export interface VisualCandidate {
   url: string;
   // Imagen chica para el juez (si no hay, el juez saca cuadros del video).
   thumb_url?: string;
+  // Cuadro ya armado en disco (el recorte del rescate): el juez mira este.
+  thumb_path?: string;
+  // Recorte de material ya aprobado (rescate): zona, zoom, momento y
+  // movimiento; el render y la preview lo aplican. `crop_of` = plano original.
+  crop?: { x: number; y: number; zoom: number; t?: number; motion?: "zoom_in" | "zoom_out" | "pan_left" | "pan_right" | "push"; blur?: boolean };
+  crop_of?: number;
   duration_seconds?: number;
   // YouTube: duracion del video original (el rescate baja otros momentos).
   video_seconds?: number;
@@ -308,6 +314,29 @@ export async function searchWikipediaImages(title: string, languages: string[] =
       const c = commonsCandidate(p, article, MIN_ARTICLE_IMAGE_WIDTH, { badTitle: BAD_ARTICLE_IMAGE, svgMinWidth: MIN_ARTICLE_SVG_WIDTH });
       if (c) out.push({ ...c, provider: "wikipedia", query: `${article} (${pageUrl})` });
       if (out.length >= ARTICLE_MAX_IMAGES) break;
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+// Busqueda de ARTICULOS por tema (no el articulo del plano): los 2 primeros
+// articulos que devuelve la busqueda de Wikipedia y sus imagenes. Para el
+// paso 2 del rescate ("Darwin y los gauchos" -> articulos de Darwin, del
+// Beagle, del gaucho...).
+export async function searchWikipediaByTopic(query: string, languages: string[] = ["es", "en"], maxArticles = 2): Promise<VisualCandidate[]> {
+  const q = query.trim();
+  if (!q) return [];
+  for (const lang of languages) {
+    const params = new URLSearchParams({ action: "query", format: "json", formatversion: "2", list: "search", srsearch: q, srlimit: String(maxArticles), srnamespace: "0" });
+    const data = await wikimediaJson<{ query?: { search?: { title: string }[] } }>(`https://${lang}.wikipedia.org/w/api.php?${params}`).catch(() => null);
+    const titles = (data?.query?.search ?? []).map((s) => s.title).slice(0, maxArticles);
+    if (titles.length === 0) continue;
+    const out: VisualCandidate[] = [];
+    for (const t of titles) {
+      for (const c of await searchWikipediaImages(t, [lang]).catch(() => [] as VisualCandidate[])) {
+        if (!out.some((o) => o.external_id === c.external_id)) out.push(c);
+      }
     }
     if (out.length) return out;
   }

@@ -68,7 +68,7 @@ const { literalSpan, placeInPhrase, neighbourHas, overlayKinds, rescueAnimationT
 
 // E. Menu del rescate: orden fijo, vecinos, lugar literal.
 {
-  assert.deepEqual([...RESCUE_STEPS], ["toma_aprobada", "busqueda_tema", "wikipedia_articulo", "animacion", "mapa"]);
+  assert.deepEqual([...RESCUE_STEPS], ["toma_aprobada", "busqueda_tema", "wikipedia_articulo", "recorte", "mapa"]);
   const rows = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
   const kinds = new Map([
     ["a", overlayKinds(["milestone"])],
@@ -95,4 +95,95 @@ const { literalSpan, placeInPhrase, neighbourHas, overlayKinds, rescueAnimationT
   assert.ok(types.includes("highlight_phrase") && types.includes("big_number"));
   assert.ok(!rescueAnimationTypes(["big_number"]).includes("big_number"), "respeta los prohibidos del estilo");
   console.log("menu del rescate OK");
+}
+
+// Lugar solo como NOMBRE PROPIO (Malvinas, 26/11: mapa de "argentina" en el 96).
+{
+  assert.equal(placeInPhrase("uno de los personajes más discutidos de la historia argentina.", ["Argentina"]), null, "adjetivo: no es un lugar");
+  assert.equal(placeInPhrase("un hombre que no había nacido en la Argentina.", ["Argentina"]), "Argentina");
+  assert.equal(placeInPhrase("Usted está en la isla Martín García, en medio del río.", ["isla Martín García"]), "isla Martín García");
+  console.log("lugar como nombre propio OK");
+}
+
+// FASE 2 del rescate: decide en orden, mirando a los vecinos ya decididos.
+{
+  const { pickOption, cropCandidates, cropSpecFor, cropFilter, cropOffset, CROP_MIN_GAP } = await import("../../src/pipeline/rescueAssign.js");
+  type Opt = { base: string; key: string; step: "toma_aprobada" | "busqueda_tema" | "wikipedia_articulo"; maxUses: number; payload: null };
+  const opt = (base: string, key = base): Opt => ({ base, key, step: "busqueda_tema", maxUses: 3, payload: null });
+
+  // Dos planos vacios SEGUIDOS (4 y 5) no se bloquean entre si: los dos terminan con imagen.
+  const origin = new Map<number, string>([[0, "commons:x"], [1, "commons:y"], [2, "commons:z"], [3, "commons:w"], [6, "commons:v"]]);
+  const uses = new Map<string, number>();
+  const taken = new Set<string>();
+  const decide = (i: number, options: Opt[]) => {
+    const o = pickOption(i, options, (j) => origin.get(j), (b) => uses.get(b) ?? 0, (k) => taken.has(k));
+    if (o) {
+      origin.set(i, o.base);
+      uses.set(o.base, (uses.get(o.base) ?? 0) + 1);
+      taken.add(o.key);
+    }
+    return o;
+  };
+  const a = decide(4, [opt("youtube:A"), opt("commons:B")]);
+  const b = decide(5, [opt("youtube:A", "youtube:A@t30"), opt("commons:B")]);
+  assert.equal(a?.base, "youtube:A", "el 4 toma el primero del juez");
+  assert.equal(b?.base, "commons:B", "el 5 no repite el video del 4 (a 1 plano) y toma el siguiente");
+  // El mismo video vuelve recien a mas de 3 planos.
+  assert.equal(decide(8, [opt("youtube:A", "youtube:A@t90")])?.base, "youtube:A");
+  assert.equal(decide(9, [opt("youtube:A", "youtube:A@t120")]), null, "a 1 plano del 8: no");
+
+  // Sin candidatos: RECORTES. Los planos 14 y 15, vacios y seguidos, salen de fuentes distintas.
+  const sources = [
+    { index: 9, key: "img-9", tema: "Darwin", type: "IMAGE" as const },
+    { index: 20, key: "img-20", tema: "Darwin", type: "IMAGE" as const },
+  ];
+  const state = { bySource: new Map<string, number[]>() };
+  const cropAt = new Map<number, string>();
+  const crop = (i: number) => {
+    const c = cropCandidates(i, "Darwin", sources, state, (j) => cropAt.get(j))[0];
+    if (c) {
+      cropAt.set(i, c.key);
+      state.bySource.set(c.key, [...(state.bySource.get(c.key) ?? []), i]);
+    }
+    return c?.key;
+  };
+  assert.equal(crop(14), "img-9", "el 14 recorta la del 9 (a 5 planos)");
+  assert.equal(crop(15), "img-20", "el 15 no repite la fuente del 14 seguido: recorta la del 20");
+  assert.ok(cropCandidates(12, "Darwin", sources, state, (j) => cropAt.get(j)).every((s) => Math.abs(s.index - 12) >= CROP_MIN_GAP), "a 5 planos o mas del original");
+  // Tope: 2 recortes por fuente.
+  crop(4);
+  assert.equal(state.bySource.get("img-9")?.length, 2);
+  assert.ok(!cropCandidates(3, "Darwin", sources, state, (j) => cropAt.get(j)).some((s) => s.key === "img-9"), "img-9 ya tiene 2 recortes");
+
+  // Encuadres distintos entre recortes y distintos del original (centrado y entero).
+  const c0 = cropSpecFor(0, "IMAGE");
+  const c1 = cropSpecFor(1, "IMAGE");
+  assert.ok(c0.zoom >= 1.5 && c0.zoom <= 2 && c1.zoom >= 1.5 && c1.zoom <= 2);
+  assert.notDeepEqual([c0.x, c0.y], [c1.x, c1.y]);
+  assert.notEqual(c0.motion, c1.motion);
+  assert.ok(!(c0.x === 0.5 && c0.y === 0.5), "nunca el centro");
+  // Clip: otro momento del archivo.
+  assert.ok((cropSpecFor(0, "VIDEO", 12, 5).t ?? 0) > 0);
+  // Zona arriba a la izquierda: la ventana queda pegada a esa esquina.
+  assert.equal(cropFilter({ x: 0.25, y: 0.3, zoom: 1.6 }), "crop=iw/1.6:ih/1.6:(iw-iw/1.6)*0.0000:(ih-ih/1.6)*0.0000");
+  assert.equal(cropFilter({ x: 0.5, y: 0.5, zoom: 2 }), "crop=iw/2:ih/2:(iw-iw/2)*0.5000:(ih-ih/2)*0.5000", "centro");
+  assert.equal(cropOffset({ x: 0.75, y: 0.7, zoom: 1.9 }).fx, 1, "zona derecha: pegada al borde derecho");
+  console.log("fase 2 y recortes OK");
+}
+
+// El render aplica el recorte (imagen: zona y movimiento; clip: zona y otro momento).
+{
+  const { buildFfmpegArgsForBatch } = await import("../../src/tools/renderVideo.tool.js");
+  const { getDocumentalStyle } = await import("../../src/lib/documentalStyles.js");
+  const segs = [
+    { storageKey: "a", start: 0, end: 4, duration: 4, isImage: true, crop: { x: 0.25, y: 0.3, zoom: 1.6, motion: "pan_left" as const } },
+    { storageKey: "b", start: 4, end: 8, duration: 4, isImage: false, crop: { x: 0.75, y: 0.7, zoom: 1.9, t: 3 } },
+    { storageKey: "c", start: 8, end: 11, duration: 3, isImage: true, crop: { x: 0.5, y: 0.5, zoom: 1.3, blur: true } },
+  ];
+  const { inputArgs, filterComplex } = buildFfmpegArgsForBatch(segs, ["a.png", "b.mp4", "c.png"], false, { width: 640, height: 360 }, { style: getDocumentalStyle("documental"), firstIndex: 0 }, [null, 10, null]);
+  assert.match(filterComplex, /\[0:v\]crop=iw\/1\.6/);
+  assert.match(filterComplex, /\[1:v\]crop=iw\/1\.9/);
+  assert.ok(filterComplex.includes("boxblur=18:2"), "fondo desenfocado de la falla");
+  assert.deepEqual(inputArgs.slice(inputArgs.indexOf("b.mp4") - 5, inputArgs.indexOf("b.mp4") + 1), ["-ss", "3.000", "-t", "4.000", "-i", "b.mp4"]);
+  console.log("render con recortes OK");
 }

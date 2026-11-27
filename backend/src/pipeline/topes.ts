@@ -16,7 +16,7 @@ const WORD_LEAD = 0.12;
 
 // Fotos de "tema" (rescate): el paso 2 busca con el tema del tramo y el 3 trae
 // las imagenes del articulo; commons_tema/youtube_tema son de corridas viejas.
-const TEMA_VIAS = new Set(["busqueda_tema", "wikipedia_articulo", "commons_tema", "youtube_tema"]);
+const TEMA_VIAS = new Set(["busqueda_tema", "wikipedia_articulo", "recorte", "commons_tema", "youtube_tema"]);
 const STOCK_PROVIDERS = new Set(["pexels", "pixabay", "coverr"]);
 
 export interface CapVisual {
@@ -29,7 +29,8 @@ export interface CapVisual {
 
 // Tope de pantalla de un visual, o null si no tiene.
 export function capFor(v: CapVisual): number | null {
-  if (v.provider === "textura") return TOPE_ROTULO;
+  // La falla del rescate es un rotulo aunque tenga una foto desenfocada detras.
+  if (v.provider === "textura" || v.via === "rotulo") return TOPE_ROTULO;
   if (v.type === "IMAGE" && (v.stock || STOCK_PROVIDERS.has(v.provider) || TEMA_VIAS.has(v.via))) return TOPE_FOTO_TEMA;
   return null;
 }

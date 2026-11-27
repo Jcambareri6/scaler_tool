@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Asset, Scene } from "@/types";
 import StatusBadge from "@/components/StatusBadge";
+import { cropOf, cropStyle } from "@/lib/crop";
 
 interface Props {
   scenes: Scene[];
@@ -36,10 +37,12 @@ function SceneThumbnail({ asset }: { asset: Asset | null }) {
       </div>
     );
   }
+  // Recorte del rescate: la miniatura muestra la misma zona que el render.
+  const style = cropStyle(cropOf(asset.metadata));
   if (asset.type === "IMAGE") {
-    return <img src={asset.storageKey} className="w-full h-full object-cover" alt="" />;
+    return <img src={asset.storageKey} className="w-full h-full object-cover" style={style} alt="" />;
   }
-  return <video src={asset.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" />;
+  return <video src={asset.storageKey} muted playsInline preload="metadata" className="w-full h-full object-cover" style={style} />;
 }
 
 // Fila de escena del panel vertical -- reemplaza al filmstrip horizontal:

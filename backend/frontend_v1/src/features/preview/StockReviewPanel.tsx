@@ -9,6 +9,7 @@ import type { Asset, Job, ProjectOverlays, Scene } from "@/types";
 import { captionChunks, type CaptionCue } from "@/lib/captions";
 import { CATALOG } from "@motion/catalog";
 import StylePicker from "./StylePicker";
+import { cropOf, cropStyle } from "@/lib/crop";
 
 interface Props {
   projectId: string;
@@ -250,9 +251,15 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
   }, [overlays, currentTime]);
   // scale: el blur de CSS deja los bordes transparentes; agrandar apenas el
   // clip los saca de cuadro (overflow-hidden del contenedor).
+  // Recorte del rescate (otra zona de una imagen ya usada): mismo encuadre
+  // que el render, con el desenfoque del grafico encima si lo hay.
+  const activeCrop = activeSegment?.asset ? cropOf(activeSegment.asset.metadata) : null;
+  const cropped = cropStyle(activeCrop, backdropBlur > 0 ? 1.05 : 1);
+  const blurs = [backdropBlur > 0 ? `blur(${backdropBlur.toFixed(1)}px)` : "", activeCrop?.blur ? "blur(10px)" : ""].filter(Boolean);
   const mediaStyle = {
-    filter: backdropBlur > 0 ? `blur(${backdropBlur.toFixed(1)}px)` : "none",
-    transform: backdropBlur > 0 ? "scale(1.05)" : "none",
+    filter: blurs.length ? blurs.join(" ") : "none",
+    transform: cropped.transform ?? (backdropBlur > 0 ? "scale(1.05)" : "none"),
+    ...(cropped.transformOrigin ? { transformOrigin: cropped.transformOrigin } : {}),
     transition: "filter 0.3s ease, transform 0.3s ease",
   };
 
@@ -284,11 +291,14 @@ export default function StockReviewPanel({ projectId, jobId, onApproved, onRegen
       // punto equivalente -- igual que en el render, donde el clip corre
       // (en loop) desde el inicio del segmento.
       const offset = Math.max(0, (audioRef.current?.currentTime ?? 0) - activeSegment.startSec);
+      // Recorte de un clip: arranca en otro momento del archivo (crop.t).
+      const startAt = cropOf(activeSegment.asset.metadata)?.t ?? 0;
       video.src = activeSegment.asset.storageKey;
       video.addEventListener(
         "loadedmetadata",
         () => {
-          video.currentTime = video.duration > 0 ? offset % video.duration : 0;
+          const room = Math.max(0.1, video.duration - startAt);
+          video.currentTime = video.duration > 0 ? Math.min(video.duration - 0.05, startAt + (offset % room)) : 0;
         },
         { once: true }
       );

@@ -46,6 +46,7 @@ import { isAdmin } from "../lib/accounts.js";
 import { effectiveFormat } from "../lib/formats.js";
 import { WIKIMEDIA_USER_AGENT } from "./searchStock.tool.js";
 import { getDocumentalStyle, type DocumentalStyle } from "../lib/documentalStyles.js";
+import { cropFilter, isCrop, type CropSpec } from "../pipeline/rescueAssign.js";
 import {
   audioMixArgs,
   isSeriousTopic,
@@ -183,6 +184,8 @@ interface TimelineAssetEntry {
   start_seconds?: number;
   end_seconds?: number;
   type?: string | undefined;
+  // build_timeline copia la metadata del asset: de ahi sale el recorte.
+  metadata?: Record<string, unknown> | null;
 }
 
 interface TimelineSceneEntry {
@@ -229,6 +232,9 @@ export interface RenderSegment {
   // `type` guardado -- se asume VIDEO, que es como se comportaba todo esto
   // antes de que IMAGE existiera.
   isImage: boolean;
+  // Recorte de material ya aprobado (rescate del documental): zona, zoom,
+  // momento del clip, movimiento y desenfoque (lib/../pipeline/rescueAssign.ts).
+  crop?: CropSpec;
 }
 
 function flattenSegments(scenes: TimelineSceneEntry[]): RenderSegment[] {
@@ -257,6 +263,7 @@ function flattenSegments(scenes: TimelineSceneEntry[]): RenderSegment[] {
         end: asset.end_seconds ?? parseTime(asset.end),
         duration: 0,
         isImage: asset.type === "IMAGE",
+        ...(isCrop((asset.metadata as { crop?: unknown } | null | undefined)?.crop) ? { crop: (asset.metadata as { crop: CropSpec }).crop } : {}),
       });
     }
   }
@@ -643,26 +650,33 @@ export function buildFfmpegArgsForBatch(
       const zoomStep = (KEN_BURNS_MAX_ZOOM - 1) / Math.max(1, totalFrames - 1);
       let zoomExpr = { z: `1+${zoomStep.toFixed(8)}*on`, x: "iw/2-(iw/zoom/2)", y: "ih/2-(ih/zoom/2)" };
       if (documental) {
-        const motion = motionFor(documental.firstIndex + i, previousMotion);
+        // Un recorte trae su propio movimiento (distinto al del uso original).
+        const motion = segment.crop?.motion ?? motionFor(documental.firstIndex + i, previousMotion);
         previousMotion = motion;
         zoomExpr = zoompanExpr(motion, totalFrames);
       }
       const look = documental ? `,${lookFilter(documental.style.look, documental.firstIndex + i)}` : "";
+      // Recorte: se queda con otra zona de la imagen ANTES de encuadrarla.
+      const crop = segment.crop ? `${cropFilter(segment.crop)},` : "";
+      const blur = segment.crop?.blur ? ",boxblur=18:2" : "";
       filterParts.push(
-        `[${i}:v]split=2[kbsrc${i}][kbfit${i}];` +
+        `[${i}:v]${crop}split=2[kbsrc${i}][kbfit${i}];` +
           `[kbsrc${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=increase:flags=bilinear,` +
           `crop=${upscaledWidth}:${upscaledHeight},boxblur=24:2[kbbg${i}];` +
           `[kbfit${i}]scale=${upscaledWidth}:${upscaledHeight}:force_original_aspect_ratio=decrease:flags=lanczos[kbfg${i}];` +
           `[kbbg${i}][kbfg${i}]overlay=(W-w)/2:(H-h)/2,` +
           `zoompan=z='${zoomExpr.z}':x='${zoomExpr.x}':y='${zoomExpr.y}'` +
           `:d=${totalFrames}:s=${upscaledWidth}x${upscaledHeight}:fps=${OUTPUT_FPS},` +
-          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1${look}[v${i}]`
+          `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:flags=lanczos,setsar=1${blur}${look}[v${i}]`
       );
     } else {
-      const clipSeconds = clipDurations[i] ?? null;
+      // Recorte de un clip: arranca en otro momento del archivo (crop.t).
+      const startAt = segment.crop?.t ?? 0;
+      const measured = clipDurations[i] ?? null;
+      const clipSeconds = measured !== null ? Math.max(0, measured - startAt) : null;
       const short = documental !== null && clipSeconds !== null && clipSeconds > 0.2 && clipSeconds < duration - 0.05;
       // Sin loop en el documental: el clip entra una sola vez.
-      if (documental) inputArgs.push("-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
+      if (documental) inputArgs.push(...(startAt > 0 ? ["-ss", startAt.toFixed(3)] : []), "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
       else inputArgs.push("-stream_loop", "-1", "-t", duration.toFixed(3), "-i", batchClipPaths[i]!);
       const slow = short ? Math.min(MAX_SLOW_MOTION, duration / clipSeconds!) : 1;
       // Camara lenta (antes de fps, que rellena cuadros) y, al final, el
@@ -693,8 +707,8 @@ export function buildFfmpegArgsForBatch(
         docChain = `${cuts},${lookFilter(documental.style.look, documental.firstIndex + i)}`;
       }
       filterParts.push(
-        `[${i}:v]${stretch.pre}scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
-          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${docChain}${stretch.post}[v${i}]`
+        `[${i}:v]${stretch.pre}${segment.crop ? `${cropFilter(segment.crop)},` : ""}scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,` +
+          `crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS}${segment.crop?.blur ? ",boxblur=18:2" : ""}${docChain}${stretch.post}[v${i}]`
       );
     }
   });
